@@ -36,6 +36,12 @@ class PDE:
     
     def solve(self):
         return NotImplementedError
+    
+    def compute_residual(self, u_approx):
+        if self.A is None or self.b is None:
+            raise ValueError("Matrix A and vector b must be built before computing residual.")
+        residual = self.b - self.A @ u_approx
+        return residual
 
 
 class PoissonEquation1D(PDE):
@@ -69,8 +75,11 @@ class PoissonEquation1D(PDE):
         h = self.x[1] - self.x[0]
         
         for i in range(n): 
-            a_iminushalf = (self.a_func(self.x[(i - 1 + n) % n]) + self.a_func(self.x[i])) / 2
-            a_iplushalf = (self.a_func(self.x[i]) + self.a_func(self.x[(i + 1) % n])) / 2
+            a_iminusone = self.a_func[(i - 1 + n) % n] if isinstance(self.a_func, np.ndarray) else self.a_func(self.x[(i - 1 + n) % n])
+            a_iplusone = self.a_func[(i + 1) % n] if isinstance(self.a_func, np.ndarray) else self.a_func(self.x[(i + 1) % n])
+            a_i = self.a_func[i] if isinstance(self.a_func, np.ndarray) else self.a_func(self.x[i])
+            a_iminushalf = (a_iminusone + a_i) / 2
+            a_iplushalf = (a_i + a_iplusone) / 2
             A[i, (i - 1 + n) % n] = -a_iminushalf / h**2
             A[i, i] = (a_iminushalf + a_iplushalf) / h**2
             A[i, (i + 1) % n] = -a_iplushalf / h**2
@@ -112,10 +121,15 @@ class PoissonEquation2D(PDE):
         for i in range(1, n - 1):
             for j in range(1, m - 1):
                 idx = self.index(i, j)
-                a_iminushalf = (self.a_func(self.x[i - 1], self.y[j]) + self.a_func(self.x[i], self.y[j])) / 2
-                a_iplushalf = (self.a_func(self.x[i], self.y[j]) + self.a_func(self.x[i + 1], self.y[j])) / 2
-                a_jminushalf = (self.a_func(self.x[i], self.y[j - 1]) + self.a_func(self.x[i], self.y[j])) / 2
-                a_jplushalf = (self.a_func(self.x[i], self.y[j]) + self.a_func(self.x[i], self.y[j + 1])) / 2
+                a_ij = self.a_func[idx] if isinstance(self.a_func, np.ndarray) else self.a_func(self.x[i], self.y[j])
+                a_iplusone = self.a_func[self.index(i + 1, j)] if isinstance(self.a_func, np.ndarray) else self.a_func(self.x[i + 1], self.y[j])
+                a_iminusone = self.a_func[self.index(i - 1, j)] if isinstance(self.a_func, np.ndarray) else self.a_func(self.x[i - 1], self.y[j])
+                a_jplusone = self.a_func[self.index(i, j + 1)] if isinstance(self.a_func, np.ndarray) else self.a_func(self.x[i], self.y[j + 1])
+                a_jminusone = self.a_func[self.index(i, j - 1)] if isinstance(self.a_func, np.ndarray) else self.a_func(self.x[i], self.y[j - 1])
+                a_iminushalf = (a_iminusone + a_ij) / 2
+                a_iplushalf = (a_ij + a_iplusone) / 2
+                a_jminushalf = (a_jminusone + a_ij) / 2
+                a_jplushalf = (a_ij + a_jplusone) / 2
                 A[idx, self.index(i - 1, j)] = -a_iminushalf / h_x**2
                 A[idx, self.index(i + 1, j)] = -a_iplushalf / h_x**2
                 A[idx, self.index(i, j - 1)] = -a_jminushalf / h_y**2
@@ -143,10 +157,15 @@ class PoissonEquation2D(PDE):
         for i in range(n):
             for j in range(m):
                 idx = self.index(i, j)
-                a_iminushalf = (self.a_func(self.x[(i - 1 + n) % n], self.y[j]) + self.a_func(self.x[i], self.y[j])) / 2
-                a_iplushalf = (self.a_func(self.x[i], self.y[j]) + self.a_func(self.x[(i + 1) % n], self.y[j])) / 2
-                a_jminushalf = (self.a_func(self.x[i], self.y[(j - 1 + m) % m]) + self.a_func(self.x[i], self.y[j])) / 2
-                a_jplushalf = (self.a_func(self.x[i], self.y[j]) + self.a_func(self.x[i], self.y[(j + 1) % m])) / 2
+                a_ij = self.a_func[idx] if isinstance(self.a_func, np.ndarray) else self.a_func(self.x[i], self.y[j])
+                a_iplusone = self.a_func[self.index((i + 1) % n, j)] if isinstance(self.a_func, np.ndarray) else self.a_func(self.x[(i + 1) % n], self.y[j])
+                a_iminusone = self.a_func[self.index((i - 1 + n) % n, j)] if isinstance(self.a_func, np.ndarray) else self.a_func(self.x[(i - 1 + n) % n], self.y[j])
+                a_jplusone = self.a_func[self.index(i, (j + 1) % m)] if isinstance(self.a_func, np.ndarray) else self.a_func(self.x[i], self.y[(j + 1) % m])
+                a_jminusone = self.a_func[self.index(i, (j - 1 + m) % m)] if isinstance(self.a_func, np.ndarray) else self.a_func(self.x[i], self.y[(j - 1 + m) % m])
+                a_iminushalf = (a_iminusone + a_ij) / 2
+                a_iplushalf = (a_ij + a_iplusone) / 2
+                a_jminushalf = (a_jminusone + a_ij) / 2
+                a_jplushalf = (a_ij + a_jplusone) / 2
                 A[idx, self.index((i - 1 + n) % n, j)] = -a_iminushalf / h_x**2
                 A[idx, self.index((i + 1) % n, j)] = -a_iplushalf / h_x**2
                 A[idx, self.index(i, (j - 1 + m) % m)] = -a_jminushalf / h_y**2

@@ -12,7 +12,6 @@ import json
 parser = argparse.ArgumentParser()
 parser.add_argument('--model', type=str, default='deeponet', help='Model to use: deeponet or fno')
 parser.add_argument('--dim', type=int, default=1, help='Dimension of the PDE: 1 or 2')
-parser.add_argument('--coef', type=int, default=0, help='Whether to include coefficient in input')
 parser.add_argument("--boundary", type=str, default="Periodic", help="Boundary condition: Dirichlet or Periodic")
 parser.add_argument("--equation", type=str, default="Poisson", help="PDE to solve: Poisson")
 parser.add_argument("--ckp_dir", type=str, default="./checkpoints", help="Directory to save checkpoints")
@@ -25,7 +24,6 @@ if __name__ == "__main__":
     args, unknown = parser.parse_known_args()
     model = args.model
     dim = args.dim
-    coef = args.coef
     boundary = args.boundary
     equation = args.equation
     ckp_dir = args.ckp_dir
@@ -44,9 +42,9 @@ if __name__ == "__main__":
         raise ValueError("Dimension must be either 1 or 2")
     
 
-    ckp_path = ckp_dir + f"/{model_name}_{equation}_{boundary}_{dim}d_{'withcoef' if coef else 'nocoef'}_full.pth"
-    save_path = ckp_dir + f"/{model_name}_{equation}_{boundary}_{dim}d_{'withcoef' if coef else 'nocoef'}"
-    args_path = ckp_dir + f"/args_{model_name}_{equation}_{boundary}_{dim}d_{'withcoef' if coef else 'nocoef'}.json"
+    ckp_path = ckp_dir + f"/{model_name}_{equation}_{boundary}_{dim}d_full.pth"
+    save_path = ckp_dir + f"/{model_name}_{equation}_{boundary}_{dim}d"
+    args_path = ckp_dir + f"/args_{model_name}_{equation}_{boundary}_{dim}d.json"
 
     if os.path.exists(args_path):
         print(f"Loading training arguments from {args_path}...")
@@ -61,11 +59,11 @@ if __name__ == "__main__":
     # Creating/Loading Data
     print("Creating Data")
 
-    if os.path.exists(f"{data_dir}/train_data_{equation}_{boundary}_{dim}d_{'withcoef' if coef else 'nocoef'}.pt"):
+    if os.path.exists(f"{data_dir}/train_data_{equation}_{boundary}_{dim}d.pt"):
         print(f"Loading data from {data_dir}...")
-        with open(f"{data_dir}/train_data_{equation}_{boundary}_{dim}d_{'withcoef' if coef else 'nocoef'}.pt", "rb") as f:
+        with open(f"{data_dir}/train_data_{equation}_{boundary}_{dim}d.pt", "rb") as f:
             train_data = torch.load(f)
-        with open(f"{data_dir}/val_data_{equation}_{boundary}_{dim}d_{'withcoef' if coef else 'nocoef'}.pt", "rb") as f:
+        with open(f"{data_dir}/val_data_{equation}_{boundary}_{dim}d.pt", "rb") as f:
             val_data = torch.load(f)
     else:
         with open(f"args/grf_args.json", "r") as f:
@@ -78,32 +76,27 @@ if __name__ == "__main__":
                                     gamma=arguments_grf["gamma"],
                                     device=device,
                                     seed=1234)
-        f = grf.generate(arguments["n_train"] + arguments["n_val"])
-        print(f"Generated RHS f with shape: {f.shape}")
-        if coef:
-            a = grf.generate(arguments["n_train"] + arguments["n_val"])
-        else:
-            a = lambda x: 1.0 if dim ==1 else lambda x, y: 1.0
-        x = np.linspace(0, 1, arguments["N"])
-        y = np.linspace(0, 1, arguments["N"]) if dim ==2 else None
+        f = lambda x: np.sin(2*np.pi * x) if dim ==1 else lambda x, y: np.sin(2*np.pi * x) * np.sin(2*np.pi * y)
+        a = grf.generate(arguments["n_train"] + arguments["n_val"])
+        x = np.linspace(0, 1, arguments["N"], endpoint = False if boundary == "Periodic" else True)
+        y = np.linspace(0, 1, arguments["N"], endpoint = False if boundary == "Periodic" else True) if dim ==2 else None
         for i in range(arguments["n_train"] + arguments["n_val"]):
             if dim == 1:
-                pde = PoissonEquation1D(a_func=a[i].numpy() if coef else a,
-                                        f_func=f[i].numpy(),
+                pde = PoissonEquation1D(a_func=a[i].numpy(),
+                                        f_func=f,
                                         boundary=boundary,
                                         x=x)
                 u_sol = torch.tensor(pde.u, dtype=torch.float32, device=device)
             else:
-                pde = PoissonEquation2D(a_func=a[i] if coef else a,
-                                        f_func=f[i].numpy().reshape(-1),
+                pde = PoissonEquation2D(a_func=a[i].numpy().flatten(),
+                                        f_func=f,
                                         boundary=boundary,
                                         x=x,
                                         y=y)
-                u_sol = torch.tensor(pde.u.reshape(arguments["N"], arguments["N"]), dtype=torch.float32, device=device)
-            if coef:
-                input = torch.cat((a[i, None, :], f[i, None, :]), dim=0)
-            else:
-                input = f[i, None, :]
+                new_shape = (arguments["N"], arguments["N"]) 
+                u_sol = torch.tensor(pde.u.reshape(new_shape), dtype=torch.float32, device=device)
+            
+            input = a[i, None, :]
             if i < arguments["n_train"]:
                 if i == 0:
                     train_data = [(input, u_sol)]
@@ -114,9 +107,9 @@ if __name__ == "__main__":
                     val_data = [(input, u_sol)]
                 else:
                     val_data.append((input, u_sol))
-        with open(f"{data_dir}/train_data_{equation}_{boundary}_{dim}d_{'withcoef' if coef else 'nocoef'}.pt", "wb") as f:
+        with open(f"{data_dir}/train_data_{equation}_{boundary}_{dim}d.pt", "wb") as f:
             torch.save(train_data, f)
-        with open(f"{data_dir}/val_data_{equation}_{boundary}_{dim}d_{'withcoef' if coef else 'nocoef'}.pt", "wb") as f:
+        with open(f"{data_dir}/val_data_{equation}_{boundary}_{dim}d.pt", "wb") as f:
             torch.save(val_data, f)
     print("Data creation/loading completed.")
     print(f"Train data size: {len(train_data)}")
@@ -130,7 +123,7 @@ if __name__ == "__main__":
     print(f"Validation dataset size: {len(val_dataset)}")
 
 
-    model = DeepONet(N=arguments["N"], dim=dim, coef=coef, device=device,
+    model = DeepONet(N=arguments["N"], dim=dim, in_channels=1, device=device, boundary=boundary,
                      branch_dim=arguments["branch_dim"],
                      hidden_branch=arguments["hidden_branch"],
                      num_branch_layers=arguments["num_branch_layers"],

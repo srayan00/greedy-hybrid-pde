@@ -43,13 +43,18 @@ class GaussianRandomField:
         psd = (self.alpha ** (1/2)) * (4 * np.pi**2 * (kx**2 + ky**2) + self.beta)**(-self.gamma/2)
         return psd
     
-    def generate(self, n_samples):
+    def generate(self, n_samples, pushfoward = True):
         if self.dim == 1:
-            return self._generate_1d(n_samples)
+            result = self._generate_1d(n_samples)
         elif self.dim == 2:
-            return self._generate_2d(n_samples)
+            result = self._generate_2d(n_samples)
         else:
             raise NotImplementedError("2D Gaussian random field generation is not implemented yet.")
+        if pushfoward:
+            result = torch.exp(result)
+        return result
+        
+        
     
     def _generate_1d(self, n_samples):
         psd = self.psd
