@@ -13,7 +13,7 @@ class MLSolver(torch.nn.Module):
 
 #class DeepONet(torch.nn.Module):
 class DeepONet(MLSolver):
-    def __init__(self, N, dim, coef = False, branch_dim = 64, hidden_branch = 128, num_branch_layers = 1, hidden_trunk=128, num_trunk_layers = 1):
+    def __init__(self, N, dim, device, coef = False, branch_dim = 64, hidden_branch = 128, num_branch_layers = 1, hidden_trunk=128, num_trunk_layers = 1):
         """
         N: Resolution 
         dim: 1D/2D PDE - We assume that it lies between 0 and 1
@@ -33,9 +33,9 @@ class DeepONet(MLSolver):
             ys = torch.linspace(0, 1, N)
             xs, ys = torch.meshgrid(xs, ys, indexing = "ij")
             coords = torch.stack([xs, ys], axis = -1) # shape N \times N \times 2
-            self.coords = coords.reshape(-1, 2) # N^2 \times 2
+            self.coords = coords.reshape(-1, 2).to(device) # N^2 \times 2
         else:
-            self.coords = xs.reshape(-1, 1)
+            self.coords = xs.reshape(-1, 1).to(device) # N \times 1
         self.input_size = N if self.dim == 1 else N*N
         self.input_size = 2*self.input_size if self.coef else self.input_size
         branch_hidden_list = [self.input_size] + [hidden_branch]*num_branch_layers + [branch_dim]

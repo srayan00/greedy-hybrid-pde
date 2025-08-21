@@ -186,8 +186,8 @@ class Trainer:
         for batch_idx, info in enumerate(self.train_data):
             torch.autograd.set_detect_anomaly(True)
             if isinstance(self.model, MLSolver):
-                source = info["input"].to(self.gpu_id)
-                targets = info["solution"].to(self.gpu_id)
+                source = info[0].to(self.gpu_id)
+                targets = info[1].to(self.gpu_id)
             loss = self._run_batch(source, targets, epoch)
             print("Batch: {}, Loss: {}".format(batch_idx, loss), flush=True)
             train_loss += loss
@@ -262,8 +262,8 @@ class Trainer:
                     targets = info["output_ids"].to(self.gpu_id)
                     output = self.model(source, True, 20)
                 elif isinstance(self.model, MLSolver):
-                    source = info["input"].to(self.gpu_id)
-                    targets = info["solution"].to(self.gpu_id)
+                    source = info[0].to(self.gpu_id)
+                    targets = info[1].to(self.gpu_id)
                     output = self.model(source)
                     
                  # CHANGE THIS LATER
@@ -275,3 +275,48 @@ class Trainer:
                 val_loss += loss.item()
         print(f"number of validation batches is {len(self.val_data)}")
         return val_loss / len(self.val_data)
+    
+    def train(self, max_epochs: int, start_epoch = 0, train_losses = None, val_losses = None):
+        self.train_losses = torch.zeros(max_epochs)
+        self.val_losses = torch.zeros(max_epochs)
+        if train_losses is not None:
+            self.train_losses[:len(train_losses)] = train_losses
+        if val_losses is not None:
+            self.val_losses[:len(val_losses)] = val_losses
+        for epoch in range(start_epoch, max_epochs):
+            self._train_mode()
+            train_loss = self._run_epoch(epoch)
+            self.train_losses[epoch] = train_loss
+            print("Epoch: {}, Train Loss: {}".format(epoch, train_loss), flush=True)
+            print("Running Validation")
+            if self.val_data is not None:
+                val_loss = self._run_validation()
+                self.val_losses[epoch] = val_loss
+                print("Epoch: {}, Validation Loss: {}".format(epoch, val_loss), flush=True)
+            if self.scheduler_wu is not None and epoch < self.warmup_epochs:
+                self.scheduler_wu.step()
+                print("Learning rate is now {}".format(self.scheduler_wu.get_last_lr()), flush=True)
+            if self.scheduler_re is not None:
+                self.scheduler_re.step(val_loss)
+            if self.early_stopper is not None:
+                is_best = self.early_stopper(val_loss, epoch)
+                if is_best:
+                    self._save_checkpoint(epoch, is_best)
+            if self.scheduled_sampler is not None:
+                self.scheduled_sampler(epoch)
+            if self.early_stopper is not None:
+                if epoch % self.save_every == 0:
+                    self._save_checkpoint(epoch)
+                if self.early_stopper.early_stop:
+                    print("Early Stopping", flush=True)
+                    break
+            else:
+                if epoch % self.save_every == 0:
+                    self._save_checkpoint(epoch)
+
+    def _compute_gradient_norm(self):
+        norms = {}
+        for name, param in self.model.named_parameters():
+            if param.grad is not None and param.requires_grad:
+                norms[name] = param.grad.norm(2).item()
+        return norms

@@ -1,1 +1,3 @@
 __pycache__/
+*.sbat
+slurm_logs/
