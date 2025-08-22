@@ -174,7 +174,7 @@ class Trainer:
         if isinstance(self.model, DeepONet):
             print(self.model.branch_net.mlp.linear_layer_0.bias)
         elif isinstance(self.model, FNOforPDE):
-            print(self.model.fno.conv1.weight)
+            print(self.model.fno.fno_blocks.convs[0].weight)
         if torch.isnan(loss):
             print("Loss is NaN")
             raise ValueError("Loss is NaN")

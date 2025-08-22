@@ -98,7 +98,8 @@ class PoissonEquation1D(PDE):
         return b
     
     def solve(self):
-        u = np.linalg.solve(self.A, self.b)
+        u = np.linalg.lstsq(self.A, self.b, rcond=None)[0]
+        # u = np.linalg.solve(self.A, self.b)
         return u
 
 
@@ -191,5 +192,6 @@ class PoissonEquation2D(PDE):
         return b
     
     def solve(self):
-        u = np.linalg.solve(self.A, self.b)
+        # u = np.linalg.solve(self.A, self.b)
+        u = np.linalg.lstsq(self.A, self.b, rcond=None)[0]
         return u.reshape((len(self.x), len(self.y)))

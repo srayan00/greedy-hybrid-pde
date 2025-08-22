@@ -29,11 +29,9 @@ class DeepONet(MLSolver):
         self.hidden_trunk = hidden_trunk
         self.num_trunk_layers = num_trunk_layers
         self.boundary = boundary
-        xs = torch.linspace(0, 1, N + 1)
-        xs = xs[:-1] if boundary == "Periodic" else xs
+        xs = torch.linspace(0, 1, N + 1)[:-1] if boundary == "Periodic" else torch.linspace(0, 1, N)
         if self.dim > 1:
-            ys = torch.linspace(0, 1, N + 1)
-            ys = ys[:-1] if boundary == "Periodic" else ys
+            ys = torch.linspace(0, 1, N + 1)[:-1] if boundary == "Periodic" else torch.linspace(0, 1, N)
             xs, ys = torch.meshgrid(xs, ys, indexing = "ij")
             coords = torch.stack([xs, ys], axis = -1) # shape N \times N \times 2
             self.coords = coords.reshape(-1, 2).to(device) # N^2 \times 2
@@ -61,7 +59,7 @@ class DeepONet(MLSolver):
             trunk_output = self.trunk_net(self.coords) # (N^2, branch_dim)
         trunk_output = trunk_output.transpose(0, 1)
         out = torch.matmul(branch_output, trunk_output)
-        out = out.reshape(-1, self.N, self.N) if self.dim ==2 else out.reshape(-1, self.N)
+        out = out.reshape(-1, self.N, self.N) if self.dim ==2 else out# .reshape(-1, self.N)
         # impose dirichlet boundary condition
         if self.boundary == "Dirichlet":
             if self.dim ==1:

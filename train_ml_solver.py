@@ -13,6 +13,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--model', type=str, default='deeponet', help='Model to use: deeponet or fno')
 parser.add_argument('--dim', type=int, default=1, help='Dimension of the PDE: 1 or 2')
 parser.add_argument("--boundary", type=str, default="Periodic", help="Boundary condition: Dirichlet or Periodic")
+parser.add_argument("--extra", type=int, default=200, help="Extra data samples to generate beyond n_train + n_val")
 parser.add_argument("--equation", type=str, default="Poisson", help="PDE to solve: Poisson")
 parser.add_argument("--ckp_dir", type=str, default="./checkpoints", help="Directory to save checkpoints")
 parser.add_argument("--model_name", type=str, default="model.pt", help="Model checkpoint name")
@@ -22,36 +23,37 @@ parser.add_argument("--data_dir", type=str, default="./data", help="Directory to
 if __name__ == "__main__":
     print("Parsing arguments...")
     args, unknown = parser.parse_known_args()
-    model = args.model
+    model_type = args.model
     dim = args.dim
     boundary = args.boundary
     equation = args.equation
     ckp_dir = args.ckp_dir
     model_name = args.model_name
     data_dir = args.data_dir
+    extra = args.extra
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    if boundary not in ["Periodic"]:
+    if boundary not in ["Periodic", "Dirichlet"]:
         raise ValueError("Boundary condition must be either 'Dirichlet' or 'Periodic'")
     if equation not in ["Poisson"]:
         raise ValueError("Currently only Poisson equation is supported")
-    if model not in ["deeponet"]:
+    if model_type not in ["deeponet", "fno"]:
         raise ValueError("Model must be either 'deeponet' or 'fno'")
     if dim not in [1, 2]:
         raise ValueError("Dimension must be either 1 or 2")
     
 
-    ckp_path = ckp_dir + f"/{model_name}_{equation}_{boundary}_{dim}d_full.pth"
-    save_path = ckp_dir + f"/{model_name}_{equation}_{boundary}_{dim}d"
-    args_path = ckp_dir + f"/args_{model_name}_{equation}_{boundary}_{dim}d.json"
+    ckp_path = ckp_dir + f"/{model_type}_{model_name}_{equation}_{boundary}_{dim}d_full.pth"
+    save_path = ckp_dir + f"/{model_type}_{model_name}_{equation}_{boundary}_{dim}d"
+    args_path = ckp_dir + f"/{model_type}_{model_name}_{equation}_{boundary}_{dim}d_args.json"
 
     if os.path.exists(args_path):
         print(f"Loading training arguments from {args_path}...")
         with open(args_path, "r") as f:
             arguments = json.load(f)
     else:
-        with open(f"args/{model}_args.json", "r") as f:
+        with open(f"args/{model_type}_args.json", "r") as f:
             arguments = json.load(f)
         with open(f"{args_path}", "w") as f:
             json.dump(arguments, f)
@@ -76,11 +78,18 @@ if __name__ == "__main__":
                                     gamma=arguments_grf["gamma"],
                                     device=device,
                                     seed=1234)
-        f = lambda x: np.sin(2*np.pi * x) if dim ==1 else lambda x, y: np.sin(2*np.pi * x) * np.sin(2*np.pi * y)
-        a = grf.generate(arguments["n_train"] + arguments["n_val"])
+        if dim == 1:
+            f = lambda x: np.sin(2 * np.pi * x)
+        else:
+            f = lambda x, y: np.sin(2 * np.pi * x) * np.sin(2 * np.pi * y)
+        a = grf.generate(arguments["n_train"] + arguments["n_val"] + extra)
         x = np.linspace(0, 1, arguments["N"], endpoint = False if boundary == "Periodic" else True)
         y = np.linspace(0, 1, arguments["N"], endpoint = False if boundary == "Periodic" else True) if dim ==2 else None
-        for i in range(arguments["n_train"] + arguments["n_val"]):
+        train_data = []
+        val_data = []
+        for i in range(arguments["n_train"] + arguments["n_val"] + extra):
+            pde = None
+            u_sol = None
             if dim == 1:
                 pde = PoissonEquation1D(a_func=a[i].numpy(),
                                         f_func=f,
@@ -97,16 +106,17 @@ if __name__ == "__main__":
                 u_sol = torch.tensor(pde.u.reshape(new_shape), dtype=torch.float32, device=device)
             
             input = a[i, None, :]
-            if i < arguments["n_train"]:
-                if i == 0:
-                    train_data = [(input, u_sol)]
-                else:
-                    train_data.append((input, u_sol))
+            residual = pde.compute_residual(u_sol.cpu().numpy().flatten())
+            if np.linalg.norm(residual) > 1:
+                continue
+            if len(train_data) < arguments["n_train"]:
+                train_data.append((input, u_sol))
             else:
-                if i == arguments["n_train"]:
-                    val_data = [(input, u_sol)]
-                else:
-                    val_data.append((input, u_sol))
+                val_data.append((input, u_sol))
+            if len(train_data) == arguments["n_train"] and len(val_data) == arguments["n_val"]:
+                break
+        if len(train_data) < arguments["n_train"] or len(val_data) < arguments["n_val"]:
+            raise ValueError("Not enough data generated. Try increasing the extra variable.")
         with open(f"{data_dir}/train_data_{equation}_{boundary}_{dim}d.pt", "wb") as f:
             torch.save(train_data, f)
         with open(f"{data_dir}/val_data_{equation}_{boundary}_{dim}d.pt", "wb") as f:
@@ -122,13 +132,17 @@ if __name__ == "__main__":
     print(f"Train dataset size: {len(train_dataset)}")
     print(f"Validation dataset size: {len(val_dataset)}")
 
-
-    model = DeepONet(N=arguments["N"], dim=dim, in_channels=1, device=device, boundary=boundary,
-                     branch_dim=arguments["branch_dim"],
-                     hidden_branch=arguments["hidden_branch"],
-                     num_branch_layers=arguments["num_branch_layers"],
-                     hidden_trunk=arguments["hidden_trunk"],
-                     num_trunk_layers=arguments["num_trunk_layers"]).to(device)
+    print("Creating model...")
+    if model_type == "deeponet":
+        model = DeepONet(N=arguments["N"], dim=dim, in_channels=1, device=device, boundary=boundary,
+                        branch_dim=arguments["branch_dim"],
+                        hidden_branch=arguments["hidden_branch"],
+                        num_branch_layers=arguments["num_branch_layers"],
+                        hidden_trunk=arguments["hidden_trunk"],
+                        num_trunk_layers=arguments["num_trunk_layers"]).to(device)
+    elif model_type == "fno":
+        model = FNOforPDE(trunc_mode=arguments["trunc_mode"], dim=dim, in_channels=1,
+                          hidden_size=arguments["hidden_size"], num_layers=arguments["num_layers"]).to(device)
     ckp = None
     if os.path.exists(ckp_path):
         print(f"Loading model checkpoint from {ckp_path}...")
