@@ -32,6 +32,7 @@ if __name__ == "__main__":
     model_name = args.model_name
     data_dir = args.data_dir
     extra = args.extra
+    in_channels = args.in_channels
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -43,11 +44,13 @@ if __name__ == "__main__":
         raise ValueError("Model must be either 'deeponet' or 'fno'")
     if dim not in [1, 2]:
         raise ValueError("Dimension must be either 1 or 2")
+    if in_channels not in [1, 2]:
+        raise ValueError("in_channels must be either 1 or 2")
     
 
-    ckp_path = ckp_dir + f"/{model_type}_{model_name}_{equation}_{boundary}_{dim}d_full.pth"
-    save_path = ckp_dir + f"/{model_type}_{model_name}_{equation}_{boundary}_{dim}d"
-    args_path = ckp_dir + f"/{model_type}_{model_name}_{equation}_{boundary}_{dim}d_args.json"
+    ckp_path = ckp_dir + f"/{model_type}_{model_name}_{equation}_{boundary}_{dim}d_{in_channels}c_full.pth"
+    save_path = ckp_dir + f"/{model_type}_{model_name}_{equation}_{boundary}_{dim}d_{in_channels}c"
+    args_path = ckp_dir + f"/{model_type}_{model_name}_{equation}_{boundary}_{dim}d_{in_channels}c_args.json"
 
     if os.path.exists(args_path):
         print(f"Loading training arguments from {args_path}...")
@@ -62,11 +65,11 @@ if __name__ == "__main__":
     # Creating/Loading Data
     print("Creating Data")
 
-    if os.path.exists(f"{data_dir}/train_data_{equation}_{boundary}_{dim}d.pt"):
+    if os.path.exists(f"{data_dir}/train_data_{equation}_{boundary}_{dim}d_{in_channels}c.pt"):
         print(f"Loading data from {data_dir}...")
-        with open(f"{data_dir}/train_data_{equation}_{boundary}_{dim}d.pt", "rb") as f:
+        with open(f"{data_dir}/train_data_{equation}_{boundary}_{dim}d_{in_channels}c.pt", "rb") as f:
             train_data = torch.load(f)
-        with open(f"{data_dir}/val_data_{equation}_{boundary}_{dim}d.pt", "rb") as f:
+        with open(f"{data_dir}/val_data_{equation}_{boundary}_{dim}d_{in_channels}c.pt", "rb") as f:
             val_data = torch.load(f)
     else:
         with open(f"args/grf_args.json", "r") as f:
@@ -79,11 +82,19 @@ if __name__ == "__main__":
                                     gamma=arguments_grf["gamma"],
                                     device=device,
                                     seed=1234)
-        if dim == 1:
-            f = lambda x: np.sin(2 * np.pi * x)
+        # if dim == 1:
+        #     f = lambda x: np.sin(2 * np.pi * x)
+        # else:
+        #     f = lambda x, y: np.sin(2 * np.pi * x) * np.sin(2 * np.pi * y)
+        pushforward = None if boundary == "Dirichlet" else lambda x: x - torch.mean(x)
+        f = grf.generate(arguments["n_train"] + arguments["n_val"] + extra, pushfoward=pushforward)
+        if in_channels > 1:
+            a = grf.generate(arguments["n_train"] + arguments["n_val"] + extra)
         else:
-            f = lambda x, y: np.sin(2 * np.pi * x) * np.sin(2 * np.pi * y)
-        a = grf.generate(arguments["n_train"] + arguments["n_val"] + extra)
+            if dim == 1:
+                a = lambda x: 1.0
+            else:
+                a = lambda x, y: 1.0
         x = np.linspace(0, 1, arguments["N"], endpoint = False if boundary == "Periodic" else True)
         y = np.linspace(0, 1, arguments["N"], endpoint = False if boundary == "Periodic" else True) if dim ==2 else None
         train_data = []
@@ -92,21 +103,26 @@ if __name__ == "__main__":
             pde = None
             u_sol = None
             if dim == 1:
-                pde = PoissonEquation1D(a_func=a[i].numpy(),
-                                        f_func=f,
+                pde = PoissonEquation1D(a_func=a[i].numpy() if in_channels > 1 else a,
+                                        f_func=f[i].numpy(),
                                         boundary=boundary,
                                         x=x)
                 u_sol = torch.tensor(pde.u, dtype=torch.float32, device=device)
             else:
-                pde = PoissonEquation2D(a_func=a[i].numpy().flatten(),
-                                        f_func=f,
+                pde = PoissonEquation2D(a_func=a[i].numpy().flatten() if in_channels > 1 else a,
+                                        f_func=f[i].numpy().flatten(),
                                         boundary=boundary,
                                         x=x,
                                         y=y)
                 new_shape = (arguments["N"], arguments["N"]) 
                 u_sol = torch.tensor(pde.u.reshape(new_shape), dtype=torch.float32, device=device)
+                print(f"Generated sample {i+1}/{arguments['n_train'] + arguments['n_val'] + extra}")
+                print(f"len(train_data) = {len(train_data)}, len(val_data) = {len(val_data)}")
             
-            input = a[i, None, :]
+            if in_channels > 1:
+                input = torch.concatenate((a[i, None, :], f[i, None, :]), dim=0)
+            else:
+                input = f[i, None, :]
             residual = pde.compute_residual(u_sol.cpu().numpy().flatten())
             if np.linalg.norm(residual) > 1:
                 continue
@@ -117,10 +133,11 @@ if __name__ == "__main__":
             if len(train_data) == arguments["n_train"] and len(val_data) == arguments["n_val"]:
                 break
         if len(train_data) < arguments["n_train"] or len(val_data) < arguments["n_val"]:
+            print(f"Generated {len(train_data)} training samples and {len(val_data)} validation samples.")
             raise ValueError("Not enough data generated. Try increasing the extra variable.")
-        with open(f"{data_dir}/train_data_{equation}_{boundary}_{dim}d.pt", "wb") as f:
+        with open(f"{data_dir}/train_data_{equation}_{boundary}_{dim}d_{in_channels}c.pt", "wb") as f:
             torch.save(train_data, f)
-        with open(f"{data_dir}/val_data_{equation}_{boundary}_{dim}d.pt", "wb") as f:
+        with open(f"{data_dir}/val_data_{equation}_{boundary}_{dim}d_{in_channels}c.pt", "wb") as f:
             torch.save(val_data, f)
     print("Data creation/loading completed.")
     print(f"Train data size: {len(train_data)}")
@@ -135,14 +152,14 @@ if __name__ == "__main__":
 
     print("Creating model...")
     if model_type == "deeponet":
-        model = DeepONet(N=arguments["N"], dim=dim, in_channels=1, device=device, boundary=boundary,
+        model = DeepONet(N=arguments["N"], dim=dim, in_channels=in_channels, device=device, boundary=boundary,
                         branch_dim=arguments["branch_dim"],
                         hidden_branch=arguments["hidden_branch"],
                         num_branch_layers=arguments["num_branch_layers"],
                         hidden_trunk=arguments["hidden_trunk"],
                         num_trunk_layers=arguments["num_trunk_layers"]).to(device)
     elif model_type == "fno":
-        model = FNOforPDE(trunc_mode=arguments["trunc_mode"], dim=dim, in_channels=1,
+        model = FNOforPDE(trunc_mode=arguments["trunc_mode"], dim=dim, in_channels=in_channels,
                           hidden_size=arguments["hidden_size"], num_layers=arguments["num_layers"]).to(device)
     ckp = None
     if os.path.exists(ckp_path):

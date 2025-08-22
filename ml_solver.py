@@ -38,7 +38,7 @@ class DeepONet(MLSolver):
         else:
             self.coords = xs.reshape(-1, 1).to(device) # N \times 1
         self.input_size = N if self.dim == 1 else N*N
-        self.input_size = 2*self.input_size if self.in_channels == 2 else self.input_size
+        self.input_size = self.in_channels*self.input_size
         branch_hidden_list = [self.input_size] + [hidden_branch]*num_branch_layers + [branch_dim]
         self.branch_net = models.MLP(branch_hidden_list)
         trunk_hidden_list = [dim] + [hidden_trunk]*num_trunk_layers + [branch_dim]
@@ -59,7 +59,7 @@ class DeepONet(MLSolver):
             trunk_output = self.trunk_net(self.coords) # (N^2, branch_dim)
         trunk_output = trunk_output.transpose(0, 1)
         out = torch.matmul(branch_output, trunk_output)
-        out = out.reshape(-1, self.N, self.N) if self.dim ==2 else out# .reshape(-1, self.N)
+        out = out.reshape(-1, self.N, self.N) if self.dim ==2 else out.reshape(-1, self.N)
         # impose dirichlet boundary condition
         if self.boundary == "Dirichlet":
             if self.dim ==1:
