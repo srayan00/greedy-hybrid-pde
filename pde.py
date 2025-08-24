@@ -45,12 +45,11 @@ class PDE:
 
 
 class PoissonEquation1D(PDE):
-    def __init__(self, a_func, f_func, boundary, x, A = None):
+    def __init__(self, a_func, f_func, boundary, x, A = None, solve = True):
         super().__init__(a_func, f_func, boundary, x, A)
         self.A = self.build_matrix() if A is None else A
         self.b = self.build_rhs() if not isinstance(self.f_func, np.ndarray) else self.f_func
-        self.u = self.solve()
-    
+        self.u = self.solve() if solve else None
     
     def build_matrix_dirichlet(self):
         n = len(self.x)
@@ -104,11 +103,11 @@ class PoissonEquation1D(PDE):
 
 
 class PoissonEquation2D(PDE):
-    def __init__(self, a_func, f_func, boundary, x, y, A=None):
+    def __init__(self, a_func, f_func, boundary, x, y, A=None, solve=True):
         super().__init__(a_func, f_func, boundary,x, y, A)
         self.A = self.build_matrix() if A is None else A
         self.b = self.build_rhs() if not isinstance(self.f_func, np.ndarray) else self.f_func
-        self.u = self.solve()
+        self.u = self.solve() if solve else None
 
     def index(self, i, j):
         return i * len(self.y) + j

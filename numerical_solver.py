@@ -45,24 +45,27 @@ class GaussSeidelSolver(NumericalSolver):
         return u_new
 
 class MultigridSolver(NumericalSolver):
-    def __init__(self, equation: PDE, levels=3):
+    def __init__(self, equation: PDE, levels=2):
         super().__init__(equation)
+        if levels > 2:
+            raise NotImplementedError("MultigridSolver currently supports up to 2 levels only.")
         self.levels = levels
         self.equations = [self.equation]
         self.restrictor, self.interpolator = self.build_restrictor_interpolator()
         self.restrictors = []
         self.interpolators = []
-        for i in range(levels - 1):
-            restrictor, interpolator = self.build_restrictor_interpolator()
-            self.restrictors.append(restrictor)
-            self.interpolators.append(interpolator)
-            if self.equation.dimension == 1:
-                new_equation = self.equation.__class__(self.equation.a_func, self.equation.f_func, self.equation.boundary,
-                                                    self.equation.x[::2], A=self.build_coefficient_matrix(self.equation, restrictor, interpolator))
-            else:
-                new_equation = self.equation.__class__(self.equation.a_func, self.equation.f_func, self.equation.boundary,
-                                                    self.equation.x[::2], self.equation.y[::2], A=self.build_coefficient_matrix(self.equation, restrictor, interpolator))
-            self.equations.append(new_equation)
+        if self.levels > 2:
+            for i in range(levels - 1):
+                restrictor, interpolator = self.build_restrictor_interpolator()
+                self.restrictors.append(restrictor)
+                self.interpolators.append(interpolator)
+                if self.equation.dimension == 1:
+                    new_equation = self.equation.__class__(self.equation.a_func, self.equation.f_func, self.equation.boundary,
+                                                        self.equation.x[::2], A=self.build_coefficient_matrix(self.equation, restrictor, interpolator))
+                else:
+                    new_equation = self.equation.__class__(self.equation.a_func, self.equation.f_func, self.equation.boundary,
+                                                        self.equation.x[::2], self.equation.y[::2], A=self.build_coefficient_matrix(self.equation, restrictor, interpolator))
+                self.equations.append(new_equation)
 
     def index(self, i, j, len_y=None):
         if len_y is None:
@@ -284,9 +287,8 @@ class MultigridSolver(NumericalSolver):
     def iteration(self, u_old, curr_equation=None, level = 0):
         if curr_equation is None:
             curr_equation = self.equation
-            restrictor, interpolator = self.restrictor, self.interpolator
-        else:
-            restrictor, interpolator = self.build_restrictor_interpolator(curr_equation)
+        # else:
+        restrictor, interpolator = self.build_restrictor_interpolator(curr_equation)
         # Pre-smoothing
         print("Pre-smoothing")
         u = WeightedJacobiSolver(curr_equation, weight=0.8).solve(u_init=u_old, max_iter=3)
