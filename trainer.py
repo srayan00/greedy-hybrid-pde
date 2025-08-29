@@ -1,7 +1,41 @@
 import torch
 from ml_solver import MLSolver, DeepONet, FNOforPDE, PredictorRejector
+from hybrid_solver import Router, ConstantRouter, HINTSRouter, LSTMGreedyRouter, HybridSolver
 
+class MSEalphaepsilonLoss(torch.nn.Module):
+    def __init__(self, alpha: float = 1.0, epsilon: float = 1e-9):
+        super(MSEalphaepsilonLoss, self).__init__()
+        self.alpha = alpha
+        self.epsilon = epsilon
+    
+    def forward(self, predictions, targets):
+        mse_loss = torch.mean((predictions - targets) ** 2)
+        target_norm = torch.sum(targets ** 2)
+        adjusted_loss = mse_loss / (target_norm**self.alpha + self.epsilon)
+        return adjusted_loss
 
+class ApproxGreedyRouterLoss(torch.nn.Module):
+    def __init__(self, cost = None, max_tokens = 20, is_score = True, flip = True, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.cost = cost 
+        self.max_tokens = max_tokens
+        self.is_score = is_score
+        self.flip = flip
+
+    def forward(self, prediction, target, reduction = "mean"):
+        probs = torch.nn.functional.softmax(prediction["routing_scores"], dim = -1)
+        log_scores = torch.log(1/probs) 
+        expert_predictions = prediction["complete_expert_predictions"] - torch.mean(prediction["complete_expert_predictions"], dim=-1, keepdim=True)
+        errors_expert = torch.norm(expert_predictions - target.unsqueeze(0), dim=-1).transpose(2, 1)
+        weights = torch.sum(errors_expert, dim = -1, keepdim=True) - errors_expert
+        loss_vec = torch.sum(log_scores * weights, dim = -1).transpose(1, 0)
+        loss_vec = torch.mean(loss_vec, dim = -1)
+        if reduction == "none":
+            return loss_vec
+        elif reduction == "sum":
+            return torch.sum(loss_vec)
+        elif reduction == "mean":
+            return torch.mean(loss_vec)
 
 class EarlyStopping:
     def __init__(self, patience: int =7, verbose: bool=False, delta: float =0, warmup_epochs: int = 10):
@@ -113,9 +147,11 @@ class Trainer:
         if lr_scheduler is not None:
             self.scheduler_wu = lr_scheduler[0]
             self.scheduler_re = lr_scheduler[1]
+            self.scheduler_step = lr_scheduler[2]
         else:
             self.scheduler_wu = None
             self.scheduler_re = None
+            self.scheduler_step = None
         self.warmup_epochs = warmup_epochs
         self.scheduled_sampler = scheduled_sampler
         self.max_norm = max_norm
@@ -136,13 +172,19 @@ class Trainer:
         
         with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=False):
         # Make Prediction and observe loss
-            if isinstance(self.model, PredictorRejector):
-                raise NotImplementedError
-                if self.scheduled_sampler is not None:
-                    output = self.model(source, True, 20, self.scheduled_sampler.current_prob, targets, scaling=scaling)
+            if isinstance(self.model, HybridSolver):
+                channels = source.shape[1]
+                f = source[:, 0, :]
+                if channels > 1:
+                    a = source[:, 1, :]
                 else:
-                    output = self.model(source, True, 20, 1.0, targets, scaling=scaling)
-                loss = self.loss_fn(output, targets, w1 = 0.0)
+                    a = None
+                if self.scheduled_sampler is not None:
+                    print(f"Scheduled sampler prob {self.scheduled_sampler.current_prob}")
+                    output = self.model(f, a, None, True, True, self.scheduled_sampler.current_prob, targets)
+                else:
+                    output = self.model(f, a, None, True, True, 1.0, targets)
+                loss = self.loss_fn(output, targets)
             if isinstance(self.model, MLSolver):
                 output = self.model(source)
                 loss = self.loss_fn(output, targets)
@@ -188,6 +230,9 @@ class Trainer:
             if isinstance(self.model, MLSolver):
                 source = info[0].to(self.gpu_id)
                 targets = info[1].to(self.gpu_id)
+            elif isinstance(self.model, HybridSolver):
+                source = info[0].to(self.gpu_id)
+                targets = info[1].to(self.gpu_id)
             loss = self._run_batch(source, targets, epoch)
             print("Batch: {}, Loss: {}".format(batch_idx, loss), flush=True)
             train_loss += loss
@@ -214,6 +259,10 @@ class Trainer:
             re_ckp = self.scheduler_re.state_dict()
         else:
             re_ckp = None
+        if self.scheduler_step is not None:
+            scheduler_step_ckp = self.scheduler_step.state_dict()
+        else:
+            scheduler_step_ckp = None
         if self.early_stopper is not None:
             early_ckp = self.early_stopper.state_dict()
         else:
@@ -237,6 +286,7 @@ class Trainer:
                     "optimizer": self.optimizer.state_dict(), 
                     "scheduler_wu": wu_ckp, 
                     "scheduler_re": re_ckp, 
+                    "scheduler_step": scheduler_step_ckp,
                     "scaler": scaler_ckp,
                     "early_stopping": early_ckp,
                     "scheduled_sampler": scheduled_sampler_ckp,
@@ -249,29 +299,32 @@ class Trainer:
     
     def _run_validation(self):
         val_loss = 0
-        self.model.eval()
+        self.model.train()
         if isinstance(self.model, PredictorRejector):
             raise NotImplementedError
             self.model.rejector.scaling = True
             self.model.rejector.train_min_max = False
         with torch.no_grad():
             for batch_idx, info in enumerate(self.val_data):
-                if isinstance(self.model, PredictorRejector):
-                    raise NotImplementedError
-                    source = info["input_ids"].to(self.gpu_id)
-                    targets = info["output_ids"].to(self.gpu_id)
-                    output = self.model(source, True, 20)
+                if isinstance(self.model, HybridSolver):
+                    source = info[0].to(self.gpu_id)
+                    targets = info[1].to(self.gpu_id)
+                    channels = source.shape[1]
+                    f = source[:, 0, :]
+                    if channels > 1:
+                        a = source[:, 1, :]
+                    else:
+                        a = None
+                    output = self.model(f, a, None, True, True, 0.0, targets)
                 elif isinstance(self.model, MLSolver):
+                    print(f"source is {info[0]}")
+                    print(f"target is {info[1]}")
                     source = info[0].to(self.gpu_id)
                     targets = info[1].to(self.gpu_id)
                     output = self.model(source)
                     
                  # CHANGE THIS LATER
-                if isinstance(self.model, PredictorRejector):
-                    raise NotImplementedError
-                    loss = self.loss_fn(output, targets, w1 = 0.0)
-                elif isinstance(self.model, MLSolver):
-                    loss = self.loss_fn(output, targets)
+                loss = self.loss_fn(output, targets)
                 val_loss += loss.item()
         print(f"number of validation batches is {len(self.val_data)}")
         return val_loss / len(self.val_data)
@@ -298,6 +351,8 @@ class Trainer:
                 print("Learning rate is now {}".format(self.scheduler_wu.get_last_lr()), flush=True)
             if self.scheduler_re is not None:
                 self.scheduler_re.step(val_loss)
+            if self.scheduler_step is not None:
+                self.scheduler_step.step()
             if self.early_stopper is not None:
                 is_best = self.early_stopper(val_loss, epoch)
                 if is_best:

@@ -5,19 +5,24 @@ import argparse
 from ml_solver import MLSolver, DeepONet, FNOforPDE
 from data_generation import GaussianRandomField, PDEDataset
 from pde_pytorch import PoissonEquation1D, PoissonEquation2D
+from numerical_solver_pytorch import WeightedJacobiSolver, MultigridSolver, GaussSeidelSolver
+from hybrid_solver import Router, ConstantRouter, HINTSRouter, LSTMGreedyRouter, HybridSolver
 
-from trainer import Trainer, EarlyStopping, MSEalphaepsilonLoss
+from trainer import Trainer, EarlyStopping, ApproxGreedyRouterLoss, ScheduledSampler
 import json
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--model', type=str, default='deeponet', help='Model to use: deeponet or fno')
+parser.add_argument('--ml_model', type=str, default='deeponet', help='Model to use: deeponet or fno')
+parser.add_argument('--numerical_solvers', type=str, default='jacobi', help='comma-separated list of numerical solvers. Ex: jacobi_1.3,mg_2,gs')
+parser.add_argument("--model", type=str, default='lstm')
 parser.add_argument('--dim', type=int, default=1, help='Dimension of the PDE: 1 or 2')
 parser.add_argument("--boundary", type=str, default="Periodic", help="Boundary condition: Dirichlet or Periodic")
 parser.add_argument("--in_channels", type=int, default=1, help="Number of input channels")
 parser.add_argument("--extra", type=int, default=200, help="Extra data samples to generate beyond n_train + n_val")
 parser.add_argument("--equation", type=str, default="Poisson", help="PDE to solve: Poisson")
 parser.add_argument("--ckp_dir", type=str, default="./checkpoints", help="Directory to save checkpoints")
-parser.add_argument("--model_name", type=str, default="model.pt", help="Model checkpoint name")
+parser.add_argument("--ml_model_name", type=str, default="test", help="ml_model checkpoint name")
+parser.add_argument("--model_name", type=str, default="", help="Model checkpoint name")
 parser.add_argument("--data_dir", type=str, default="./data", help="Directory to save/load data")
 
 
@@ -25,11 +30,15 @@ if __name__ == "__main__":
     print("Parsing arguments...")
     args, unknown = parser.parse_known_args()
     model_type = args.model
+    ml_model_type = args.ml_model
     dim = args.dim
     boundary = args.boundary
     equation = args.equation
     ckp_dir = args.ckp_dir
     model_name = args.model_name
+    ml_model_name = args.ml_model_name
+    numerical_solvers = args.numerical_solvers.split(",")
+    num_solvers = len(numerical_solvers) + 1
     data_dir = args.data_dir
     extra = args.extra
     in_channels = args.in_channels
@@ -40,17 +49,24 @@ if __name__ == "__main__":
         raise ValueError("Boundary condition must be either 'Dirichlet' or 'Periodic'")
     if equation not in ["Poisson"]:
         raise ValueError("Currently only Poisson equation is supported")
-    if model_type not in ["deeponet", "fno"]:
+    if ml_model_type not in ["deeponet", "fno"]:
         raise ValueError("Model must be either 'deeponet' or 'fno'")
     if dim not in [1, 2]:
         raise ValueError("Dimension must be either 1 or 2")
     if in_channels not in [1, 2]:
         raise ValueError("in_channels must be either 1 or 2")
+    if model_type != "lstm":
+        raise ValueError("Model must be LSTM")
+
+    
     
 
-    ckp_path = ckp_dir + f"/{model_type}_{model_name}_{equation}_{boundary}_{dim}d_{in_channels}c_full.pth"
-    save_path = ckp_dir + f"/{model_type}_{model_name}_{equation}_{boundary}_{dim}d_{in_channels}c"
-    args_path = ckp_dir + f"/{model_type}_{model_name}_{equation}_{boundary}_{dim}d_{in_channels}c_args.json"
+    ml_ckp_path = ckp_dir + f"/{ml_model_type}_{ml_model_name}_{equation}_{boundary}_{dim}d_{in_channels}c_best.pth"
+    ml_args_path = ckp_dir + f"/{ml_model_type}_{ml_model_name}_{equation}_{boundary}_{dim}d_{in_channels}c_args.json"
+
+    ckp_path = ckp_dir + f"/{model_type}router_{model_name}_{equation}_{boundary}_{dim}d_{in_channels}c_full.pth"
+    save_path = ckp_dir + f"/{model_type}router_{model_name}_{equation}_{boundary}_{dim}d_{in_channels}c"
+    args_path = ckp_dir + f"/{model_type}router_{model_name}_{equation}_{boundary}_{dim}d_{in_channels}c_args.json"
 
     if os.path.exists(args_path):
         print(f"Loading training arguments from {args_path}...")
@@ -62,14 +78,19 @@ if __name__ == "__main__":
         with open(f"{args_path}", "w") as f:
             json.dump(arguments, f)
     
+    if os.path.exists(ml_args_path):
+        with open(ml_args_path, "r") as f:
+            ml_arguments = json.load(f)
+    else:
+        raise ValueError("Path Not found")
     # Creating/Loading Data
     print("Creating Data")
 
-    if os.path.exists(f"{data_dir}/train_data_{equation}_{boundary}_{dim}d_{in_channels}c_{arguments["n_train"]}s.pt") and os.path.exists(f"{data_dir}/val_data_{equation}_{boundary}_{dim}d_{in_channels}c_{arguments["n_val"]}s.pt"):
+    if os.path.exists(f"{data_dir}/router_train_data_{equation}_{boundary}_{dim}d_{in_channels}c_{arguments["n_train"]}s.pt") and os.path.exists(f"{data_dir}/router_val_data_{equation}_{boundary}_{dim}d_{in_channels}c_{arguments["n_val"]}s.pt"):
         print(f"Loading data from {data_dir}...")
-        with open(f"{data_dir}/train_data_{equation}_{boundary}_{dim}d_{in_channels}c_{arguments["n_train"]}s.pt", "rb") as f:
+        with open(f"{data_dir}/router_train_data_{equation}_{boundary}_{dim}d_{in_channels}c_{arguments["n_train"]}s.pt", "rb") as f:
             train_data = torch.load(f)
-        with open(f"{data_dir}/val_data_{equation}_{boundary}_{dim}d_{in_channels}c_{arguments["n_val"]}s.pt", "rb") as f:
+        with open(f"{data_dir}/router_val_data_{equation}_{boundary}_{dim}d_{in_channels}c_{arguments["n_val"]}s.pt", "rb") as f:
             val_data = torch.load(f)
     else:
         with open(f"args/grf_args.json", "r") as f:
@@ -143,9 +164,9 @@ if __name__ == "__main__":
         if len(train_data) < arguments["n_train"] or len(val_data) < arguments["n_val"]:
             print(f"Generated {len(train_data)} training samples and {len(val_data)} validation samples.")
             raise ValueError("Not enough data generated. Try increasing the extra variable.")
-        with open(f"{data_dir}/train_data_{equation}_{boundary}_{dim}d_{in_channels}c_{arguments["n_train"]}s.pt", "wb") as f:
+        with open(f"{data_dir}/router_train_data_{equation}_{boundary}_{dim}d_{in_channels}c_{arguments["n_train"]}s.pt", "wb") as f:
             torch.save(train_data, f)
-        with open(f"{data_dir}/val_data_{equation}_{boundary}_{dim}d_{in_channels}c_{arguments["n_val"]}s.pt", "wb") as f:
+        with open(f"{data_dir}/router_val_data_{equation}_{boundary}_{dim}d_{in_channels}c_{arguments["n_val"]}s.pt", "wb") as f:
             torch.save(val_data, f)
     print("Data creation/loading completed.")
     print(f"Train data size: {len(train_data)}")
@@ -164,16 +185,29 @@ if __name__ == "__main__":
     print(f"Validation dataset size: {len(val_dataset)}")
 
     print("Creating model...")
-    if model_type == "deeponet":
-        model = DeepONet(N=arguments["N"], dim=dim, in_channels=in_channels, device=device, boundary=boundary,
-                        branch_dim=arguments["branch_dim"],
-                        hidden_branch=arguments["hidden_branch"],
-                        num_branch_layers=arguments["num_branch_layers"],
-                        hidden_trunk=arguments["hidden_trunk"],
-                        num_trunk_layers=arguments["num_trunk_layers"]).to(device)
-    elif model_type == "fno":
-        model = FNOforPDE(trunc_mode=arguments["trunc_mode"], dim=dim, in_channels=in_channels,
-                          hidden_size=arguments["hidden_size"], num_layers=arguments["num_layers"]).to(device)
+    if ml_model_type == "deeponet":
+        ml_model = DeepONet(N=ml_arguments["N"], dim=dim, in_channels=in_channels, device=device, boundary=boundary,
+                        branch_dim=ml_arguments["branch_dim"],
+                        hidden_branch=ml_arguments["hidden_branch"],
+                        num_branch_layers=ml_arguments["num_branch_layers"],
+                        hidden_trunk=ml_arguments["hidden_trunk"],
+                        num_trunk_layers=ml_arguments["num_trunk_layers"]).to(device)
+    elif ml_model_type == "fno":
+        ml_model = FNOforPDE(trunc_mode=ml_arguments["trunc_mode"], dim=dim, in_channels=in_channels,
+                          hidden_size=ml_arguments["hidden_size"], num_layers=ml_arguments["num_layers"]).to(device)
+    
+    
+    ml_ckp = None
+    if os.path.exists(ml_ckp_path):
+        print(f"Loading ml model checkpoint from {ml_ckp_path}...")
+        ml_ckp = torch.load(ml_ckp_path, map_location=device, weights_only=False)
+    
+    if ml_ckp:
+        ml_model.load_state_dict(ml_ckp["model"])
+    
+    if model_type == "lstm":
+        print(f"HERE")
+        router = LSTMGreedyRouter(None, ml_arguments["N"]*(in_channels + 1), arguments["hidden_dim"], arguments["num_layers"], num_solvers, arguments["dropout"]).to(device)
     ckp = None
     if os.path.exists(ckp_path):
         print(f"Loading model checkpoint from {ckp_path}...")
@@ -181,7 +215,58 @@ if __name__ == "__main__":
     
     if ckp:
         print(f"Resuming training from epoch {ckp['epoch']}")
-        model.load_state_dict(ckp["model"])
+        router.load_state_dict(ckp["model"])
+    print("Building the Numerical Solvers")
+    if boundary == "Dirichlet":
+        x = torch.linspace(0, 1, arguments["N"], device=device, dtype=torch.float32)
+        y = torch.linspace(0, 1, arguments["N"], device=device, dtype=torch.float32) if dim ==2 else None
+    else:
+        x = torch.linspace(0, 1, arguments["N"] + 1, device=device, dtype=torch.float32)[:-1]
+        y = torch.linspace(0, 1, arguments["N"] + 1, device=device, dtype=torch.float32)[:-1] if dim ==2 else None
+    pde = None
+    if dim == 1:
+        pde = PoissonEquation1D(a_func= lambda x: 1,
+                                f_func=lambda x: 1,
+                                boundary=boundary,
+                                x=x, 
+                                device=device, 
+                                solve = False)
+    else:
+        pde = PoissonEquation2D(a_func=lambda x, y: 1,
+                                        f_func=lambda x,y: 1,
+                                        boundary=boundary,
+                                        x=x,
+                                        y=y,
+                                        device=device, 
+                                        solve = False)
+
+    list_of_solvers = []
+    for solver in numerical_solvers:
+        split = solver.split("_")
+        if len(split) > 2:
+            raise ValueError("Invalid Numerical Solver")
+        if split[0] == "jacobi":
+            if len(split) > 1:
+                weight = float(split[1])
+            else:
+                weight = 1
+            list_of_solvers.append(WeightedJacobiSolver(pde, device, weight))
+        elif split[0] == "gs":
+            list_of_solvers.append(GaussSeidelSolver(pde, device))
+        elif split[0] == "mg":
+            if len(split) > 1:
+                levels = int(split[1])
+            else:
+                levels = 2
+            list_of_solvers.append(MultigridSolver(pde, device, levels))
+        else:
+            raise ValueError("Invalid Numerical Solver")
+    print(f"List of solvers: {list_of_solvers}")
+
+    model = HybridSolver(N=arguments["N"], dim=dim, in_channels=in_channels, boundary=boundary, equation=pde,
+                                    suite_solver=list_of_solvers+[ml_model], router=router, tol=1e-7, max_iters=10, threshold=0.1)
+
+    
     
     optimizer = torch.optim.AdamW(model.parameters(), lr=arguments["learning_rate"], weight_decay=arguments["weight_decay"])
 
@@ -221,8 +306,17 @@ if __name__ == "__main__":
     if ckp is not None:
         if ckp["scheduler_step"] is not None:
             scheduler_step.load_state_dict(ckp["scheduler_step"])
+    
+    # Create a Scheduled sampler
+    scheduled_sampler = ScheduledSampler(starting_teacher_forcing_prob=arguments["starting_teacher_forcing_prob"], ending_teacher_forcing_prob=arguments["ending_teacher_forcing_prob"],
+                                         decay=arguments["decay"], warmup_epochs=arguments["warmup_epochs_ss"], linear=False)
+    if ckp is not None:
+        if ckp["scheduled_sampler"] is not None:
+            scheduled_sampler.load_state_dict(ckp["scheduled_sampler"])
+            print("Scheduled Sampler loaded", flush=True)
 
-    loss_fn = MSEalphaepsilonLoss() # torch.nn.MSELoss()
+
+    loss_fn = ApproxGreedyRouterLoss() # MSEalphaepsilonLoss() # torch.nn.MSELoss()
 
     start_epoch = 0 if ckp is None else ckp["epoch"] + 1
     print("Starting training...")
@@ -236,7 +330,7 @@ if __name__ == "__main__":
                       save_path=save_path,
                       parallel=False,
                       use_amp=True,
-                      scheduled_sampler=None,
+                      scheduled_sampler=scheduled_sampler,
                       max_norm=arguments["max_norm"],
                       early_stopper=early_stopper,
                       warmup_epochs=arguments["warmup_epochs_es"],

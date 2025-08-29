@@ -21,13 +21,13 @@ class GaussianRandomField:
             np.random.seed(seed)
             torch.manual_seed(seed)
         if dim == 1:
-            k_range = torch.arange(0, self.k_max + 1)
-            k_range_negative = torch.arange(-self.k_max, 0)
+            k_range = torch.arange(0, self.k_max + 1).to(self.device)
+            k_range_negative = torch.arange(-self.k_max, 0).to(self.device)
             self.krange = torch.concatenate((k_range, k_range_negative))
             self.psd = self._compute_psd_1d(self.krange)
         elif dim == 2:
-            kx = torch.arange(0, self.k_max + 1)
-            k_range_negative = torch.arange(-self.k_max, 0)
+            kx = torch.arange(0, self.k_max + 1).to(self.device)
+            k_range_negative = torch.arange(-self.k_max, 0).to(self.device)
             kx = torch.concatenate((kx, k_range_negative))
             ky = torch.arange(0, self.k_max + 1)
             self.kx, self.ky = torch.meshgrid(kx, ky, indexing = "ij")
@@ -36,11 +36,13 @@ class GaussianRandomField:
             raise ValueError("Dimension must be either 1 or 2.")
 
     def _compute_psd_1d(self, krange):
-        psd = (self.alpha ** (1/2)) * (4 * np.pi**2 * krange**2 + self.beta)**(-self.gamma/2)
+        pi = torch.tensor(np.pi).to(self.device)
+        psd = (self.alpha ** (1/2)) * (4 * pi**2 * krange**2 + self.beta)**(-self.gamma/2)
         return psd
     
     def _compute_psd_2d(self, kx, ky):
-        psd = (self.alpha ** (1/2)) * (4 * np.pi**2 * (kx**2 + ky**2) + self.beta)**(-self.gamma/2)
+        pi = torch.tensor(np.pi).to(self.device)
+        psd = (self.alpha ** (1/2)) * (4 * pi**2 * (kx**2 + ky**2) + self.beta)**(-self.gamma/2)
         return psd
     
     def generate(self, n_samples, pushfoward = torch.exp):
@@ -58,12 +60,12 @@ class GaussianRandomField:
     
     def _generate_1d(self, n_samples):
         psd = self.psd
-        real_positive_freq = torch.randn(n_samples, self.k_max + 1) # Real-valued part
-        complex_positive_freq = torch.randn(n_samples, self.k_max + 1) # complex-valued part
+        real_positive_freq = torch.randn(n_samples, self.k_max + 1).to(self.device) # Real-valued part
+        complex_positive_freq = torch.randn(n_samples, self.k_max + 1).to(self.device) # complex-valued part
         positive_freq = real_positive_freq + 1.j *complex_positive_freq # Zs for positive frequency
-        conjugate_positive_freq = np.conjugate(positive_freq) # conjugate frequencies
+        conjugate_positive_freq = torch.conj(positive_freq) # conjugate frequencies
         freq = torch.concatenate((positive_freq, torch.flip(conjugate_positive_freq, dims = [1])[:, :-1]), axis = 1)  # f^*(k) = f(-k)
-        freq[:, 0] = torch.randn(n_samples)
+        freq[:, 0] = 0 # torch.randn(n_samples)
         fourier_coeffs = psd * freq
         field = torch.fft.ifft(fourier_coeffs, n= self.num_samples, norm = "ortho")
         return field.real
@@ -98,10 +100,10 @@ class GaussianRandomField:
 
     def _generate_2d(self, n_samples):
         psd = self.psd
-        real_positive_freq = torch.randn(n_samples, 2*self.k_max + 1, self.k_max + 1) # Real-valued part
-        complex_positive_freq = torch.randn(n_samples, 2*self.k_max + 1, self.k_max + 1)
+        real_positive_freq = torch.randn(n_samples, 2*self.k_max + 1, self.k_max + 1).to(self.device) # Real-valued part
+        complex_positive_freq = torch.randn(n_samples, 2*self.k_max + 1, self.k_max + 1).to(self.device)
         hermitian_half = real_positive_freq + 1.j *complex_positive_freq
-        hermitian_half[:, 0, 0] = torch.randn(n_samples)
+        hermitian_half[:, 0, 0] = 0 # torch.randn(n_samples)
         fourier_coefs = psd * hermitian_half
         return torch.fft.irfft2(fourier_coefs, s= (self.num_samples, self.num_samples), norm = "ortho")
 

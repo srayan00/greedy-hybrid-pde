@@ -8,7 +8,7 @@ class MLP(torch.nn.Module):
         for i in range(len(hidden_sizes) - 1):
             order_dict.append(('linear_layer_{}'.format(i), torch.nn.Linear(hidden_sizes[i], hidden_sizes[i+1])))
             if i < len(hidden_sizes) - 2:
-                order_dict.append(('batchnorm_layer_{}'.format(i), torch.nn.BatchNorm1d(hidden_sizes[i+1])))
+                # order_dict.append(('batchnorm_layer_{}'.format(i), torch.nn.BatchNorm1d(hidden_sizes[i+1])))
                 order_dict.append(('relu_layer_{}'.format(i), torch.nn.ReLU()))
                 if dropout > 0:
                     order_dict.append(('dropout_layer_{}'.format(i), torch.nn.Dropout(dropout)))

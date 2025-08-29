@@ -1,8 +1,9 @@
 import numpy
 import torch
 from ml_solver import MLSolver, DeepONet, FNOforPDE
-from numerical_solver import NumericalSolver
-from pde import PDE, PoissonEquation1D, PoissonEquation2D
+from numerical_solver_pytorch import NumericalSolver
+from pde_pytorch import PDE, PoissonEquation1D, PoissonEquation2D
+import models
 
 class Router(torch.nn.Module):
     def __init__(self, num_solvers: int):
@@ -32,6 +33,67 @@ class ConstantRouter(Router):
         else:
             return chosen_solver
 
+class HINTSRouter(Router):
+    def __init__(self, num_solvers: int, tau: int):
+        super().__init__(num_solvers)
+        if num_solvers != 2:
+            raise ValueError("HINTRouter can only be used with two solvers.")
+        self.tau = tau
+        self.num_solvers = num_solvers
+        self.type = "HINTS"
+    
+    def forward(self, iteration):
+        score = torch.zeros(iteration.shape[0], self.num_solvers)
+        print(score.shape)
+        indices = (torch.remainder(iteration + 1, self.tau) == 0) + 0
+        print(indices)
+        score[torch.arange(iteration.shape[0]), indices] = 1.0
+        return score
+    
+    def predict(self, iteration, with_scores=True):
+        scores = self.forward(iteration)
+        chosen_solver = torch.argmax(scores, dim=1)
+        if with_scores:
+            return chosen_solver, scores
+        else:
+            return chosen_solver
+
+class LSTMGreedyRouter(Router):
+    def __init__(self, encoder_dim, decoder_dim, hidden_dim, num_layers, num_solvers, dropout):
+        super(LSTMGreedyRouter, self).__init__(num_solvers)
+        self.type = "LSTMGreedy"
+        self.lm = None
+        self.hidden_dim = hidden_dim
+        if encoder_dim is None:
+            self.encoder_dim = 0
+        else:
+            if isinstance(encoder_dim, int):
+                self.encoder_dim = encoder_dim
+            elif isinstance(encoder_dim, tuple):
+                self.encoder_dim = encoder_dim[1]
+            self.lm = torch.nn.Linear(self.encoder_dim, self.hidden_dim)
+        self.decoder_dim = decoder_dim
+        self.model = models.LSTMModel(self.decoder_dim , self.hidden_dim, self.num_solvers, num_layers, dropout)
+    
+    def initHidden(self, encoder_hidden):
+        if encoder_hidden is None:
+            return torch.zeros(1, 1, self.hidden_dim)
+        if len(encoder_hidden.shape) == 3:
+            encoder_hidden = torch.mean(encoder_hidden, dim = 1)
+        return self.lm(encoder_hidden)
+    
+    def forward(self, input, hidden):
+        x, hidden = self.model(input, hidden)
+        return x, hidden
+    
+    def predict(self, decoder_hidden, hidden, with_scores = False):
+        final_score, hidden = self.forward(decoder_hidden, hidden)
+        decision = torch.max(final_score, dim = 1).indices
+        if with_scores:
+            return (decision, final_score, hidden)
+        else:
+            return (decision, hidden)
+
 class HybridSolver(torch.nn.Module):
     def __init__(self, N: int, dim: int, in_channels: int, boundary: str, equation: PDE, suite_solver: list[NumericalSolver, MLSolver], router: torch.nn.Module, tol: float, max_iters: int, threshold: float) -> None:
         super().__init__()
@@ -45,6 +107,7 @@ class HybridSolver(torch.nn.Module):
         else:
             for i in range(len(suite_solver)):
                 if not isinstance(suite_solver[i], (NumericalSolver, MLSolver)):
+                    print(f"invalid index{i}")
                     raise TypeError("Each solver in suite_solver must be an instance of NumericalSolver or MLSolver.")
         if not isinstance(equation, PoissonEquation1D) and not isinstance(equation, PoissonEquation2D):
             raise ValueError("Unsupported equation type. Supported types are 'Poisson1D' and 'Poisson2D'.")
@@ -68,27 +131,30 @@ class HybridSolver(torch.nn.Module):
         if training and not return_dict:
             raise ValueError("return_dict must be True during training.")
         if u0 is None:
-            u0 = torch.zeros_like(f)
-        
+            u0 = torch.zeros_like(f, device=f.device)
+
         u_prev = u0
         predictions = ()
         routing_scores = () if return_dict else None
         complete_expert_predictions = () if return_dict and training else None
         bs = f.shape[0]
         equations = self.prepare_equations(f, a)
+        if self.router.type == "LSTMGreedy":
+            hidden_state_for_recurrent = None
         for iteration_num in range(self.max_iters):
-            print(f"Iteration {iteration_num+1}/{self.max_iters}")
-            
-            residual = torch.zeros_like(f)
+            if iteration_num % 25 == 0:
+                print(f"Iteration {iteration_num+1}/{self.max_iters}")
+
+            residual = torch.zeros_like(f, device=f.device)
             for b in range(bs):
-                residual[b] = torch.tensor(equations[b].compute_residual(u_prev[b].detach().numpy()), dtype=torch.float32)
-                # equations[b].b = residual[b].detach().numpy()
-            print(f"u_prev shape: {u_prev}")
-            print(f"residual shape: {residual}")
-            inputs = self.prepare_inputs(torch.tensor(residual, dtype=torch.float32).unsqueeze(1), a)
+                residual[b] = equations[b].compute_residual(u_prev[b])
+            inputs = self.prepare_inputs(residual.unsqueeze(1), a)
             if self.router.type in ["HINTS", "Constant"]:
-                print(torch.tensor([iteration_num]).repeat(bs).shape)
                 use_ml_solver, scores = self.router.predict(torch.tensor([iteration_num]).repeat(bs), with_scores=True)
+            elif self.router.type == "LSTMGreedy":
+                recurrent_inputs = torch.cat((inputs, u_prev.unsqueeze(1)), dim = 1)
+                bs = recurrent_inputs.shape[0]
+                use_ml_solver, scores, hidden_state_for_reccurent = self.router.predict(recurrent_inputs.reshape(bs, -1), hidden_state_for_recurrent, with_scores=True)
             else:
                 raise NotImplementedError("Only HINTRouter is implemented in this version.")
             if training:
@@ -101,13 +167,11 @@ class HybridSolver(torch.nn.Module):
                         expert_predictions = torch.zeros_like(u_prev)
                         for b in range(bs):
                             new_solver = self.suite_solver[i].__class__(equations[b])
-                            expert_predictions[b] = torch.Tensor(new_solver.iteration(u_prev[b].detach().numpy()))
+                            expert_predictions[b] = new_solver.iteration(u_prev[b])
                         all_expert_predictions += (expert_predictions,)
             else:
                 predictionsz = torch.zeros_like(u_prev)
                 for j in range(bs):
-                    if use_ml_solver[j] == 0:
-                        continue
                     if isinstance(self.suite_solver[use_ml_solver[j]], MLSolver):
                         a_func = a[j] if a else None
                         f_func = residual[j]
@@ -116,25 +180,20 @@ class HybridSolver(torch.nn.Module):
                         predictionsz[j] = u_new_j
                     else:
                         new_solver = self.suite_solver[use_ml_solver[j]].__class__(equations[j])
-                        u_new_j = new_solver.iteration(u_prev[j].detach().numpy())
-                        predictionsz[j] = torch.tensor(u_new_j, dtype=torch.float32).unsqueeze(0)
+                        u_new_j = new_solver.iteration(u_prev[j])
+                        predictionsz[j] = u_new_j.unsqueeze(0)
             if training:
                 all_expert_predictions = torch.stack(all_expert_predictions, dim=0)
                 error = torch.linalg.norm(all_expert_predictions - ground_truth, dim=2)
-                print(f"Shape of error: {error.shape}")
                 best_solver = torch.argmin(error, dim=0)
-                print(f"Best solver indices: {best_solver}")
-                print(f"router solver indices: {use_ml_solver}")
-                teacher_forcing_mask = (torch.rand(bs) < teacher_forcing).long()
+                teacher_forcing_mask = (torch.rand(bs, device = best_solver.device) < teacher_forcing).long()
                 chosen_solver = teacher_forcing_mask * best_solver + (1 - teacher_forcing_mask) * use_ml_solver
-                print(f"Chosen solver indices: {chosen_solver}")
                 predictionsz = all_expert_predictions[chosen_solver, torch.arange(bs)]
             u_prev = predictionsz   
 
             if return_dict:
                 predictions += (predictionsz,)
                 if training:
-                    print(f"Shape of concatenated expert predictions: {all_expert_predictions.shape}")
                     complete_expert_predictions += (all_expert_predictions,)
                 routing_scores += (scores,)
             
@@ -146,13 +205,6 @@ class HybridSolver(torch.nn.Module):
             }
             return output_dict
         return predictions
-
-
-                # if training:
-                #     all_expert_predictions = torch.stack(all_expert_predictions, dim=0)
-                #     error = torch.linalg.norm(all_expert_predictions - ground_truth, dim=1)
-
-
             
                 
     def prepare_equations(self, f, a):
@@ -160,27 +212,29 @@ class HybridSolver(torch.nn.Module):
         bs = f.shape[0]
         for b in range(bs):
             if a:
-                a_func = a[b].numpy()
+                a_func = a[b]
             else:
                 a_func = lambda x: 1.0
                 if self.dim == 2:
                     a_func = lambda x, y: 1.0
-            f_func = f[b].numpy()
+            f_func = f[b]
             if self.dim == 1:
                 equation = self.equation.__class__(a_func = a_func,
                                                    f_func = f_func,
                                                    boundary = self.boundary, 
-                                                   x = self.xs.numpy(), 
+                                                   x = self.xs,#.numpy(), 
                                                    A = None,
-                                                   solve = False)
+                                                   solve = False,
+                                                   device = f.device)
             else:
                 equation = self.equation.__class__(a_func = a_func,
                                                    f_func = f_func,
                                                    boundary = self.boundary,
-                                                   x = self.xs.numpy(),
-                                                   y = self.ys.numpy(),
+                                                   x = self.xs,
+                                                   y = self.ys,
                                                    A = None,
-                                                   solve = False)
+                                                   solve = False,
+                                                   device = f.device)
             equations.append(equation)
         return equations                     
 

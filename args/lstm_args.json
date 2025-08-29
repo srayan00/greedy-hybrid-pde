@@ -1,0 +1,21 @@
+{   
+    "model_type": "LSTM",
+    "hidden_dim": 64,
+    "num_layers": 3,
+    "dropout": 0.0,
+    "batch_size": 32,
+    "learning_rate": 1e-3,
+    "weight_decay": 5e-3,
+    "warmup_epochs_es": 1,
+    "patience": 10000,
+    "min_delta": 1e-9,
+    "starting_teacher_forcing_prob": 1.0, 
+    "ending_teacher_forcing_prob": 0.5,
+    "decay": 0.9,
+    "warmup_epochs_ss": 5,
+    "epochs": 20,
+    "max_norm": 1.0,
+    "N": 65,
+    "n_train": 64,
+    "n_val": 32
+}
