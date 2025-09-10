@@ -42,7 +42,7 @@ class GaussSeidelSolver(NumericalSolver):
         # L is lower triangular part of A
         L = torch.tril(self.equation.A)
         L_inv = torch.linalg.inv(L)
-        u_new = u_old.to(self.device) + L_inv @ (self.equation.b - self.equation.A @ u_old)
+        u_new = u_old + L_inv @ (self.equation.b - self.equation.A @ u_old)
         return u_new
 
 class MultigridSolver(NumericalSolver):
@@ -76,12 +76,12 @@ class MultigridSolver(NumericalSolver):
     def build_restrictor_interpolator_dirichlet(self, curr_equation=None):
         if curr_equation is None:
             curr_equation = self.equation
-        device = curr_equation.A.device if hasattr(curr_equation.A, 'device') else 'cpu'
+        # device = curr_equation.A.device if hasattr(curr_equation.A, 'device') else 'cpu'
         if curr_equation.dimension == 1:
             n_h = len(curr_equation.x) - 2
             n_2h = n_h // 2
             R = torch.zeros((n_2h, n_h), device=self.device)
-            I = torch.zeros((n_h, n_2h), device=device)
+            I = torch.zeros((n_h, n_2h), device=self.device)
             for i in range(n_2h):
                 j = 2 * i
                 R[i, j] = 0.25
@@ -125,7 +125,7 @@ class MultigridSolver(NumericalSolver):
         if curr_equation is None:
             curr_equation = self.equation
         # Apply a simple full weighting restriction for 1d
-        device = curr_equation.A.device if hasattr(curr_equation.A, 'device') else 'cpu'
+        # device = curr_equation.A.device if hasattr(curr_equation.A, 'device') else 'cpu'
         if curr_equation.dimension == 1:
             n_h = len(curr_equation.x)
             n_2h = (n_h + 1) // 2 # include border points
@@ -243,7 +243,6 @@ class MultigridSolver(NumericalSolver):
                 new_len_x = (len_x - 2)// 2
                 new_len_y = (len_y - 2)// 2
                 return torch.nn.functional.pad(ans.reshape((new_len_x, new_len_y)), (1, 1, 1, 1), mode='constant', value=0).flatten()  # Add Dirichlet boundary conditions
-
         return restrictor @ u
     
     def prolong(self, u_coarse, curr_equation=None, interpolator=None):
@@ -273,7 +272,7 @@ class MultigridSolver(NumericalSolver):
         restrictor, interpolator = self.build_restrictor_interpolator(curr_equation)
         # Pre-smoothing
         print("Pre-smoothing")
-        u = WeightedJacobiSolver(curr_equation, weight=0.8).solve(u_init=u_old, max_iter=3)
+        u = WeightedJacobiSolver(curr_equation, self.device, weight=0.8).solve(u_init=u_old, max_iter=3)
         # Compute residual
         print("Computing residual")
         r = curr_equation.b - curr_equation.A @ u
@@ -295,7 +294,7 @@ class MultigridSolver(NumericalSolver):
 
         # equation_coarse = self.equation.__class__(None, r_coarse, self.equation.boundary, self.equation.x[::2], self.equation.y[::2] if self.equation.dimension == 2 else None, A=new_A)
         # equation_coarse = PoissonEquation2D(None, r_coarse, self.equation.boundary, self.equation.x[::2], self.equation.y[::2], A=new_A)
-        solver_coarse = WeightedJacobiSolver(equation_coarse, weight=0.8)
+        solver_coarse = WeightedJacobiSolver(equation_coarse, self.device, weight=0.8)
         u_coarse = solver_coarse.solve(u_init=u_init, max_iter=3)
 
         # Prolongate solution to fine grid
@@ -308,6 +307,6 @@ class MultigridSolver(NumericalSolver):
 
         # Post-smoothing
         print("Post-smoothing")
-        u = WeightedJacobiSolver(curr_equation, weight=0.8).solve(u_init=u, max_iter=3)
+        u = WeightedJacobiSolver(curr_equation, self.device, weight=0.8).solve(u_init=u, max_iter=3)
         return u
 

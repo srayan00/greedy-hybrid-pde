@@ -23,11 +23,17 @@ class ApproxGreedyRouterLoss(torch.nn.Module):
         self.flip = flip
 
     def forward(self, prediction, target, reduction = "mean"):
-        probs = torch.nn.functional.softmax(prediction["routing_scores"], dim = -1)
-        log_scores = torch.log(1/probs) 
+        print(f"Finiteness logits {torch.isfinite(prediction["routing_scores"]).all()}")
+        print(f"Nans logits {torch.isnan(prediction["routing_scores"]).all()}")
+        log_scores = -1*torch.nn.functional.log_softmax(prediction["routing_scores"], dim = -1)
+        print(f"Finiteness logscores {torch.isfinite(log_scores).all()}")
+        print(f"Nanslog scores {torch.isnan(log_scores).all()}")
+        # log_scores = torch.log(1/probs) 
         expert_predictions = prediction["complete_expert_predictions"] - torch.mean(prediction["complete_expert_predictions"], dim=-1, keepdim=True)
         errors_expert = torch.norm(expert_predictions - target.unsqueeze(0), dim=-1).transpose(2, 1)
         weights = torch.sum(errors_expert, dim = -1, keepdim=True) - errors_expert
+        print(f"Finiteness of weights{torch.isfinite(weights).all()}")
+        print(f"Nans of weights {torch.isnan(weights).all()}")
         loss_vec = torch.sum(log_scores * weights, dim = -1).transpose(1, 0)
         loss_vec = torch.mean(loss_vec, dim = -1)
         if reduction == "none":
@@ -109,7 +115,36 @@ class ScheduledSampler:
         self.starting_teacher_forcing_prob = state_dict["starting_teacher_forcing_prob"]
         self.decay = state_dict["decay"]
         self.current_prob = state_dict["current_prob"]
+        
 
+class ScheduledBPTT:
+    def __init__(self, max_iters: int, starting_bptt: int = 10, linear_growth: int = 5, freq: int = 10, warmup_epochs: int = 10, linear = True):
+        self.max_iters = max_iters
+        self.linear_growth = linear_growth
+        self.starting_bptt = starting_bptt
+        self.current_bptt = starting_bptt
+        self.warmup_epochs = warmup_epochs
+        self.freq = freq
+        self.linear = linear
+    
+    def __call__(self, epoch):
+        if epoch >= self.warmup_epochs and epoch % self.freq == 0:
+            self.current_bptt = min(self.max_iters, self.current_bptt + self.linear_growth) if self.linear else min(self.max_iters, int(self.current_bptt * self.linear_growth))
+    
+    def state_dict(self):
+        return {"max_iters": self.max_iters, "linear_growth": self.linear_growth, 
+                "starting_bptt": self.starting_bptt, "current_bptt": self.current_bptt,
+                "freq": self.freq, "warmup_epochs": self.warmup_epochs, "linear": self.linear}
+    
+    def load_state_dict(self, state_dict):
+        self.max_iters = state_dict["max_iters"]
+        self.linear_growth = state_dict["linear_growth"]
+        self.starting_bptt = state_dict["starting_bptt"]
+        self.current_bptt = state_dict["current_bptt"]
+        self.warmup_epochs = state_dict["warmup_epochs"]
+        self.freq = state_dict["freq"]
+        self.linear = state_dict["linear"]
+        
 class Trainer:
     def __init__(
         self,
@@ -129,6 +164,7 @@ class Trainer:
         early_stopper: EarlyStopping = None,
         lr_scheduler: list = None,
         scheduled_sampler: ScheduledSampler = None,
+        scheduled_bptt: ScheduledBPTT = None,
         warmup_epochs: int = 10
     ) -> None:
         self.gpu_id = device
@@ -154,14 +190,30 @@ class Trainer:
             self.scheduler_step = None
         self.warmup_epochs = warmup_epochs
         self.scheduled_sampler = scheduled_sampler
+        self.scheduled_bptt = scheduled_bptt
         self.max_norm = max_norm
         self.train_losses = None
         self.val_losses = None
     
     def _train_mode(self):
         self.model.train()
+        if self.parallel:
+            if isinstance(self.model.module, HybridSolver):
+                self.model.module.router.train()
+                if isinstance(self.model.module.suite_solver[-1], MLSolver):
+                    self.model.module.suite_solver[-1].eval()
+                    for param in self.model.module.suite_solver[-1].parameters():
+                        param.requires_grad = False
+        else:
+            if isinstance(self.model, HybridSolver):
+                self.model.router.train()
+                if isinstance(self.model.suite_solver[-1], MLSolver):
+                    self.model.suite_solver[-1].eval()
+                    for param in self.model.suite_solver[-1].parameters():
+                        param.requires_grad = False
     
-    def _run_batch(self, source, targets, epoch):
+    def _run_batch_bptt(self, source, targets, epoch):
+        bs = source.shape[0]
         # Zero gradient todo: make it none
         self.optimizer.zero_grad()
         # Automatic mixed precision 
@@ -169,22 +221,96 @@ class Trainer:
             scaling = False
         else:
             scaling = True
+        self.model.reset()
+        hidden_state_for_recurrent = None
+        u0 = None
+        total_loss = 0
+        for it in range(0, self.model.max_iters, self.scheduled_bptt.current_bptt):
+            print(f"on iteration {it} with BPTT: {self.scheduled_bptt.current_bptt}")
+            # Zero gradient todo: make it none
+            self.optimizer.zero_grad()
+            # Automatic mixed precision         
+            with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=False):
+            # Make Prediction and observe loss
+                channels = source.shape[1]
+                f = source[:, 0, :].reshape(bs, -1)
+                if channels > 1:
+                    a = source[:, 1, :].reshape(bs, -1)
+                else:
+                    a = None
+                if self.scheduled_sampler:
+                    print(f"Scheduled sampler prob {self.scheduled_sampler.current_prob}")
+                    output = self.model(f, a, u0, True, True, self.scheduled_sampler.current_prob, targets.reshape(bs, -1), hidden_state_for_recurrent, self.scheduled_bptt.current_bptt)
+                else:
+                    output = self.model(f, a, u0, True, True, 1.0, targets.reshape(bs, -1), hidden_state_for_recurrent, self.scheduled_bptt.current_bptt)
+                loss = self.loss_fn(output, targets.reshape(bs, -1))
+
+            # Automatic mixed precision backward pass
+            if self.scaler is not None:
+                self.scaler.scale(loss).backward()
+                print("Backward pass")
+                # Gradient clipping
+                self.scaler.unscale_(self.optimizer)
+            else:
+                print("Backward Pass")
+                loss.backward()
         
+            # Clip gradients
+            if self.parallel:
+                torch.nn.utils.clip_grad_norm_(self.model.module.parameters(), max_norm = self.max_norm)
+            else:
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm = self.max_norm)
+            print(f"Gradient norms of all parameters{self._compute_gradient_norm()}")
+
+            # Optimizer step
+            if self.scaler is not None:
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
+            else:
+                print("Optimizer Step")
+                self.optimizer.step()
+            total_loss += loss.item()
+            hidden_state_for_recurrent = self.model.detach_hidden(output["hidden_state_for_recurrent"])
+            u0=output["predictions"][-1]
+        if isinstance(self.model, DeepONet):
+            print(self.model.branch_net.mlp.linear_layer_0.bias)
+        elif isinstance(self.model, FNOforPDE):
+            print(self.model.fno.fno_blocks.convs[0].weight)
+        if torch.isnan(loss):
+            print("Loss is NaN")
+            raise ValueError("Loss is NaN")
+        return total_loss
+    
+    def _run_batch(self, source, targets, epoch):
+        bs = source.shape[0]
+        # Zero gradient todo: make it none
+        self.optimizer.zero_grad()
+        # Automatic mixed precision 
+        if epoch == 0:
+            scaling = False
+        else:
+            scaling = True
         with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=False):
         # Make Prediction and observe loss
             if isinstance(self.model, HybridSolver):
                 channels = source.shape[1]
-                f = source[:, 0, :]
+                f = source[:, 0, :].reshape(bs, -1)
                 if channels > 1:
-                    a = source[:, 1, :]
+                    a = source[:, 1, :].reshape(bs, -1)
                 else:
                     a = None
-                if self.scheduled_sampler is not None:
+                if self.scheduled_sampler: #and self.scheduled_bptt is None:
                     print(f"Scheduled sampler prob {self.scheduled_sampler.current_prob}")
-                    output = self.model(f, a, None, True, True, self.scheduled_sampler.current_prob, targets)
+                    output = self.model(f, a, None, True, True, self.scheduled_sampler.current_prob, targets.reshape(bs, -1))
+                # elif self.scheduled_bptt:
+                #     hidden_state_for_recurrent = None
+                #     u0 = None
+                #     for _ in range(0, self.model.max_iters, self.scheduled_bptt.current_bptt):
+
+
                 else:
-                    output = self.model(f, a, None, True, True, 1.0, targets)
-                loss = self.loss_fn(output, targets)
+                    output = self.model(f, a, None, True, True, 1.0, targets.reshape(bs, -1))
+                loss = self.loss_fn(output, targets.reshape(bs, -1))
             if isinstance(self.model, MLSolver):
                 output = self.model(source)
                 loss = self.loss_fn(output, targets)
@@ -233,22 +359,23 @@ class Trainer:
             elif isinstance(self.model, HybridSolver):
                 source = info[0].to(self.gpu_id)
                 targets = info[1].to(self.gpu_id)
-            loss = self._run_batch(source, targets, epoch)
+            if isinstance(self.model, HybridSolver) and self.scheduled_bptt:
+                loss = self._run_batch_bptt(source, targets, epoch)
+            else:
+                loss = self._run_batch(source, targets, epoch)
             print("Batch: {}, Loss: {}".format(batch_idx, loss), flush=True)
             train_loss += loss
         return train_loss / len(self.train_data)
     
     def _save_checkpoint(self, epoch, is_best = False):
         if self.parallel:
-            if isinstance(self.model, PredictorRejector):
-                raise NotImplementedError
-                ckp = self.model.module.rejector.state_dict()
+            if isinstance(self.model, HybridSolver):
+                ckp = self.model.module.router.state_dict()
             else:
                 ckp = self.model.module.state_dict()
         else:
-            if isinstance(self.model, PredictorRejector):
-                raise NotImplementedError
-                ckp = self.model.rejector.state_dict()
+            if isinstance(self.model, HybridSolver):
+                ckp = self.model.router.state_dict()
             else:
                 ckp = self.model.state_dict()
         if self.scheduler_wu is not None:
@@ -267,6 +394,10 @@ class Trainer:
             early_ckp = self.early_stopper.state_dict()
         else:
             early_ckp = None
+        if self.scheduled_bptt is not None:
+            scheduler_bptt_ckp = self.scheduled_bptt.state_dict()
+        else:
+            scheduler_bptt_ckp = None
         if self.scaler is not None:
             scaler_ckp = self.scaler.state_dict()
         else:
@@ -287,6 +418,7 @@ class Trainer:
                     "scheduler_wu": wu_ckp, 
                     "scheduler_re": re_ckp, 
                     "scheduler_step": scheduler_step_ckp,
+                    "scheduler_bptt": scheduler_bptt_ckp,
                     "scaler": scaler_ckp,
                     "early_stopping": early_ckp,
                     "scheduled_sampler": scheduled_sampler_ckp,
@@ -299,7 +431,7 @@ class Trainer:
     
     def _run_validation(self):
         val_loss = 0
-        self.model.train()
+        self.model.eval()
         if isinstance(self.model, PredictorRejector):
             raise NotImplementedError
             self.model.rejector.scaling = True
@@ -307,15 +439,17 @@ class Trainer:
         with torch.no_grad():
             for batch_idx, info in enumerate(self.val_data):
                 if isinstance(self.model, HybridSolver):
+                    self.model.reset()
                     source = info[0].to(self.gpu_id)
                     targets = info[1].to(self.gpu_id)
+                    bs = source.shape[0]
                     channels = source.shape[1]
-                    f = source[:, 0, :]
+                    f = source[:, 0, :].reshape(bs, -1)
                     if channels > 1:
-                        a = source[:, 1, :]
+                        a = source[:, 1, :].reshape(bs, -1)
                     else:
                         a = None
-                    output = self.model(f, a, None, True, True, 0.0, targets)
+                    output = self.model(f, a, None, True, True, 0.0, targets.reshape(bs, -1))
                 elif isinstance(self.model, MLSolver):
                     print(f"source is {info[0]}")
                     print(f"target is {info[1]}")
@@ -324,7 +458,8 @@ class Trainer:
                     output = self.model(source)
                     
                  # CHANGE THIS LATER
-                loss = self.loss_fn(output, targets)
+                bs = source.shape[0]
+                loss = self.loss_fn(output, targets.reshape(bs, -1))
                 val_loss += loss.item()
         print(f"number of validation batches is {len(self.val_data)}")
         return val_loss / len(self.val_data)
@@ -359,6 +494,8 @@ class Trainer:
                     self._save_checkpoint(epoch, is_best)
             if self.scheduled_sampler is not None:
                 self.scheduled_sampler(epoch)
+            if self.scheduled_bptt:
+                self.scheduled_bptt(epoch)
             if self.early_stopper is not None:
                 if epoch % self.save_every == 0:
                     self._save_checkpoint(epoch)

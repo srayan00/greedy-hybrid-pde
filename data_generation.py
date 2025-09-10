@@ -29,7 +29,7 @@ class GaussianRandomField:
             kx = torch.arange(0, self.k_max + 1).to(self.device)
             k_range_negative = torch.arange(-self.k_max, 0).to(self.device)
             kx = torch.concatenate((kx, k_range_negative))
-            ky = torch.arange(0, self.k_max + 1)
+            ky = torch.arange(0, self.k_max + 1).to(self.device)
             self.kx, self.ky = torch.meshgrid(kx, ky, indexing = "ij")
             self.psd = self._compute_psd_2d(self.kx, self.ky)
         else:

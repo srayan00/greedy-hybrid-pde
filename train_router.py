@@ -8,7 +8,7 @@ from pde_pytorch import PoissonEquation1D, PoissonEquation2D
 from numerical_solver_pytorch import WeightedJacobiSolver, MultigridSolver, GaussSeidelSolver
 from hybrid_solver import Router, ConstantRouter, HINTSRouter, LSTMGreedyRouter, HybridSolver
 
-from trainer import Trainer, EarlyStopping, ApproxGreedyRouterLoss, ScheduledSampler
+from trainer import Trainer, EarlyStopping, ApproxGreedyRouterLoss, ScheduledSampler, ScheduledBPTT
 import json
 
 parser = argparse.ArgumentParser()
@@ -64,9 +64,9 @@ if __name__ == "__main__":
     ml_ckp_path = ckp_dir + f"/{ml_model_type}_{ml_model_name}_{equation}_{boundary}_{dim}d_{in_channels}c_best.pth"
     ml_args_path = ckp_dir + f"/{ml_model_type}_{ml_model_name}_{equation}_{boundary}_{dim}d_{in_channels}c_args.json"
 
-    ckp_path = ckp_dir + f"/{model_type}router_{model_name}_{equation}_{boundary}_{dim}d_{in_channels}c_full.pth"
-    save_path = ckp_dir + f"/{model_type}router_{model_name}_{equation}_{boundary}_{dim}d_{in_channels}c"
-    args_path = ckp_dir + f"/{model_type}router_{model_name}_{equation}_{boundary}_{dim}d_{in_channels}c_args.json"
+    ckp_path = ckp_dir + f"/{model_type}router_{model_name}_{equation}_{boundary}_{dim}d_{in_channels}c_{args.numerical_solvers}_full.pth"
+    save_path = ckp_dir + f"/{model_type}router_{model_name}_{equation}_{boundary}_{dim}d_{in_channels}c_{args.numerical_solvers}"
+    args_path = ckp_dir + f"/{model_type}router_{model_name}_{equation}_{boundary}_{dim}d_{in_channels}c_{args.numerical_solvers}args.json"
 
     if os.path.exists(args_path):
         print(f"Loading training arguments from {args_path}...")
@@ -102,7 +102,7 @@ if __name__ == "__main__":
                                     beta=arguments_grf["beta"],
                                     gamma=arguments_grf["gamma"],
                                     device=device,
-                                    seed=1234)
+                                    seed=34)
         # if dim == 1:
         #     f = lambda x: np.sin(2 * np.pi * x)
         # else:
@@ -206,8 +206,11 @@ if __name__ == "__main__":
         ml_model.load_state_dict(ml_ckp["model"])
     
     if model_type == "lstm":
-        print(f"HERE")
-        router = LSTMGreedyRouter(None, ml_arguments["N"]*(in_channels + 1), arguments["hidden_dim"], arguments["num_layers"], num_solvers, arguments["dropout"]).to(device)
+        if dim == 1:
+            router = LSTMGreedyRouter(None, ml_arguments["N"]*(in_channels + 1), arguments["hidden_dim"], arguments["num_layers"], num_solvers, arguments["dropout"]).to(device)
+        else:
+            router = LSTMGreedyRouter(None, ml_arguments["N"]*ml_arguments["N"]*(in_channels + 1), arguments["hidden_dim"], arguments["num_layers"], num_solvers, arguments["dropout"]).to(device)
+
     ckp = None
     if os.path.exists(ckp_path):
         print(f"Loading model checkpoint from {ckp_path}...")
@@ -258,13 +261,14 @@ if __name__ == "__main__":
                 levels = int(split[1])
             else:
                 levels = 2
-            list_of_solvers.append(MultigridSolver(pde, device, levels))
+            print(f"This is device {device}")
+            list_of_solvers.append(MultigridSolver(pde, levels, device))
         else:
             raise ValueError("Invalid Numerical Solver")
     print(f"List of solvers: {list_of_solvers}")
 
     model = HybridSolver(N=arguments["N"], dim=dim, in_channels=in_channels, boundary=boundary, equation=pde,
-                                    suite_solver=list_of_solvers+[ml_model], router=router, tol=1e-7, max_iters=10, threshold=0.1)
+                                    suite_solver=list_of_solvers+[ml_model], router=router, tol=1e-7, max_iters=arguments["max_iters"], threshold=0.1)
 
     
     
@@ -274,9 +278,9 @@ if __name__ == "__main__":
         optimizer.load_state_dict(ckp["optimizer"])
     
     scaler = torch.cuda.amp.GradScaler() 
-    if ckp:
-        scaler.load_state_dict(ckp["scaler"])
-        print("AMP loaded")
+    # if ckp:
+    #     scaler.load_state_dict(ckp["scaler"])
+    #     print("AMP loaded")
     
     early_stopper = EarlyStopping(patience=arguments["patience"], verbose=True, delta=arguments["min_delta"], warmup_epochs=arguments["warmup_epochs_es"])
 
@@ -315,8 +319,15 @@ if __name__ == "__main__":
             scheduled_sampler.load_state_dict(ckp["scheduled_sampler"])
             print("Scheduled Sampler loaded", flush=True)
 
+    # Create a Scheduled BPTT
+    scheduled_bptt = ScheduledBPTT(max_iters=arguments["max_iters"], starting_bptt=arguments["starting_bptt"], linear_growth=arguments["linear_growth"], freq=arguments["freq"], warmup_epochs=arguments["warmup_epochs_ss"], linear = arguments["linear"])
 
-    loss_fn = ApproxGreedyRouterLoss() # MSEalphaepsilonLoss() # torch.nn.MSELoss()
+    if ckp is not None:
+        if "scheduler_bptt" in ckp and ckp["scheduler_bptt"] is not None:
+            scheduled_bptt.load_state_dict(ckp["scheduler_bptt"])
+            print("Scheduled Sampler loaded", flush=True)
+
+    loss_fn = ApproxGreedyRouterLoss()
 
     start_epoch = 0 if ckp is None else ckp["epoch"] + 1
     print("Starting training...")
@@ -331,6 +342,7 @@ if __name__ == "__main__":
                       parallel=False,
                       use_amp=True,
                       scheduled_sampler=scheduled_sampler,
+                      scheduled_bptt=scheduled_bptt,
                       max_norm=arguments["max_norm"],
                       early_stopper=early_stopper,
                       warmup_epochs=arguments["warmup_epochs_es"],

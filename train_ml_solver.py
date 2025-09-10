@@ -64,6 +64,8 @@ if __name__ == "__main__":
     
     # Creating/Loading Data
     print("Creating Data")
+    train_data = []
+    val_data = []
 
     if os.path.exists(f"{data_dir}/train_data_{equation}_{boundary}_{dim}d_{in_channels}c_{arguments["n_train"]}s.pt") and os.path.exists(f"{data_dir}/val_data_{equation}_{boundary}_{dim}d_{in_channels}c_{arguments["n_val"]}s.pt"):
         print(f"Loading data from {data_dir}...")
@@ -71,7 +73,8 @@ if __name__ == "__main__":
             train_data = torch.load(f)
         with open(f"{data_dir}/val_data_{equation}_{boundary}_{dim}d_{in_channels}c_{arguments["n_val"]}s.pt", "rb") as f:
             val_data = torch.load(f)
-    else:
+    print(f"This is what i loaded {len(train_data)}, {len(val_data)}")
+    if len(train_data) < arguments["n_train"] or len(val_data) < arguments["n_val"]:
         with open(f"args/grf_args.json", "r") as f:
             arguments_grf = json.load(f)
 
@@ -101,9 +104,9 @@ if __name__ == "__main__":
         else:
             x = torch.linspace(0, 1, arguments["N"] + 1, device=device, dtype=torch.float32)[:-1]
             y = torch.linspace(0, 1, arguments["N"] + 1, device=device, dtype=torch.float32)[:-1] if dim ==2 else None
-        train_data = []
-        val_data = []
-        for i in range(arguments["n_train"] + arguments["n_val"] + extra):
+        
+        start = len(train_data) + len(val_data)
+        for i in range(start, arguments["n_train"] + arguments["n_val"] + extra):
             pde = None
             u_sol = None
             if dim == 1:
@@ -140,6 +143,13 @@ if __name__ == "__main__":
                 val_data.append((input, u_sol))
             if len(train_data) == arguments["n_train"] and len(val_data) == arguments["n_val"]:
                 break
+            if i % 100 == 0:
+                print(f"SAVE {i} samples")
+                with open(f"{data_dir}/train_data_{equation}_{boundary}_{dim}d_{in_channels}c_{arguments["n_train"]}s.pt", "wb") as file:
+                    torch.save(train_data, file)
+                with open(f"{data_dir}/val_data_{equation}_{boundary}_{dim}d_{in_channels}c_{arguments["n_val"]}s.pt", "wb") as file:
+                    torch.save(val_data, file)
+                
         if len(train_data) < arguments["n_train"] or len(val_data) < arguments["n_val"]:
             print(f"Generated {len(train_data)} training samples and {len(val_data)} validation samples.")
             raise ValueError("Not enough data generated. Try increasing the extra variable.")
