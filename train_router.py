@@ -4,7 +4,7 @@ import numpy as np
 import argparse
 from ml_solver import MLSolver, DeepONet, FNOforPDE
 from data_generation import GaussianRandomField, PDEDataset
-from pde_pytorch import PoissonEquation1D, PoissonEquation2D
+from pde_pytorch import PoissonEquation1D, PoissonEquation2D, HelmholtzEquation1D, HelmholtzEquation2D
 from numerical_solver_pytorch import WeightedJacobiSolver, MultigridSolver, GaussSeidelSolver
 from hybrid_solver import Router, ConstantRouter, HINTSRouter, LSTMGreedyRouter, HybridSolver
 
@@ -47,8 +47,8 @@ if __name__ == "__main__":
 
     if boundary not in ["Periodic", "Dirichlet"]:
         raise ValueError("Boundary condition must be either 'Dirichlet' or 'Periodic'")
-    if equation not in ["Poisson"]:
-        raise ValueError("Currently only Poisson equation is supported")
+    if equation not in ["Poisson", "Helmholtz"]:
+        raise ValueError("Currently only Poisson/Helmholtz equation is supported")
     if ml_model_type not in ["deeponet", "fno"]:
         raise ValueError("Model must be either 'deeponet' or 'fno'")
     if dim not in [1, 2]:
@@ -108,7 +108,8 @@ if __name__ == "__main__":
         # else:
         #     f = lambda x, y: np.sin(2 * np.pi * x) * np.sin(2 * np.pi * y)
         pushforward = None if boundary == "Dirichlet" else lambda x: x - torch.mean(x)
-        f = grf.generate(arguments["n_train"] + arguments["n_val"] + extra, pushfoward=pushforward)
+        f = grf.generate(arguments["n_train"] + arguments["n_val"] + extra, pushfoward=pushforward) if equation == "Poisson" else grf.generate(arguments["n_train"] + arguments["n_val"] + extra, pushfoward=None)
+        k2 = grf.generate(arguments["n_train"] + arguments["n_val"] + extra)
         if in_channels > 1:
             a = grf.generate(arguments["n_train"] + arguments["n_val"] + extra)
         else:
@@ -128,30 +129,44 @@ if __name__ == "__main__":
             pde = None
             u_sol = None
             if dim == 1:
-                pde = PoissonEquation1D(a_func=a[i] if in_channels > 1 else a,
-                                        f_func=f[i],
-                                        boundary=boundary,
-                                        x=x, 
-                                        device=device)
+                if equation == "Poisson":
+                    pde = PoissonEquation1D(a_func=a[i] if in_channels > 1 else a,
+                                            f_func=f[i],
+                                            boundary=boundary,
+                                            x=x, 
+                                            device=device)
+                else:
+                    pde = HelmholtzEquation1D(a_func = a[i] if in_channels > 1 else a, f_func=f[i], k2 = k2[i], boundary=boundary,x=x,device=device)
                 u_sol = torch.tensor(pde.u, dtype=torch.float32, device=device)
-                u_sol = u_sol - torch.mean(u_sol)
+                u_sol = u_sol - torch.mean(u_sol) if equation == "Poisson" else u_sol
             else:
-                pde = PoissonEquation2D(a_func=a[i].flatten() if in_channels > 1 else a,
-                                        f_func=f[i].flatten(),
-                                        boundary=boundary,
-                                        x=x,
-                                        y=y,
-                                        device=device)
+                if equation == "Poisson":
+                    pde = PoissonEquation2D(a_func=a[i].flatten() if in_channels > 1 else a,
+                                            f_func=f[i].flatten(),
+                                            boundary=boundary,
+                                            x=x,
+                                            y=y,
+                                            device=device)
+                else:
+                    pde = HelmholtzEquation2D(a_func=a[i].flatten() if in_channels > 1 else a, f_func = f[i].flatten(), k2=k2[i].flatten(), boundary=boundary, x=x, y=y, device=device)
                 new_shape = (arguments["N"], arguments["N"]) 
                 u_sol = torch.tensor(pde.u.reshape(new_shape), dtype=torch.float32, device=device)
-                u_sol = u_sol - torch.mean(u_sol)
+                u_sol = u_sol - torch.mean(u_sol) if equation == "Poisson" else u_sol
                 print(f"Generated sample {i+1}/{arguments['n_train'] + arguments['n_val'] + extra}")
                 print(f"len(train_data) = {len(train_data)}, len(val_data) = {len(val_data)}")
             
             if in_channels > 1:
-                input = torch.concatenate((a[i, None, :], f[i, None, :]), dim=0)
+                # input = torch.concatenate((a[i, None, :], f[i, None, :]), dim=0)
+                if equation == "Poisson":
+                    input = torch.concatenate((a[i, None, :], f[i, None, :]), dim=0)
+                else:
+                    input = torch.concatenate((a[i, None, :], k2[i, None, :], f[i, None, :]), dim=0)      
             else:
-                input = f[i, None, :]
+                # input = f[i, None, :]
+                if equation == "Poisson":
+                    input = f[i, None, :]
+                else:
+                    input = torch.concatenate((k2[i, None, :], f[i, None, :]), dim=0)
             residual = pde.compute_residual(u_sol.flatten())
             if torch.linalg.norm(residual) > 1:
                 continue
@@ -173,6 +188,7 @@ if __name__ == "__main__":
     print(f"Validation data size: {len(val_data)}")
     print(f"Size of each input: {train_data[0][0].shape}, Size of each solution: {train_data[0][1].shape}")
     # Change this later 
+
     train_dataset = PDEDataset(train_data)
     val_dataset = PDEDataset(val_data)
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=arguments["batch_size"], shuffle=True)
@@ -185,15 +201,16 @@ if __name__ == "__main__":
     print(f"Validation dataset size: {len(val_dataset)}")
 
     print("Creating model...")
+    new_in_channels = in_channels + 1 if equation == "Helmholtz" else in_channels
     if ml_model_type == "deeponet":
-        ml_model = DeepONet(N=ml_arguments["N"], dim=dim, in_channels=in_channels, device=device, boundary=boundary,
+        ml_model = DeepONet(N=ml_arguments["N"], dim=dim, in_channels=new_in_channels, device=device, boundary=boundary,
                         branch_dim=ml_arguments["branch_dim"],
                         hidden_branch=ml_arguments["hidden_branch"],
                         num_branch_layers=ml_arguments["num_branch_layers"],
                         hidden_trunk=ml_arguments["hidden_trunk"],
                         num_trunk_layers=ml_arguments["num_trunk_layers"]).to(device)
     elif ml_model_type == "fno":
-        ml_model = FNOforPDE(trunc_mode=ml_arguments["trunc_mode"], dim=dim, in_channels=in_channels,
+        ml_model = FNOforPDE(trunc_mode=ml_arguments["trunc_mode"], dim=dim, in_channels=new_in_channels,
                           hidden_size=ml_arguments["hidden_size"], num_layers=ml_arguments["num_layers"]).to(device)
     
     
@@ -207,9 +224,9 @@ if __name__ == "__main__":
     
     if model_type == "lstm":
         if dim == 1:
-            router = LSTMGreedyRouter(None, ml_arguments["N"]*(in_channels + 1), arguments["hidden_dim"], arguments["num_layers"], num_solvers, arguments["dropout"]).to(device)
+            router = LSTMGreedyRouter(None, ml_arguments["N"]*(new_in_channels + 1), arguments["hidden_dim"], arguments["num_layers"], num_solvers, arguments["dropout"]).to(device)
         else:
-            router = LSTMGreedyRouter(None, ml_arguments["N"]*ml_arguments["N"]*(in_channels + 1), arguments["hidden_dim"], arguments["num_layers"], num_solvers, arguments["dropout"]).to(device)
+            router = LSTMGreedyRouter(None, ml_arguments["N"]*ml_arguments["N"]*(new_in_channels + 1), arguments["hidden_dim"], arguments["num_layers"], num_solvers, arguments["dropout"]).to(device)
 
     ckp = None
     if os.path.exists(ckp_path):
@@ -227,21 +244,28 @@ if __name__ == "__main__":
         x = torch.linspace(0, 1, arguments["N"] + 1, device=device, dtype=torch.float32)[:-1]
         y = torch.linspace(0, 1, arguments["N"] + 1, device=device, dtype=torch.float32)[:-1] if dim ==2 else None
     pde = None
-    if dim == 1:
-        pde = PoissonEquation1D(a_func= lambda x: 1,
-                                f_func=lambda x: 1,
-                                boundary=boundary,
-                                x=x, 
-                                device=device, 
-                                solve = False)
+    if equation == "Poisson":
+        if dim == 1:
+            pde = PoissonEquation1D(a_func= lambda x: 1,
+                                    f_func=lambda x: 1,
+                                    boundary=boundary,
+                                    x=x, 
+                                    device=device, 
+                                    solve = False)
+        else:
+            pde = PoissonEquation2D(a_func=lambda x, y: 1,
+                                            f_func=lambda x,y: 1,
+                                            boundary=boundary,
+                                            x=x,
+                                            y=y,
+                                            device=device, 
+                                            solve = False)
     else:
-        pde = PoissonEquation2D(a_func=lambda x, y: 1,
-                                        f_func=lambda x,y: 1,
-                                        boundary=boundary,
-                                        x=x,
-                                        y=y,
-                                        device=device, 
-                                        solve = False)
+        if dim == 1:
+            pde = HelmholtzEquation1D(a_func= lambda x: 1, f_func=lambda x: 1, k2=lambda x: 1, boundary=boundary, x=x, device=device, solve = False)
+        else:
+            pde = HelmholtzEquation2D(a_func=lambda x, y: 1,f_func=lambda x,y: 1, k2=lambda x,y: 1, boundary=boundary,x=x,y=y, device=device, solve = False)
+
 
     list_of_solvers = []
     for solver in numerical_solvers:
@@ -327,7 +351,7 @@ if __name__ == "__main__":
             scheduled_bptt.load_state_dict(ckp["scheduler_bptt"])
             print("Scheduled Sampler loaded", flush=True)
 
-    loss_fn = ApproxGreedyRouterLoss()
+    loss_fn = ApproxGreedyRouterLoss(centered=(equation == "Poisson"), normalized=False)
 
     start_epoch = 0 if ckp is None else ckp["epoch"] + 1
     print("Starting training...")

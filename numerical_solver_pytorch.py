@@ -287,10 +287,16 @@ class MultigridSolver(NumericalSolver):
         print("Solving on coarser grid")
         new_A = self.build_coefficient_matrix(curr_equation, restrictor, interpolator)
 
-        if curr_equation.dimension == 1:
-            equation_coarse =  curr_equation.__class__(a_func=None, f_func=r_coarse, boundary=curr_equation.boundary, x=curr_equation.x[::2], A=new_A)
+        if curr_equation.equation == "Poisson":
+            if curr_equation.dimension == 1:
+                equation_coarse =  curr_equation.__class__(a_func=None, f_func=r_coarse, boundary=curr_equation.boundary, x=curr_equation.x[::2], A=new_A)
+            else:
+                equation_coarse =  curr_equation.__class__(None, r_coarse, curr_equation.boundary, curr_equation.x[::2], curr_equation.y[::2], A=new_A)
         else:
-            equation_coarse =  curr_equation.__class__(None, r_coarse, curr_equation.boundary, curr_equation.x[::2], curr_equation.y[::2], A=new_A)
+            if curr_equation.dimension == 1:
+                equation_coarse =  curr_equation.__class__(a_func=None, f_func=r_coarse, k2= None, boundary=curr_equation.boundary, x=curr_equation.x[::2], A=new_A)
+            else:
+                equation_coarse =  curr_equation.__class__(None, r_coarse, None, curr_equation.boundary, curr_equation.x[::2], curr_equation.y[::2], A=new_A)
 
         # equation_coarse = self.equation.__class__(None, r_coarse, self.equation.boundary, self.equation.x[::2], self.equation.y[::2] if self.equation.dimension == 2 else None, A=new_A)
         # equation_coarse = PoissonEquation2D(None, r_coarse, self.equation.boundary, self.equation.x[::2], self.equation.y[::2], A=new_A)

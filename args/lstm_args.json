@@ -1,6 +1,6 @@
 {   
     "model_type": "LSTM",
-    "hidden_dim": 64,
+    "hidden_dim": 256,
     "num_layers": 3,
     "max_iters": 100,
     "dropout": 0.0,
@@ -14,13 +14,13 @@
     "ending_teacher_forcing_prob": 0.0,
     "decay": 0.95,
     "warmup_epochs_ss": 10,
-    "starting_bptt": 10,
+    "starting_bptt": 30,
     "linear_growth": 1.25,
     "linear": 0,
-    "freq": 4,
-    "epochs": 1500,
+    "freq": 1,
+    "epochs": 300,
     "max_norm": 1.0,
     "N": 33,
-    "n_train": 64,
-    "n_val": 32
+    "n_train": 128,
+    "n_val": 128
 }

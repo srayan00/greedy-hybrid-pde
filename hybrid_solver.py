@@ -109,8 +109,8 @@ class HybridSolver(torch.nn.Module):
                 if not isinstance(suite_solver[i], (NumericalSolver, MLSolver)):
                     print(f"invalid index{i}")
                     raise TypeError("Each solver in suite_solver must be an instance of NumericalSolver or MLSolver.")
-        if not isinstance(equation, PoissonEquation1D) and not isinstance(equation, PoissonEquation2D):
-            raise ValueError("Unsupported equation type. Supported types are 'Poisson1D' and 'Poisson2D'.")
+        if equation.equation not in ["Helmholtz", "Poisson"]:
+            raise ValueError("Unsupported equation type. Supported types are 'Poisson1D', 'Poisson2D', 'Helmholtz1D', 'Helmholtz2D.")
         self.N = N
         self.dim = dim
         self.in_channels = in_channels
@@ -130,7 +130,7 @@ class HybridSolver(torch.nn.Module):
         self.curr_iters = 0
 
     def forward(self, f, 
-                a = None, u0 = None, return_dict = False, 
+                a = None, k2 = None, u0 = None, return_dict = False, 
                 training = False, teacher_forcing = 0.0, ground_truth = None, 
                 hidden_state_for_recurrent = None, num_iters = None):
         if training and ground_truth is None:
@@ -150,18 +150,23 @@ class HybridSolver(torch.nn.Module):
         residuals = () if return_dict else None
         complete_expert_predictions = () if return_dict and training else None
         bs = f.shape[0]
-        equations = self.prepare_equations(f, a)
+        equations = self.prepare_equations(f, a, k2)
+
         for iteration_num in range(start_iter, end_iters):
             if iteration_num % 25 == 0:
                 print(f"Iteration {iteration_num+1}/{self.max_iters}")
             residual = torch.zeros_like(f, device=f.device)
             for b in range(bs):
+                # print(f"SHAPE of A {equations[b].A.shape}")
+                # print(f"SHAPE of b {equations[b].b.shape}")
+                # print(f"SHAPE of u_prev {u_prev[b].shape}")
                 residual[b] = equations[b].compute_residual(u_prev[b])
-            inputs = self.prepare_inputs(residual.unsqueeze(1), a)
+            inputs = self.prepare_inputs(residual.unsqueeze(1), a, k2)
             if self.router.type in ["HINTS", "Constant"]:
                 use_ml_solver, scores = self.router.predict(torch.tensor([iteration_num]).repeat(bs), with_scores=True)
             elif self.router.type == "LSTMGreedy":
                 recurrent_inputs = torch.cat((inputs, u_prev.unsqueeze(1)), dim = 1)
+                print(f"shape of recurrent inputs {recurrent_inputs.shape}")
                 bs = recurrent_inputs.shape[0]
                 use_ml_solver, scores, hidden_state_for_recurrent = self.router.predict(recurrent_inputs.reshape(bs, -1), hidden_state_for_recurrent, with_scores=True)
             else:
@@ -230,7 +235,7 @@ class HybridSolver(torch.nn.Module):
         return predictions
             
                 
-    def prepare_equations(self, f, a):
+    def prepare_equations(self, f, a, k2):
         equations = []
         bs = f.shape[0]
         for b in range(bs):
@@ -241,17 +246,39 @@ class HybridSolver(torch.nn.Module):
                 if self.dim == 2:
                     a_func = lambda x, y: 1.0
             f_func = f[b]
+            k2_func = k2[b] if self.equation.equation == "Helmholtz" else None
             if self.dim == 1:
-                equation = self.equation.__class__(a_func = a_func,
-                                                   f_func = f_func,
-                                                   boundary = self.boundary, 
-                                                   x = self.xs,#.numpy(), 
-                                                   A = None,
-                                                   solve = False,
-                                                   device = f.device)
+                if self.equation.equation == "Poisson":
+                    equation = self.equation.__class__(a_func = a_func,
+                                                    f_func = f_func,
+                                                    boundary = self.boundary, 
+                                                    x = self.xs,#.numpy(), 
+                                                    A = None,
+                                                    solve = False,
+                                                    device = f.device)
+                else:
+                    equation = self.equation.__class__(a_func = a_func,
+                                                f_func = f_func,
+                                                k2 = k2_func,
+                                                boundary = self.boundary, 
+                                                x = self.xs,#.numpy(), 
+                                                A = None,
+                                                solve = False,
+                                                device = f.device)
             else:
-                equation = self.equation.__class__(a_func = a_func,
+                if self.equation.equation == "Poisson":
+                    equation = self.equation.__class__(a_func = a_func,
+                                                    f_func = f_func,
+                                                    boundary = self.boundary,
+                                                    x = self.xs,
+                                                    y = self.ys,
+                                                    A = None,
+                                                    solve = False,
+                                                    device = f.device)
+                else:
+                    equation = self.equation.__class__(a_func = a_func,
                                                    f_func = f_func,
+                                                   k2 = k2_func,
                                                    boundary = self.boundary,
                                                    x = self.xs,
                                                    y = self.ys,
@@ -261,17 +288,22 @@ class HybridSolver(torch.nn.Module):
             equations.append(equation)
         return equations                     
 
-    def prepare_inputs(self, f, a):
+    def prepare_inputs(self, f, a, k2 = None):
+        # print(k2.shape)
+        print(f.shape)
+        if self.equation.equation == "Poisson":
+            if a is None:
+                return f
+            return torch.cat((f, a), dim=1)
         if a is None:
-            return f
-        return torch.cat((f, a), dim=1)
+            return torch.cat((k2.unsqueeze(1), f), dim=1)
+        return torch.cat((a, k2.unsqueeze(1), f), dim=1)
     
     def detach_hidden(self, hidden_state):
         for i in range(len(hidden_state)):
             for j in range(len(hidden_state[i])):
                 hidden_state[i][j] = hidden_state[i][j].detach()
         return hidden_state
-
 
 
 # class HybridSolver(torch.nn.Module):

@@ -15,12 +15,10 @@ class MSEalphaepsilonLoss(torch.nn.Module):
         return adjusted_loss
 
 class ApproxGreedyRouterLoss(torch.nn.Module):
-    def __init__(self, cost = None, max_tokens = 20, is_score = True, flip = True, *args, **kwargs) -> None:
+    def __init__(self, centered = True, normalized = False,*args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        self.cost = cost 
-        self.max_tokens = max_tokens
-        self.is_score = is_score
-        self.flip = flip
+        self.centered = centered
+        self.normalized = normalized
 
     def forward(self, prediction, target, reduction = "mean"):
         print(f"Finiteness logits {torch.isfinite(prediction["routing_scores"]).all()}")
@@ -29,9 +27,14 @@ class ApproxGreedyRouterLoss(torch.nn.Module):
         print(f"Finiteness logscores {torch.isfinite(log_scores).all()}")
         print(f"Nanslog scores {torch.isnan(log_scores).all()}")
         # log_scores = torch.log(1/probs) 
-        expert_predictions = prediction["complete_expert_predictions"] - torch.mean(prediction["complete_expert_predictions"], dim=-1, keepdim=True)
+        if self.centered:
+            expert_predictions = prediction["complete_expert_predictions"] - torch.mean(prediction["complete_expert_predictions"], dim=-1, keepdim=True)
+        else: 
+            expert_predictions = prediction["complete_expert_predictions"]
         errors_expert = torch.norm(expert_predictions - target.unsqueeze(0), dim=-1).transpose(2, 1)
         weights = torch.sum(errors_expert, dim = -1, keepdim=True) - errors_expert
+        if self.normalized:
+            weights = weights/torch.sum(weights, dim = -1, keepdim=True)
         print(f"Finiteness of weights{torch.isfinite(weights).all()}")
         print(f"Nans of weights {torch.isnan(weights).all()}")
         loss_vec = torch.sum(log_scores * weights, dim = -1).transpose(1, 0)
@@ -233,16 +236,25 @@ class Trainer:
             with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=False):
             # Make Prediction and observe loss
                 channels = source.shape[1]
-                f = source[:, 0, :].reshape(bs, -1)
-                if channels > 1:
-                    a = source[:, 1, :].reshape(bs, -1)
+                f = source[:, -1, :].reshape(bs, -1)
+                if self.model.equation.equation == "Poisson":
+                    if channels > 1:
+                        a = source[:, 0, :].reshape(bs, -1)
+                    else:
+                        a = None
+                    k2 = None
                 else:
-                    a = None
+                    k2 = source[:, -2, :].reshape(bs, -1)
+                    if channels > 2:
+                        a = source[:, 0, :].reshape(bs, -1)
+                    else:
+                        a = None
+
                 if self.scheduled_sampler:
                     print(f"Scheduled sampler prob {self.scheduled_sampler.current_prob}")
-                    output = self.model(f, a, u0, True, True, self.scheduled_sampler.current_prob, targets.reshape(bs, -1), hidden_state_for_recurrent, self.scheduled_bptt.current_bptt)
+                    output = self.model(f, a, k2, u0, True, True, self.scheduled_sampler.current_prob, targets.reshape(bs, -1), hidden_state_for_recurrent, self.scheduled_bptt.current_bptt)
                 else:
-                    output = self.model(f, a, u0, True, True, 1.0, targets.reshape(bs, -1), hidden_state_for_recurrent, self.scheduled_bptt.current_bptt)
+                    output = self.model(f, a, k2, u0, True, True, 1.0, targets.reshape(bs, -1), hidden_state_for_recurrent, self.scheduled_bptt.current_bptt)
                 loss = self.loss_fn(output, targets.reshape(bs, -1))
 
             # Automatic mixed precision backward pass
@@ -294,14 +306,22 @@ class Trainer:
         # Make Prediction and observe loss
             if isinstance(self.model, HybridSolver):
                 channels = source.shape[1]
-                f = source[:, 0, :].reshape(bs, -1)
-                if channels > 1:
-                    a = source[:, 1, :].reshape(bs, -1)
+                f = source[:, -1, :].reshape(bs, -1)
+                if self.model.equation.equation == "Poisson":
+                    if channels > 1:
+                        a = source[:, 0, :].reshape(bs, -1)
+                    else:
+                        a = None
+                    k2 = None
                 else:
-                    a = None
+                    k2 = source[:, -2, :].reshape(bs, -1)
+                    if channels > 2:
+                        a = source[:, 0, :].reshape(bs, -1)
+                    else:
+                        a = None
                 if self.scheduled_sampler: #and self.scheduled_bptt is None:
                     print(f"Scheduled sampler prob {self.scheduled_sampler.current_prob}")
-                    output = self.model(f, a, None, True, True, self.scheduled_sampler.current_prob, targets.reshape(bs, -1))
+                    output = self.model(f, a, k2, None, True, True, self.scheduled_sampler.current_prob, targets.reshape(bs, -1))
                 # elif self.scheduled_bptt:
                 #     hidden_state_for_recurrent = None
                 #     u0 = None
@@ -309,7 +329,7 @@ class Trainer:
 
 
                 else:
-                    output = self.model(f, a, None, True, True, 1.0, targets.reshape(bs, -1))
+                    output = self.model(f, a, k2, None, True, True, 1.0, targets.reshape(bs, -1))
                 loss = self.loss_fn(output, targets.reshape(bs, -1))
             if isinstance(self.model, MLSolver):
                 output = self.model(source)
@@ -444,22 +464,33 @@ class Trainer:
                     targets = info[1].to(self.gpu_id)
                     bs = source.shape[0]
                     channels = source.shape[1]
-                    f = source[:, 0, :].reshape(bs, -1)
-                    if channels > 1:
-                        a = source[:, 1, :].reshape(bs, -1)
+                    f = source[:, -1, :].reshape(bs, -1)
+                    if self.model.equation.equation == "Poisson":
+                        if channels > 1:
+                            a = source[:, 0, :].reshape(bs, -1)
+                        else:
+                            a = None
+                        k2 = None
                     else:
-                        a = None
-                    output = self.model(f, a, None, True, True, 0.0, targets.reshape(bs, -1))
+                        k2 = source[:, -2, :].reshape(bs, -1)
+                        if channels > 2:
+                            a = source[:, 0, :].reshape(bs, -1)
+                        else:
+                            a = None
+                    output = self.model(f, a, k2, None, True, True, 0.0, targets.reshape(bs, -1))
+                    bs = source.shape[0]
+                    loss = self.loss_fn(output, targets.reshape(bs, -1))
                 elif isinstance(self.model, MLSolver):
                     print(f"source is {info[0]}")
                     print(f"target is {info[1]}")
                     source = info[0].to(self.gpu_id)
                     targets = info[1].to(self.gpu_id)
                     output = self.model(source)
+                    loss = self.loss_fn(output, targets)
                     
                  # CHANGE THIS LATER
-                bs = source.shape[0]
-                loss = self.loss_fn(output, targets.reshape(bs, -1))
+                # bs = source.shape[0]
+                # loss = self.loss_fn(output, targets.reshape(bs, -1))
                 val_loss += loss.item()
         print(f"number of validation batches is {len(self.val_data)}")
         return val_loss / len(self.val_data)
