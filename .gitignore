@@ -7,3 +7,4 @@ results/
 checkpoints/*json
 checkpoints/*pth
 data/*pt
+old_files/
