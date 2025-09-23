@@ -1480,9 +1480,11 @@ if __name__ == "__main__":
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # run(model_type, ml_model_type, n_test, 2, "Periodic", "Helmholtz", ckp_dir, model_name, ml_model_name, data_dir, 1, device)
+    run(model_type, ml_model_type, n_test, 1, "Periodic", "Poisson", ckp_dir, model_name, ml_model_name, data_dir, 1, device)
+    run(model_type, ml_model_type, n_test, 2, "Periodic", "Poisson", ckp_dir, model_name, ml_model_name, data_dir, 1, device)
+    run(model_type, ml_model_type, n_test, 1, "Periodic", "Helmholtz", ckp_dir, model_name, ml_model_name, data_dir, 1, device)
+    run(model_type, ml_model_type, n_test, 2, "Periodic", "Helmholtz", ckp_dir, model_name, ml_model_name, data_dir, 1, device)
     run_2(model_type, ml_model_type, n_test, 1, "Periodic", "Poisson", ckp_dir, model_name, ml_model_name, data_dir, 1, device)
-    # run(model_type, ml_model_type, n_test, 1, "Periodic", "Poisson", ckp_dir, model_name, ml_model_name, data_dir, 1, device)
-    # run(model_type, ml_model_type, n_test, 2, "Periodic", "Poisson", ckp_dir, model_name, ml_model_name, data_dir, 1, device)
+    run_2(model_type, ml_model_type, n_test, 1, "Periodic", "Helmholtz", ckp_dir, model_name, ml_model_name, data_dir, 1, device)
     exit()
     
