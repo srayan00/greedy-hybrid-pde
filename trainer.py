@@ -168,7 +168,8 @@ class Trainer:
         lr_scheduler: list = None,
         scheduled_sampler: ScheduledSampler = None,
         scheduled_bptt: ScheduledBPTT = None,
-        warmup_epochs: int = 10
+        warmup_epochs: int = 10,
+        joint: bool = False
     ) -> None:
         self.gpu_id = device
         self.model = model.to(device)
@@ -195,25 +196,27 @@ class Trainer:
         self.scheduled_sampler = scheduled_sampler
         self.scheduled_bptt = scheduled_bptt
         self.max_norm = max_norm
+        self.joint = joint
         self.train_losses = None
         self.val_losses = None
     
     def _train_mode(self):
         self.model.train()
-        if self.parallel:
-            if isinstance(self.model.module, HybridSolver):
-                self.model.module.router.train()
-                if isinstance(self.model.module.suite_solver[-1], MLSolver):
-                    self.model.module.suite_solver[-1].eval()
-                    for param in self.model.module.suite_solver[-1].parameters():
-                        param.requires_grad = False
-        else:
-            if isinstance(self.model, HybridSolver):
-                self.model.router.train()
-                if isinstance(self.model.suite_solver[-1], MLSolver):
-                    self.model.suite_solver[-1].eval()
-                    for param in self.model.suite_solver[-1].parameters():
-                        param.requires_grad = False
+        if not self.joint:
+            if self.parallel:
+                if isinstance(self.model.module, HybridSolver):
+                    self.model.module.router.train()
+                    if isinstance(self.model.module.suite_solver[-1], MLSolver):
+                        self.model.module.suite_solver[-1].eval()
+                        for param in self.model.module.suite_solver[-1].parameters():
+                            param.requires_grad = False
+            else:
+                if isinstance(self.model, HybridSolver):
+                    self.model.router.train()
+                    if isinstance(self.model.suite_solver[-1], MLSolver):
+                        self.model.suite_solver[-1].eval()
+                        for param in self.model.suite_solver[-1].parameters():
+                            param.requires_grad = False
     
     def _run_batch_bptt(self, source, targets, epoch):
         bs = source.shape[0]
@@ -283,11 +286,14 @@ class Trainer:
                 self.optimizer.step()
             total_loss += loss.item()
             hidden_state_for_recurrent = self.model.detach_hidden(output["hidden_state_for_recurrent"])
-            u0=output["predictions"][-1]
+            # Detach to truncate graph between BPTT segments
+            u0 = output["predictions"][-1].detach()
         if isinstance(self.model, DeepONet):
             print(self.model.branch_net.mlp.linear_layer_0.bias)
         elif isinstance(self.model, FNOforPDE):
             print(self.model.fno.fno_blocks.convs[0].weight)
+        if isinstance(self.model, HybridSolver):
+            print(self.model.suite_solver[-1].branch_net.mlp.linear_layer_0.bias)
         if torch.isnan(loss):
             print("Loss is NaN")
             raise ValueError("Loss is NaN")
@@ -398,6 +404,10 @@ class Trainer:
                 ckp = self.model.router.state_dict()
             else:
                 ckp = self.model.state_dict()
+        ml_ckp = None
+        if self.joint:
+            if isinstance(self.model, HybridSolver):
+                ml_ckp = self.model.suite_solver[-1].state_dict()
         if self.scheduler_wu is not None:
             wu_ckp = self.scheduler_wu.state_dict()
         else:
@@ -434,6 +444,7 @@ class Trainer:
         else:
             full_path = self.save_path + "_full.pth"
         torch.save({"model": ckp,
+                    "ml_model": ml_ckp,
                     "optimizer": self.optimizer.state_dict(), 
                     "scheduler_wu": wu_ckp, 
                     "scheduler_re": re_ckp, 

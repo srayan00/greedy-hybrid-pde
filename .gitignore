@@ -8,3 +8,4 @@ checkpoints/*json
 checkpoints/*pth
 data/*pt
 old_files/
+train_router_test.py

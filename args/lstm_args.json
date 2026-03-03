@@ -2,7 +2,7 @@
     "model_type": "LSTM",
     "hidden_dim": 256,
     "num_layers": 3,
-    "max_iters": 100,
+    "max_iters": 300,
     "dropout": 0.0,
     "batch_size": 32,
     "learning_rate": 1e-3,
@@ -20,7 +20,7 @@
     "freq": 1,
     "epochs": 300,
     "max_norm": 1.0,
-    "N": 33,
-    "n_train": 128,
-    "n_val": 128
+    "N": 65,
+    "n_train": 64,
+    "n_val": 32
 }

@@ -118,7 +118,10 @@ class HybridSolver(torch.nn.Module):
         self.xs = torch.linspace(0, 1, N + 1)[:-1] if boundary == "Periodic" else torch.linspace(0, 1, N)
         if self.dim > 1:
             self.ys = torch.linspace(0, 1, N + 1)[:-1] if boundary == "Periodic" else torch.linspace(0, 1, N)
+        # Keep original list for routing logic, but register trainable ML solvers so their
+        # parameters appear in model.named_parameters()/optimizer.
         self.suite_solver = suite_solver
+        self.ml_solvers = torch.nn.ModuleList([s for s in suite_solver if isinstance(s, MLSolver)])
         self.router = router
         self.tol = tol
         self.max_iters = max_iters
