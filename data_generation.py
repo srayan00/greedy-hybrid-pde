@@ -86,7 +86,11 @@ class GaussianRandomField:
                     kx, ky = np.meshgrid(kx, ky)
                     z = ax[i][j].pcolormesh(kx, ky, curr)
                     plt.colorbar(z, ax=ax[i][j])
-                ax[i][j].set_title(f"Sample {idx}")
+                ax[i][j].set_title(f"Sample {idx + 1}")
+        fig.suptitle(f"Samples from {self.dim}D Gaussian Random Field")
+        fig.set_figheight(10)
+        fig.set_figwidth(25)
+
         plt.show()
         
 
@@ -147,13 +151,13 @@ class GaussianRandomFieldHierarchical:
 
 
     def _sample_log_uniform(self, n, a, b):
-        a = torch.Tensor([a], device=self.device)
-        b = torch.Tensor([b], device=self.device)
+        a = torch.tensor([a], device=self.device)
+        b = torch.tensor([b], device=self.device)
         u = torch.rand(n, device=self.device)
         return torch.exp(u*(torch.log(b) - torch.log(a)) + torch.log(a))
     
     def _sample_gamma(self, n, list_of_val):
-        list_of_val = torch.Tensor(list_of_val, device=self.device)
+        list_of_val = torch.tensor(list_of_val, device=self.device)
         idxs = torch.randint(high = list_of_val.size(0), size = (n,), device =self.device)
         return list_of_val[idxs]
 
@@ -214,17 +218,31 @@ class GaussianRandomFieldHierarchical:
                     kx, ky = np.meshgrid(kx, ky)
                     z = ax[i][j].pcolormesh(kx, ky, curr)
                     plt.colorbar(z, ax=ax[i][j])
-                ax[i][j].set_title(f"Sample {idx}")
+                ax[i][j].set_title(f"Sample {idx + 1}")
+        fig.suptitle(f"Samples from {self.dim}D Hierarchical Gaussian Random Field")
+        fig.set_figheight(10)
+        fig.set_figwidth(25)
         plt.show()
-        
-
-
-
-    # def _generate_1d(self, n_samples):
-    #     zs = torch.random.normal(size = (n_samples, self.k_max + 1)) + 1.j * torch.random.normal(size = (n_samples, self.k_max + 1))
-    #     zs[:, 0] = torch.randn(n_samples)
-    #     coefs = self.psd * zs
-    #     field = torch.fft.irfft(coefs, n = self.num_samples, norm= "ortho")
+    
+    def visualize_spectrum(self):
+        if self.dim == 2:
+            raise NotImplementedError("Spectrum visualization for 2D hierarchical GRF is not implemented yet.")
+        psd = self._compute_psd_1d(self.krange, 10)
+        fig, ax = plt.subplots(2, 5, sharey = True)
+        for i in range(2):
+            for j in range(5):
+                idx = 2*i + j
+                curr = psd[idx]
+                k_range = self.krange
+                sorted_idx = torch.argsort(k_range)
+                k_range = k_range[sorted_idx]
+                curr = curr[sorted_idx]
+                ax[i][j].plot(k_range.cpu(), curr.cpu())
+                ax[i][j].set_title(f"Sample {idx + 1}")
+        fig.suptitle(f"Power Spectral Density of 10 samples from 1D Hierarchical Gaussian Random Field")
+        fig.set_figheight(10)
+        fig.set_figwidth(25)
+        plt.show()
 
     def _generate_2d(self, n_samples):
         psd = self._compute_psd_2d(self.kx, self.ky, n_samples)
@@ -234,7 +252,6 @@ class GaussianRandomFieldHierarchical:
         hermitian_half[:, 0, 0] = 0 # torch.randn(n_samples)
         fourier_coefs = psd * hermitian_half
         return torch.fft.irfft2(fourier_coefs, s= (self.num_samples, self.num_samples), norm = "ortho")
-
 
 
 
@@ -248,4 +265,16 @@ class PDEDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         input, u = self.data[idx]
+        return input, u
+
+    
+class PDEDataset2(torch.utils.data.Dataset):
+    def __init__(self, data):
+        self.data = data
+
+    def __len__(self):
+        return len(self.data[0])
+
+    def __getitem__(self, idx):
+        input, u = self.data[0][idx], self.data[1][idx]
         return input, u

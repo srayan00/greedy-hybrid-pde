@@ -1,7 +1,7 @@
 __pycache__/
 *.sbat
 slurm_logs/
-playground/
+playground_sahana/
 plots/
 results/
 checkpoints/*json
@@ -9,3 +9,4 @@ checkpoints/*pth
 data/*pt
 old_files/
 train_router_test.py
+args/hierarchical_grf.json

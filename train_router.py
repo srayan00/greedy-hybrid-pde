@@ -2,11 +2,11 @@ import torch
 import os
 import numpy as np
 import argparse
-from ml_solver import MLSolver, DeepONet, FNOforPDE
-from data_generation import GaussianRandomField, PDEDataset
-from pde_pytorch import PoissonEquation1D, PoissonEquation2D, HelmholtzEquation1D, HelmholtzEquation2D
-from numerical_solver_pytorch import WeightedJacobiSolver, MultigridSolver, GaussSeidelSolver
-from hybrid_solver import Router, ConstantRouter, HINTSRouter, LSTMGreedyRouter, HybridSolver
+from ml_solver import DeepONet, FNOforPDE
+from data_generation import  GaussianRandomFieldHierarchical, PDEDataset2, GaussianRandomField
+from pde import PoissonEquation1D, PoissonEquation2D, HelmholtzEquation1D, HelmholtzEquation2D
+from numerical_solver import WeightedJacobiSolver, MultigridSolver, GaussSeidelSolver
+from hybrid_solver import LSTMGreedyRouter, HybridSolver
 
 from trainer import Trainer, EarlyStopping, ApproxGreedyRouterLoss, ScheduledSampler, ScheduledBPTT
 import json
@@ -23,6 +23,7 @@ parser.add_argument("--equation", type=str, default="Poisson", help="PDE to solv
 parser.add_argument("--ckp_dir", type=str, default="./checkpoints", help="Directory to save checkpoints")
 parser.add_argument("--ml_model_name", type=str, default="test", help="ml_model checkpoint name")
 parser.add_argument("--model_name", type=str, default="", help="Model checkpoint name")
+parser.add_argument('--data_name', type=str, default='', help='Name of the dataset to use (if not provided, a new dataset will be generated)')
 parser.add_argument("--data_dir", type=str, default="./data", help="Directory to save/load data")
 
 
@@ -37,6 +38,7 @@ if __name__ == "__main__":
     ckp_dir = args.ckp_dir
     model_name = args.model_name
     ml_model_name = args.ml_model_name
+    data_name = args.data_name
     numerical_solvers = args.numerical_solvers.split(",")
     num_solvers = len(numerical_solvers) + 1
     data_dir = args.data_dir
@@ -75,43 +77,51 @@ if __name__ == "__main__":
     else:
         with open(f"args/{model_type}_args.json", "r") as f:
             arguments = json.load(f)
-        with open(f"{args_path}", "w") as f:
-            json.dump(arguments, f)
+        
     
     if os.path.exists(ml_args_path):
         with open(ml_args_path, "r") as f:
             ml_arguments = json.load(f)
     else:
         raise ValueError("Path Not found")
+    if arguments["N"] != ml_arguments["N"]:
+        raise ValueError("N in ml arguments must match N in router arguments")
+    
+    with open(f"{args_path}", "w") as f:
+        json.dump(arguments, f)
     # Creating/Loading Data
     print("Creating Data")
-
-    if os.path.exists(f"{data_dir}/router_train_data_{equation}_{boundary}_{dim}d_{in_channels}c_{arguments["n_train"]}s.pt") and os.path.exists(f"{data_dir}/router_val_data_{equation}_{boundary}_{dim}d_{in_channels}c_{arguments["n_val"]}s.pt"):
+    n_train = 512# arguments["n_train"]
+    n_val = 32 # arguments["n_val"]
+    if os.path.exists(f"{data_dir}/{data_name}router_train_data_{equation}_{boundary}_{dim}d_{in_channels}c_{n_train}s.pt") and os.path.exists(f"{data_dir}/{data_name}router_val_data_{equation}_{boundary}_{dim}d_{in_channels}c_{n_val}s.pt"):
         print(f"Loading data from {data_dir}...")
-        with open(f"{data_dir}/router_train_data_{equation}_{boundary}_{dim}d_{in_channels}c_{arguments["n_train"]}s.pt", "rb") as f:
+        with open(f"{data_dir}/{data_name}router_train_data_{equation}_{boundary}_{dim}d_{in_channels}c_{n_train}s.pt", "rb") as f:
             train_data = torch.load(f)
-        with open(f"{data_dir}/router_val_data_{equation}_{boundary}_{dim}d_{in_channels}c_{arguments["n_val"]}s.pt", "rb") as f:
+        with open(f"{data_dir}/{data_name}router_val_data_{equation}_{boundary}_{dim}d_{in_channels}c_{n_val}s.pt", "rb") as f:
             val_data = torch.load(f)
     else:
         with open(f"args/grf_args.json", "r") as f:
             arguments_grf = json.load(f)
-
+        
         grf = GaussianRandomField(num_samples=arguments["N"],
-                                    dim=dim,
-                                    alpha=arguments_grf["alpha"],
-                                    beta=arguments_grf["beta"],
-                                    gamma=arguments_grf["gamma"],
-                                    device=device,
-                                    seed=34)
-        # if dim == 1:
-        #     f = lambda x: np.sin(2 * np.pi * x)
-        # else:
-        #     f = lambda x, y: np.sin(2 * np.pi * x) * np.sin(2 * np.pi * y)
+                                  dim=dim,
+                                  alpha=arguments_grf["alpha"],
+                                  beta=arguments_grf["beta"],
+                                  gamma=arguments_grf["gamma"],
+                                  device=device, seed=34)
+        # grf = GaussianRandomFieldHierarchical(num_samples=arguments["N"],
+        #                                       dim=dim,
+        #                                       alpha_min=arguments_grf["alpha_min"],
+        #                                       alpha_max=arguments_grf["alpha_max"],
+        #                                       beta_min=arguments_grf["beta_min"],
+        #                                       beta_max=arguments_grf["beta_max"],
+        #                                       gamma_list=arguments_grf["gamma_list"],
+        #                                       device=device, seed=34)
         pushforward = None if boundary == "Dirichlet" else lambda x: x - torch.mean(x)
-        f = grf.generate(arguments["n_train"] + arguments["n_val"] + extra, pushfoward=pushforward) if equation == "Poisson" else grf.generate(arguments["n_train"] + arguments["n_val"] + extra, pushfoward=None)
-        k2 = grf.generate(arguments["n_train"] + arguments["n_val"] + extra)
+        f = grf.generate(n_train + n_val + extra, pushfoward=pushforward) if equation == "Poisson" else grf.generate(n_train + n_val + extra, pushfoward=None)
+        k2 = grf.generate(n_train + n_val + extra)
         if in_channels > 1:
-            a = grf.generate(arguments["n_train"] + arguments["n_val"] + extra)
+            a = grf.generate(n_train + n_val + extra)
         else:
             if dim == 1:
                 a = lambda x: 1.0
@@ -123,80 +133,57 @@ if __name__ == "__main__":
         else:
             x = torch.linspace(0, 1, arguments["N"] + 1, device=device, dtype=torch.float32)[:-1]
             y = torch.linspace(0, 1, arguments["N"] + 1, device=device, dtype=torch.float32)[:-1] if dim ==2 else None
-        train_data = []
-        val_data = []
-        for i in range(arguments["n_train"] + arguments["n_val"] + extra):
-            pde = None
-            u_sol = None
-            if dim == 1:
-                if equation == "Poisson":
-                    pde = PoissonEquation1D(a_func=a[i] if in_channels > 1 else a,
-                                            f_func=f[i],
-                                            boundary=boundary,
-                                            x=x, 
-                                            device=device)
-                else:
-                    pde = HelmholtzEquation1D(a_func = a[i] if in_channels > 1 else a, f_func=f[i], k2 = k2[i], boundary=boundary,x=x,device=device)
-                u_sol = torch.tensor(pde.u, dtype=torch.float32, device=device)
-                u_sol = u_sol - torch.mean(u_sol) if equation == "Poisson" else u_sol
+     
+        pde = None
+        u_sol = None
+        if dim == 1:
+            if equation == "Poisson":
+                pde = PoissonEquation1D(a_func=a, 
+                                        f_func=f, 
+                                        boundary=boundary, 
+                                        x=x, device=device)
             else:
-                if equation == "Poisson":
-                    pde = PoissonEquation2D(a_func=a[i].flatten() if in_channels > 1 else a,
-                                            f_func=f[i].flatten(),
-                                            boundary=boundary,
-                                            x=x,
-                                            y=y,
-                                            device=device)
-                else:
-                    pde = HelmholtzEquation2D(a_func=a[i].flatten() if in_channels > 1 else a, f_func = f[i].flatten(), k2=k2[i].flatten(), boundary=boundary, x=x, y=y, device=device)
-                new_shape = (arguments["N"], arguments["N"]) 
-                u_sol = torch.tensor(pde.u.reshape(new_shape), dtype=torch.float32, device=device)
-                u_sol = u_sol - torch.mean(u_sol) if equation == "Poisson" else u_sol
-                print(f"Generated sample {i+1}/{arguments['n_train'] + arguments['n_val'] + extra}")
-                print(f"len(train_data) = {len(train_data)}, len(val_data) = {len(val_data)}")
-            
-            if in_channels > 1:
-                # input = torch.concatenate((a[i, None, :], f[i, None, :]), dim=0)
-                if equation == "Poisson":
-                    input = torch.concatenate((a[i, None, :], f[i, None, :]), dim=0)
-                else:
-                    input = torch.concatenate((a[i, None, :], k2[i, None, :], f[i, None, :]), dim=0)      
+                pde = HelmholtzEquation1D(a_func=a, f_func=f, k2=k2, boundary=boundary,x=x,device=device)
+            u_sol = torch.tensor(pde.u, dtype=torch.float32, device=device)
+            u_sol = u_sol - torch.mean(u_sol, dim = -1, keepdim=True) if equation == "Poisson" and boundary == "Periodic" else u_sol
+        else:
+            if equation == "Poisson":
+                pde = PoissonEquation2D(a_func=a.reshape(-1, arguments["N"] * arguments["N"]) if in_channels > 1 else a, 
+                                        f_func=f.reshape(-1, arguments["N"] * arguments["N"]),
+                                        boundary=boundary, 
+                                        x=x, y=y, device=device)
             else:
-                # input = f[i, None, :]
-                if equation == "Poisson":
-                    input = f[i, None, :]
-                else:
-                    input = torch.concatenate((k2[i, None, :], f[i, None, :]), dim=0)
-            residual = pde.compute_residual(u_sol.flatten())
-            if torch.linalg.norm(residual) > 1:
-                continue
-            if len(train_data) < arguments["n_train"]:
-                train_data.append((input, u_sol))
+                pde = HelmholtzEquation2D(a_func=a.reshape(-1, arguments["N"] * arguments["N"]) if in_channels > 1 else a, 
+                                          f_func=f.reshape(-1, arguments["N"] * arguments["N"]), 
+                                          k2=k2.reshape(-1, arguments["N"] * arguments["N"]),
+                                          boundary=boundary, x=x, y=y, device=device)
+            u_sol = torch.tensor(pde.u, dtype=torch.float32, device=device)
+            u_sol = u_sol - torch.mean(u_sol, dim=(-2,-1), keepdim=True) if equation == "Poisson" and boundary == "Periodic" else u_sol
+        if in_channels > 1:
+            if equation == "Poisson":
+                input = torch.concatenate((a[:, None, :], f[:, None, :]), dim=1)
             else:
-                val_data.append((input, u_sol))
-            if len(train_data) == arguments["n_train"] and len(val_data) == arguments["n_val"]:
-                break
-        if len(train_data) < arguments["n_train"] or len(val_data) < arguments["n_val"]:
-            print(f"Generated {len(train_data)} training samples and {len(val_data)} validation samples.")
-            raise ValueError("Not enough data generated. Try increasing the extra variable.")
-        with open(f"{data_dir}/router_train_data_{equation}_{boundary}_{dim}d_{in_channels}c_{arguments["n_train"]}s.pt", "wb") as f:
+                input = torch.concatenate((a[:, None, :], k2[:, None, :], f[:, None, :]), dim=1)
+        else:
+            if equation == "Poisson":
+                input = f[:, None, :]
+            else:
+                input = torch.concatenate((k2[:, None, :], f[:, None, :]), dim=1)
+        train_data = [input[:n_train], u_sol[:n_train]]
+        val_data = [input[n_train:(n_train + n_val)], u_sol[n_train:(n_train + n_val)]]
+        with open(f"{data_dir}/{data_name}router_train_data_{equation}_{boundary}_{dim}d_{in_channels}c_{n_train}s.pt", "wb") as f:
             torch.save(train_data, f)
-        with open(f"{data_dir}/router_val_data_{equation}_{boundary}_{dim}d_{in_channels}c_{arguments["n_val"]}s.pt", "wb") as f:
+        with open(f"{data_dir}/{data_name}router_val_data_{equation}_{boundary}_{dim}d_{in_channels}c_{n_val}s.pt", "wb") as f:
             torch.save(val_data, f)
     print("Data creation/loading completed.")
-    print(f"Train data size: {len(train_data)}")
-    print(f"Validation data size: {len(val_data)}")
-    print(f"Size of each input: {train_data[0][0].shape}, Size of each solution: {train_data[0][1].shape}")
+    print(f"Train data size: {train_data[0].shape[0]}, Val data size: {val_data[0].shape[0]}")
+    print(f"Size of each input: {train_data[0][0].shape}, Size of each solution: {train_data[1][0].shape}")
     # Change this later 
-
-    train_dataset = PDEDataset(train_data)
-    val_dataset = PDEDataset(val_data)
+   
+    train_dataset = PDEDataset2(train_data)
+    val_dataset = PDEDataset2(val_data)
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=arguments["batch_size"], shuffle=True)
     val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=arguments["batch_size"], shuffle=True)
-    # train_dataset = PDEDataset(train_data[:2])
-    # val_dataset = PDEDataset(train_data[:2])
-    # train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=2, shuffle=False)
-    # val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=2, shuffle=False)
     print(f"Train dataset size: {len(train_dataset)}")
     print(f"Validation dataset size: {len(val_dataset)}")
 
@@ -351,10 +338,11 @@ if __name__ == "__main__":
             scheduled_bptt.load_state_dict(ckp["scheduler_bptt"])
             print("Scheduled Sampler loaded", flush=True)
 
-    loss_fn = ApproxGreedyRouterLoss(centered=(equation == "Poisson"), normalized=False)
+    loss_fn = ApproxGreedyRouterLoss(centered=(equation == "Poisson" and boundary == "Periodic"), normalized=False)
 
     start_epoch = 0 if ckp is None else ckp["epoch"] + 1
     print("Starting training...")
+    # exit()
     trainer = Trainer(model=model,
                       train_data=train_loader,
                       val_data=val_loader,

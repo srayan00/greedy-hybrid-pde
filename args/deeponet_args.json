@@ -1,11 +1,11 @@
 {   
     "model_type": "DeepONet",
-    "branch_dim": 64,
-    "hidden_branch": 128,
+    "branch_dim": 60,
+    "hidden_branch": 60,
     "num_branch_layers": 2,
-    "hidden_trunk": 128,
+    "hidden_trunk": 60,
     "num_trunk_layers": 2,
-    "batch_size": 128,
+    "batch_size": 256,
     "learning_rate": 1e-3,
     "weight_decay": 5e-3,
     "warmup_epochs_es": 1,
@@ -13,7 +13,7 @@
     "min_delta": 1e-9,
     "epochs": 10000,
     "max_norm": 1.0,
-    "N": 33,
-    "n_train": 15000,
-    "n_val": 3000
+    "N": 31,
+    "n_train": 10000,
+    "n_val": 2000
 }

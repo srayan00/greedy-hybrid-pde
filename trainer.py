@@ -9,10 +9,14 @@ class MSEalphaepsilonLoss(torch.nn.Module):
         self.epsilon = epsilon
     
     def forward(self, predictions, targets):
-        mse_loss = torch.mean((predictions - targets) ** 2)
-        target_norm = torch.sum(targets ** 2)
-        adjusted_loss = mse_loss / (target_norm**self.alpha + self.epsilon)
-        return adjusted_loss
+        squared_error = (predictions - targets) ** 2
+        denominator = torch.abs(targets) ** self.alpha + self.epsilon
+        adjusted_error = squared_error / denominator
+        return torch.mean(adjusted_error)
+        # mse_loss = torch.mean((predictions - targets) ** 2)
+        # target_norm = torch.sum(targets ** 2)
+        # adjusted_loss = mse_loss / (target_norm**self.alpha + self.epsilon)
+        # return adjusted_loss
 
 class ApproxGreedyRouterLoss(torch.nn.Module):
     def __init__(self, centered = True, normalized = False,*args, **kwargs) -> None:
@@ -339,6 +343,7 @@ class Trainer:
                 loss = self.loss_fn(output, targets.reshape(bs, -1))
             if isinstance(self.model, MLSolver):
                 output = self.model(source)
+                print(f"shape of output is {output.shape} and shape of target is {targets.shape}")
                 loss = self.loss_fn(output, targets)
 
         # Automatic mixed precision backward pass

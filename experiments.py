@@ -5,9 +5,9 @@ import matplotlib.pyplot as plt
 import argparse
 from ml_solver import MLSolver, DeepONet, FNOforPDE
 from data_generation import GaussianRandomField, PDEDataset
-from pde_pytorch import PoissonEquation1D, PoissonEquation2D, HelmholtzEquation1D, HelmholtzEquation2D
-from numerical_solver_pytorch import WeightedJacobiSolver, MultigridSolver, GaussSeidelSolver
-from hybrid_solver import Router, ConstantRouter, HINTSRouter, LSTMGreedyRouter, HybridSolver
+from old_files.pde_pytorch import PoissonEquation1D, PoissonEquation2D, HelmholtzEquation1D, HelmholtzEquation2D
+from old_files.numerical_solver_pytorch import WeightedJacobiSolver, MultigridSolver, GaussSeidelSolver
+from old_files.hybrid_solver import Router, ConstantRouter, HINTSRouter, LSTMGreedyRouter, HybridSolver
 
 
 from trainer import Trainer, EarlyStopping, ApproxGreedyRouterLoss, ScheduledSampler
