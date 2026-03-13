@@ -3,6 +3,10 @@ from collections import OrderedDict
 
 class MLP(torch.nn.Module):
     def __init__(self, hidden_sizes, dropout = 0):
+        """
+        hidden_sizes: list of hidden sizes, including input and output size
+        dropout: dropout rate, default 0
+        """
         super(MLP, self).__init__()
         order_dict = []
         for i in range(len(hidden_sizes) - 1):
@@ -19,6 +23,10 @@ class MLP(torch.nn.Module):
 
 class RNNCell(torch.nn.Module):
     def __init__(self, input_size, hidden_size):
+        """
+        input_size: dimension of the input
+        hidden_size: dimension of the hidden state
+        """
         super(RNNCell, self).__init__()
         self.hidden_size = hidden_size
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -35,6 +43,10 @@ class RNNCell(torch.nn.Module):
 
 class LSTMCell(torch.nn.Module):
     def __init__(self, input_size, hidden_size):
+        """
+        input_size: dimension of the input
+        hidden_size: dimension of the hidden state
+        """
         super(LSTMCell, self).__init__()
         self.hidden_size = hidden_size
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -61,6 +73,13 @@ class LSTMCell(torch.nn.Module):
 
 class RNNModel(torch.nn.Module):
     def __init__(self, input_size, hidden_size, output_size, num_layers = 1, dropout = 0):
+        """
+        input_size: dimension of the input
+        hidden_size: dimension of the hidden state
+        output_size: dimension of the output
+        num_layers: number of layers in the RNN, default 1
+        dropout: dropout rate, default 0
+        """
         super(RNNModel, self).__init__()
         self.hidden_size = hidden_size
         self.num_layers = num_layers
@@ -89,6 +108,13 @@ class RNNModel(torch.nn.Module):
     
 class LSTMModel(torch.nn.Module):
     def __init__(self, input_size, hidden_size, output_size, num_layers = 1, dropout = 0):
+        """
+        input_size: dimension of the input
+        hidden_size: dimension of the hidden state
+        output_size: dimension of the output
+        num_layers: number of layers in the LSTM, default 1
+        dropout: dropout rate, default 0
+        """
         super(LSTMModel, self).__init__()
         self.hidden_size = hidden_size
         self.num_layers = num_layers
@@ -114,6 +140,10 @@ class LSTMModel(torch.nn.Module):
             hx[i] = list(self.lstmlist[i](input_t, hx[i]))
         x = self.fc(hx[-1][0])
         return x, hx
+    
+"""
+ALL THE CODE BELOW HAS NOT BEEN USED. IT CAN BE IGNORED. I JUST WANTED TO KEEP IT JUST IN CASE.
+"""
 
 class LSTMEncoderDecoder2(torch.nn.Module):
     def __init__(self, input_size, hidden_size, output_size, window_length, prediction_length, dropout = 0.2, num_layers = 1):

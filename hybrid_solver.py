@@ -14,6 +14,9 @@ class Router(torch.nn.Module):
         raise NotImplementedError
 
 class ConstantRouter(Router):
+    """
+    A router that always chooses the same solver
+    """
     def __init__(self, num_solvers: int, constant_index: int = 0, device = torch.device("cpu")):
         super().__init__(num_solvers)
         self.num_solvers = num_solvers
@@ -35,6 +38,9 @@ class ConstantRouter(Router):
             return chosen_solver
 
 class HINTSRouter(Router):
+    """
+    A router that switches between solvers based on a periodic schedule
+    """
     def __init__(self, num_solvers: int, tau: int, device = torch.device("cpu")):
         super().__init__(num_solvers)
         if num_solvers != 2:
@@ -59,6 +65,9 @@ class HINTSRouter(Router):
             return chosen_solver
 
 class LSTMGreedyRouter(Router):
+    """
+    A router that uses an LSTM to predict which solver to use 
+    """
     def __init__(self, encoder_dim, decoder_dim, hidden_dim, num_layers, num_solvers, dropout):
         super(LSTMGreedyRouter, self).__init__(num_solvers)
         self.type = "LSTMGreedy"
@@ -95,7 +104,22 @@ class LSTMGreedyRouter(Router):
             return (decision, hidden)
 
 class HybridSolver(torch.nn.Module):
+    """
+    A hybrid solver that combines multiple solvers and uses a router to decide which solver to use at each iteration.
+    """
     def __init__(self, N: int, dim: int, in_channels: int, boundary: str, equation: PDE, suite_solver: list[NumericalSolver, MLSolver], router: torch.nn.Module, tol: float, max_iters: int, threshold: float) -> None:
+        """
+        N: resolution of the grid
+        dim: dimension of the PDE (1 or 2)
+        in_channels: number of input channels for the ML solvers (e.g. 2 for a and f in Poisson, 3 for a, k2, and f in Helmholtz)
+        boundary: type of boundary condition ("Periodic" or "Dirichlet")
+        equation: PDE object containing the matrix A and vector b for the linear system Au = b. It can either be Poisson/Helmholtz
+        suite_solver: list of solvers to choose from. It can contain any number of NumericalSolvers and MLSolvers but if the router is HINTRouter then it can only contain 2 solvers and the first one must be a NumericalSolver and the second one must be an MLSolver.
+        router: any one of the above routers
+        tol: tolerance for convergence, default 1e-6
+        max_iters: maximum number of iterations, default 1000
+        threshold: threshold for the router to decide which solver to use. 
+        """
         super().__init__()
         if len(suite_solver) < 2:
             raise ValueError("suite_solver must contain at least two solvers.")
@@ -134,6 +158,18 @@ class HybridSolver(torch.nn.Module):
                 a = None, k2 = None, u0 = None, return_dict = False, 
                 training = False, teacher_forcing = 0.0, ground_truth = None, 
                 hidden_state_for_recurrent = None, num_iters = None):
+        """
+        f: right hand side of the PDE, shape (B, N) for 1D and (B, N, N) for 2D
+        a: coefficient function for the PDE, shape (B, N) for 1D and (B, N, N) for 2D. It can be None if the PDE is constant coefficient.
+        k2: coefficient function for the Helmholtz equation, shape (B, N) for 1D and (B, N, N) for 2D. It can be None if the PDE is Poisson.
+        u0: initial guess for the solution, shape (B, N) for 1D and (B, N, N) for 2D. If None, it will be initialized to zero.
+        return_dict: whether to return a dictionary containing the predictions, routing scores, and residuals at each iteration.
+        training: whether the model is being trained. If True, the router will use teacher forcing to choose the solver based on the ground truth solution.
+        teacher_forcing: the probability of using teacher forcing during training. It should be a value between 0 and 1. If teacher_forcing is 0, the router will always use its own predictions to choose the solver. If teacher_forcing is 1, the router will always use the ground truth solution to choose the solver.
+        ground_truth: the ground truth solution, shape (B, N) for 1D and (B, N, N) for 2D. It is required if training is True.
+        hidden_state_for_recurrent: the hidden state for the recurrent router, if applicable. It should be a tuple of (h_0, c_0) where h_0 and c_0 are the initial hidden and cell states for the LSTM. The shape of h_0 and c_0 should be (num_layers, B, hidden_dim).
+        num_iters: the number of iterations to run the solver for. If None, it will run for self.max_iters iterations.
+        """
         if training and ground_truth is None:
             raise ValueError("ground_truth must be provided during training.")
         if training and not return_dict:

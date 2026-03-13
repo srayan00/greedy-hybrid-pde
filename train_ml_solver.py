@@ -49,11 +49,13 @@ if __name__ == "__main__":
     if in_channels not in [1, 2]:
         raise ValueError("in_channels must be either 1 or 2")
     
-
+    
+    # Checkpoint and arguments setup
     ckp_path = ckp_dir + f"/{model_type}_{model_name}_{equation}_{boundary}_{dim}d_{in_channels}c_full.pth"
     save_path = ckp_dir + f"/{model_type}_{model_name}_{equation}_{boundary}_{dim}d_{in_channels}c"
     args_path = ckp_dir + f"/{model_type}_{model_name}_{equation}_{boundary}_{dim}d_{in_channels}c_args.json"
 
+    # Loading arguments for the ML model
     if os.path.exists(args_path):
         print(f"Loading training arguments from {args_path}...")
         with open(args_path, "r") as f:
@@ -98,15 +100,21 @@ if __name__ == "__main__":
                                     device=device,
                                     seed=1234)
         pushforward = None if boundary == "Dirichlet" else lambda x: x - torch.mean(x)
+        # Generate forcing functions
         f = grf.generate(n_train + n_val + extra, pushfoward=pushforward) if equation == "Poisson" else grf.generate(n_train + n_val + extra, pushfoward=None)
+
+        # Generate k2 function for Helmholtz
         k2 = grf.generate(n_train + n_val + extra)
         if in_channels > 1:
+            # Generate coefficient a for variable coefficient PDEs
             a = grf.generate(n_train + n_val + extra)
         else:
             if dim == 1:
                 a = lambda x: 1.0
             else:
                 a = lambda x, y: 1.0
+
+        # Generate the grid for solving the PDEs
         if boundary == "Dirichlet":
             x = torch.linspace(0, 1, arguments["N"], device=device, dtype=torch.float32)
             y = torch.linspace(0, 1, arguments["N"], device=device, dtype=torch.float32) if dim ==2 else None
@@ -115,7 +123,8 @@ if __name__ == "__main__":
             y = torch.linspace(0, 1, arguments["N"] + 1, device=device, dtype=torch.float32)[:-1] if dim ==2 else None
         
         start = len(train_data) + len(val_data)
-        # Here I want to leverage our new batch friendly pde objects
+
+        # Create the equation object according to the specified parameters (equation, boundary, dim, in_channels)
         pde = None
         u_sol = None
         if dim == 1:
@@ -127,7 +136,7 @@ if __name__ == "__main__":
             else:
                 pde = HelmholtzEquation1D(a_func=a, f_func=f, k2=k2, boundary=boundary,x=x,device=device)
             u_sol = torch.tensor(pde.u, dtype=torch.float32, device=device)
-            u_sol = u_sol - torch.mean(u_sol, dim = -1, keepdim=True) if equation == "Poisson" else u_sol
+            u_sol = u_sol - torch.mean(u_sol, dim = -1, keepdim=True) if equation == "Poisson" and boundary == "Periodic" and in_channels == 1 else u_sol # this feels wrong because if the boundary == "Dirichlet" then this would produce an incorrect solution
         else:
             if equation == "Poisson":
                 pde = PoissonEquation2D(a_func=a.reshape(-1, arguments["N"] * arguments["N"]) if in_channels > 1 else a, 
@@ -140,7 +149,9 @@ if __name__ == "__main__":
                                           k2=k2.reshape(-1, arguments["N"] * arguments["N"]),
                                           boundary=boundary, x=x, y=y, device=device)
             u_sol = torch.tensor(pde.u, dtype=torch.float32, device=device)
-            u_sol = u_sol - torch.mean(u_sol, dim=(-2,-1), keepdim=True) if equation == "Poisson" else u_sol
+            u_sol = u_sol - torch.mean(u_sol, dim=(-2,-1), keepdim=True) if equation == "Poisson" and boundary == "Periodic" and in_channels == 1 else u_sol
+
+        # Defining the input and output of the ML model
         if in_channels > 1:
             if equation == "Poisson":
                 input = torch.concatenate((a[:, None, :], f[:, None, :]), dim=1)
@@ -151,6 +162,8 @@ if __name__ == "__main__":
                 input = f[:, None, :]
             else:
                 input = torch.concatenate((k2[:, None, :], f[:, None, :]), dim=1)
+
+        # Compiling the training and validation data and saving it to disk
         train_data = [input[:n_train], u_sol[:n_train]]
         val_data = [input[n_train:(n_train + n_val)], u_sol[n_train:(n_train + n_val)]]
         with open(f"{data_dir}/{data_name}train_data_{equation}_{boundary}_{dim}d_{in_channels}c_{n_train}s.pt", "wb") as f:
@@ -161,15 +174,13 @@ if __name__ == "__main__":
     print("Data creation/loading completed.")
     print(f"Train data size: {train_data[0].shape[0]}, Val data size: {val_data[0].shape[0]}")
     print(f"Size of each input: {train_data[0][0].shape}, Size of each solution: {train_data[1][0].shape}")
-    # Change this later 
+    
+    # Creating Dataloaders for training and validation
     train_dataset = PDEDataset2(train_data)
     val_dataset = PDEDataset2(val_data)
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=arguments["batch_size"], shuffle=True)
     val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=arguments["batch_size"], shuffle=True)
-    # train_dataset = PDEDataset(train_data[:2])
-    # val_dataset = PDEDataset(train_data[:2])
-    # train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=2, shuffle=False)
-    # val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=2, shuffle=False)
+
     print(f"Train dataset size: {len(train_dataset)}")
     print(f"Validation dataset size: {len(val_dataset)}")
 
@@ -186,6 +197,8 @@ if __name__ == "__main__":
         model = FNOforPDE(trunc_mode=arguments["trunc_mode"], dim=dim, in_channels=new_in_channels,
                           hidden_size=arguments["hidden_size"], num_layers=arguments["num_layers"]).to(device)
     ckp = None
+
+    # Loading checkpoint if it exists
     if os.path.exists(ckp_path):
         print(f"Loading model checkpoint from {ckp_path}...")
         ckp = torch.load(ckp_path, map_location=device)
@@ -194,15 +207,11 @@ if __name__ == "__main__":
         print(f"Resuming training from epoch {ckp['epoch']}")
         model.load_state_dict(ckp["model"])
     
+    # Creating optimizer, early stopping scheduler, learning rate schedulers
     optimizer = torch.optim.AdamW(model.parameters(), lr=arguments["learning_rate"], weight_decay=arguments["weight_decay"])
 
     if ckp:
         optimizer.load_state_dict(ckp["optimizer"])
-    
-    # scaler = torch.cuda.amp.GradScaler() 
-    # if ckp:
-    #     scaler.load_state_dict(ckp["scaler"])
-    #     print("AMP loaded")
     
     early_stopper = EarlyStopping(patience=arguments["patience"], verbose=True, delta=arguments["min_delta"], warmup_epochs=arguments["warmup_epochs_es"])
 

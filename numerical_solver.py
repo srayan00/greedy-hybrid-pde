@@ -4,11 +4,19 @@ from pde import PDE
 
 class NumericalSolver:
     def __init__(self, equation: PDE, device = None):
+        """
+        equation: PDE object containing the matrix A and vector b for the linear system Au = b. It can either be Poisson/Helmholtz
+        device: torch device to run the solver on. If None, it will use cuda if available, otherwise cpu.
+        """
         self.equation = equation
         self.device = device if device else torch.device("cpu")
 
     def iteration(self, u_old):
         return u_old # Placeholder for actual iteration logic
+    
+    """
+    This function was used before I vectorized my code but now I have implemented batch_solve which is more efficient. It can be ignored.
+    """
     
     def solve(self, tol=1e-6, max_iter=1000, u_init=None):
         u_old = u_init if u_init is not None else torch.zeros_like(self.equation.b, device=self.device)
@@ -22,6 +30,11 @@ class NumericalSolver:
         return u_old
     
     def batch_solve(self, tol=1e-10, max_iter=1000, u_init=None):
+        """
+        tol: tolerance for convergence, default 1e-10
+        max_iter: maximum number of iterations, default 1000
+        u_init: initial guess for the solution, default None (zero vector)
+        """
         u_old = u_init if u_init is not None else torch.zeros_like(self.equation.b, device=self.device)
         mask = torch.zeros(self.equation.b.shape[0], dtype=torch.bool, device=self.device)
         u_new = torch.zeros_like(u_old, device=self.device)
@@ -35,7 +48,9 @@ class NumericalSolver:
             u_old = u_new
         print('Max iterations reached without convergence.')
         return u_old
-    
+    """
+    This function was used when I wanted to train the DeepONet to be a residual corrector but it isn't used anymore. It can be ignored.
+    """
     def batch_solve_stopping(self, stopping, max_iters = 1000, u_init = None):
         u_old = u_init if u_init is not None else torch.zeros_like(self.equation.b, device=self.device)
         mask = torch.zeros(self.equation.b.shape[0], dtype=torch.bool, device=self.device)
@@ -57,14 +72,18 @@ class WeightedJacobiSolver(NumericalSolver):
         self.weight = weight
     
     def iteration(self, u_old, mask = None):
+        """
+        u_old: (B, N) or (B, N^2) tensor containing the current solution estimates for a batch of samples
+        mask: (B,) boolean tensor indicating which samples have not yet converged. If None, it is assumed that all samples are not converged.
+        """
         if mask is None:
             mask = torch.ones(self.equation.b.shape[0], device=self.device, dtype=torch.bool)
-        D = torch.diag_embed(torch.diagonal((self.equation.A), dim1=-2, dim2=-1))
+        D = torch.diag_embed(torch.diagonal((self.equation.A), dim1=-2, dim2=-1)) # (B, N, N) or (B, N^2, N^2)
         D_inv = torch.linalg.inv(D)
         is_batch = D_inv.ndim == 3
         if is_batch:
             u_new = u_old.clone()
-            output = torch.bmm(self.equation.A[mask], u_old[mask].unsqueeze(-1)).squeeze(-1)
+            output = torch.bmm(self.equation.A[mask], u_old[mask].unsqueeze(-1)).squeeze(-1) # prediction: (B, N) or (B, N^2)
             u_new[mask] = u_old[mask] + self.weight * torch.bmm(D_inv[mask], (self.equation.b[mask] - output).unsqueeze(-1)).squeeze(-1)
         else:
             output = self.equation.A @ u_old
@@ -77,10 +96,13 @@ class GaussSeidelSolver(NumericalSolver):
         super().__init__(equation, device)
     
     def iteration(self, u_old, mask = None):
-        # L is lower triangular part of A
+        """
+        u_old: (B, N) or (B, N^2) tensor containing the current solution estimates for a batch of samples
+        mask: (B,) boolean tensor indicating which samples have not yet converged. If None, it is assumed that all samples are not converged.
+        """
         if mask is None:
             mask = torch.ones(self.equation.b.shape[0], device=self.device, dtype=torch.bool)
-        L = torch.tril(self.equation.A)
+        L = torch.tril(self.equation.A) # (B, N, N) or (B, N^2, N^2)
         L_inv = torch.linalg.inv(L)
         is_batch = L_inv.ndim == 3
         if is_batch:
@@ -91,6 +113,10 @@ class GaussSeidelSolver(NumericalSolver):
             output = self.equation.A @ u_old
             u_new = u_old + L_inv @ (self.equation.b - output)
         return u_new
+    
+"""
+Need to implement the Multigrid Solver
+"""
 
 class MultigridSolver(NumericalSolver):
     def __init__(self, equation: PDE, levels=2, device = torch.device("cpu")):

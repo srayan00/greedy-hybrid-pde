@@ -3,9 +3,16 @@ import torch
 
 
 
-
 class PDE:
     def __init__(self, a_func, f_func, boundary, x, y=None, A = None):
+        """
+        a_func: diffusion coefficient function a(x) or a(x, y). Can be a function, or a tensor aligned with the grid.
+        f_func: source term function f(x) or f(x, y). Can be a function, or a tensor aligned with the grid.
+        boundary: "Dirichlet" or "Periodic"
+        x: 1D tensor of grid points in x direction
+        y: 1D tensor of grid points in y direction (optional, for 2D problems)
+        A: Pre-built system matrix (optional). If None, it will be built based on a_func and the grid.
+        """
         self.x = x
         self.y = y
         self.a_func = a_func
@@ -18,8 +25,11 @@ class PDE:
         self.u = None
         self.is_batch = False
         self.is_coefficient = isinstance(a_func, torch.Tensor) 
-    
+
     def build_matrix(self):
+        """
+        This function builds the A matrix in Au = b based on the PDE specification.
+        """
         if self.boundary == 'Dirichlet':
             return self.build_matrix_dirichlet()
         elif self.boundary == 'Periodic':
@@ -40,12 +50,21 @@ class PDE:
         return NotImplementedError
     
     def build_rhs(self):
+        """
+        This function builds the b vector in Au = b based on the PDE specification.
+        """
         return NotImplementedError
     
     def solve(self):
+        """
+        This function solves the linear system Au = b to get the solution u using torch.linalg.lstsq.
+        """
         return NotImplementedError
     
     def compute_residual(self, u_approx):
+        """
+        This function computes the residual for the given approximate solution.
+        """
         if self.A is None or self.b is None:
             raise ValueError("Matrix A and vector b must be built before computing residual.")
         if self.is_batch:
@@ -91,30 +110,45 @@ class PoissonEquation1D(PDE):
         self.u = self.solve() if solve else None
     
     def _f_at(self, i):
+        """
+        Helper function to get f at grid point i, handling both tensor and callable cases, and batch vs non-batch.
+        """
         if isinstance(self.f_func, torch.Tensor):
             return self.f_func[i] if not self.is_batch else self.f_func[:, i]  # (batch_size,) or scalar
         else:
             return self.f_func(self.x[i]) if not self.is_batch else torch.tensor([self.f_func(self.x[i])], device=self.device).expand(self.batch_size)  # scalar or (batch_size,)
         
     def _a_at(self, i):
+        """
+        Helper function to get a at grid point i, handling both tensor and callable cases, and batch vs non-batch.
+        """
         if isinstance(self.a_func, torch.Tensor):
             return self.a_func[i] if not self.is_batch else self.a_func[:, i]  # (batch_size,) or scalar
         else:
             return self.a_func(self.x[i]) if not self.is_batch else torch.tensor([self.a_func(self.x[i])], device=self.device).expand(self.batch_size)  # scalar or (batch_size,)
         
     def _set_matrix_entry(self, A, i, j, value):
+        """
+        Helper function to set entry (i, j) of matrix A, handling both batch and non-batch cases.
+        """
         if self.is_batch:
             A[:, i, j] = value
         else:
             A[i, j] = value
 
     def _set_vector_entry(self, b, i, value):
+        """
+        Helper function to set entry i of vector b, handling both batch and non-batch cases.
+        """
         if self.is_batch:
             b[:, i] = value
         else:
             b[i] = value
 
     def build_matrix_dirichlet(self):
+        """
+        Builds the system matrix A for the 1D Poisson equation with Dirichlet boundary conditions using finite difference discretization.
+        """
         n = len(self.x)
         h = self.x[1] - self.x[0]
         A = torch.zeros((n, n), device=self.device) if not self.is_batch else torch.zeros((self.batch_size, n, n), device=self.device)
@@ -138,6 +172,9 @@ class PoissonEquation1D(PDE):
     
 
     def build_matrix_periodic(self):
+        """
+        Builds the system matrix A for the 1D Poisson equation with Periodic boundary conditions using finite difference discretization.
+        """
         n = len(self.x)
         h = self.x[1] - self.x[0]
         A = torch.zeros((n, n), device=self.device) if not self.is_batch else torch.zeros((self.batch_size, n, n), device=self.device)
@@ -154,6 +191,9 @@ class PoissonEquation1D(PDE):
         return A
 
     def build_rhs(self):
+        """
+        Builds the b for the linear system Au = b based on the source term f and the grid, handling both batch and non-batch cases.
+        """
         n = len(self.x)
         b = torch.zeros((self.batch_size, n), device=self.device) if self.is_batch else torch.zeros(n, device=self.device)
         for i in range(n):

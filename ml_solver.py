@@ -20,6 +20,8 @@ class DeepONet(MLSolver):
         branch_dim: dimension of the latent embedding from branch net
         hidden_branch: hidden size of the branch net
         num_branch_layers: number of layers in branch net
+        hidden_trunk: hidden size of the trunk net
+        num_trunk_layers: number of layers in trunk net
         """
         super().__init__(dim, in_channels)
         self.N = N
@@ -47,7 +49,7 @@ class DeepONet(MLSolver):
     def forward(self, input, coords = None):
         """
         input is of size (B, N, N) or (B, N)
-        coords is of size (num_coords, 2) 
+        coords is of size (num_coords, 2) if dim == 2 else (num_coords, 1)
         """
         bs = input.size(0)
 
@@ -71,6 +73,10 @@ class DeepONet(MLSolver):
                 out[:, :, 0] = 0.0
                 out[:, :, -1] = 0.0
         return out
+
+"""
+ALL THE CODE BELOW HAS NOT BEEN USED. IT CAN BE IGNORED. I JUST WANTED TO KEEP IT JUST IN CASE.
+"""
 
 class FNOforPDE(MLSolver):
     def __init__(self, trunc_mode, dim, in_channels=1, hidden_size = 32, num_layers = 2):
