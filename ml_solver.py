@@ -85,13 +85,18 @@ class FNOforPDE(MLSolver):
                        in_channels = in_channels,
                        out_channels = 1,
                        hidden_channels = hidden_size,
-                       num_layers = num_layers)
+                       n_layers = num_layers)
     
     def forward(self, input):
         """
-        input is of size (B, 2, N, N) or (B, 2, N) or (B, 1, N, N) or (B, 1, N)
+        input is of size (B, C, N*N), (B, C, N, N), (B, C, N)
+        For 2D, auto-reshapes (B, C, N*N) -> (B, C, N, N).
         """
-        out = self.fno(input) # (B, 1, N, N) or (B, 1, N)
+        if self.dim == 2 and input.dim() == 3:
+            B, C, L = input.shape
+            N = int(round(L ** 0.5))
+            input = input.reshape(B, C, N, N)
+        out = self.fno(input)  # (B, 1, N, N) or (B, 1, N)
         return out.squeeze(1)
 
 class PredictorRejector(torch.nn.Module):

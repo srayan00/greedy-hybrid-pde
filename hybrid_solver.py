@@ -236,9 +236,11 @@ class HybridSolver(torch.nn.Module):
                                 ml_out = ml_out * res_norms[mask_i].unsqueeze(-1)
                             predictionsz[mask_i] = u_prev[mask_i] + ml_out
                     else:
-                        self.suite_solver[i].equation = equations
-                        u_new_i = self.suite_solver[i].iteration(u_prev, use_ml_solver == i)
-                        predictionsz = u_new_i
+                        mask_i = (use_ml_solver == i)
+                        if mask_i.any():
+                            self.suite_solver[i].equation = equations
+                            u_new_i = self.suite_solver[i].iteration(u_prev, mask_i)
+                            predictionsz[mask_i] = u_new_i[mask_i]
             if training:
                 all_expert_predictions = torch.stack(all_expert_predictions, dim=0)
                 has_null_space = self.equation.equation == "Poisson" or (self.equation.equation == "ConvDiff" and getattr(self.equation, 'reaction', 0.0) == 0.0)

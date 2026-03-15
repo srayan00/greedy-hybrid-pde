@@ -31,10 +31,11 @@ class RelativeMSELoss(torch.nn.Module):
         return torch.mean(per_sample_mse / per_sample_norm)
 
 class ApproxGreedyRouterLoss(torch.nn.Module):
-    def __init__(self, centered = True, normalized = False,*args, **kwargs) -> None:
+    def __init__(self, centered = True, normalized = False, error_clamp = 1e2, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.centered = centered
         self.normalized = normalized
+        self.error_clamp = error_clamp
 
     def forward(self, prediction, target, reduction = "mean"):
         log_scores = -1*torch.nn.functional.log_softmax(prediction["routing_scores"], dim = -1)
@@ -43,6 +44,8 @@ class ApproxGreedyRouterLoss(torch.nn.Module):
         else: 
             expert_predictions = prediction["complete_expert_predictions"]
         errors_expert = torch.norm(expert_predictions - target.unsqueeze(0), dim=-1).transpose(2, 1)
+        if self.error_clamp is not None:
+            errors_expert = torch.clamp(errors_expert, max=self.error_clamp)
         weights = torch.sum(errors_expert, dim = -1, keepdim=True) - errors_expert
         if self.normalized:
             weights = weights/torch.sum(weights, dim = -1, keepdim=True)

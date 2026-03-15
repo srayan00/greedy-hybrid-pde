@@ -25,8 +25,8 @@ import matplotlib.pyplot as plt
 
 from data_generation import GaussianRandomField, GaussianRandomFieldHierarchical
 from pde import PoissonEquation1D, PoissonEquation2D, HelmholtzEquation1D, HelmholtzEquation2D, ConvectionDiffusion2D
-from ml_solver import DeepONet
-from numerical_solver import WeightedJacobiSolver
+from ml_solver import DeepONet, FNOforPDE
+from numerical_solver import WeightedJacobiSolver, GaussSeidelSolver, SORSolver, MultigridSolver
 from hybrid_solver import HybridSolver, ConstantRouter, HINTSRouter, LSTMGreedyRouter
 import models
 
@@ -171,6 +171,39 @@ def load_deeponet(ckp_dir, model_name, N, dim, equation, device):
     return model
 
 
+def load_fno(ckp_dir, model_name, N, dim, equation, device, args_file=None):
+    """Load a trained FNO checkpoint."""
+    args_path = os.path.join(ckp_dir, f"fno_{model_name}_{equation}_Periodic_{dim}d_1c_args.json")
+    if os.path.exists(args_path):
+        with open(args_path) as f:
+            args = json.load(f)
+    else:
+        default = args_file or "args/fno_n31_args.json"
+        with open(default) as f:
+            args = json.load(f)
+
+    in_channels = 2 if equation == "Helmholtz" else 1
+
+    model = FNOforPDE(
+        trunc_mode=args["trunc_mode"], dim=dim, in_channels=in_channels,
+        hidden_size=args["hidden_size"], num_layers=args["num_layers"],
+    ).to(device)
+
+    ckp_path = os.path.join(ckp_dir, f"fno_{model_name}_{equation}_Periodic_{dim}d_1c_best.pth")
+    if not os.path.exists(ckp_path):
+        ckp_path = os.path.join(ckp_dir, f"fno_{model_name}_{equation}_Periodic_{dim}d_1c_full.pth")
+    if not os.path.exists(ckp_path):
+        raise FileNotFoundError(f"No FNO checkpoint found at {ckp_path}")
+
+    ckp = torch.load(ckp_path, map_location=device, weights_only=False)
+    state = ckp["model"]
+    state = {k: v for k, v in state.items() if not k.startswith("_")}
+    model.load_state_dict(state)
+    model.eval()
+    print(f"Loaded FNO from {ckp_path} (epoch {ckp['epoch']})")
+    return model
+
+
 def load_lstm_router(ckp_dir, router_model_name, N, dim, equation, numerical_solvers_str, device):
     """Load a trained LSTM router checkpoint."""
     with open("args/lstm_args.json") as f:
@@ -278,57 +311,114 @@ def _build_deeponet_input(residual, k2_flat, equation):
     return residual[:, None, :], None
 
 
+def _make_classical_solver(solver_spec, pde, device):
+    """Instantiate one classical solver from a spec string like 'jacobi', 'jacobi_0.67', 'gs', 'sor_1.5', 'mg_3'."""
+    parts = solver_spec.split("_")
+    name = parts[0]
+    if name == "jacobi":
+        weight = float(parts[1]) if len(parts) > 1 else 1.0
+        return WeightedJacobiSolver(equation=pde, device=device, weight=weight)
+    elif name == "gs":
+        return GaussSeidelSolver(equation=pde, device=device)
+    elif name == "sor":
+        omega = float(parts[1]) if len(parts) > 1 else 1.5
+        return SORSolver(equation=pde, omega=omega, device=device)
+    elif name == "mg":
+        levels = int(parts[1]) if len(parts) > 1 else 3
+        return MultigridSolver(equation=pde, levels=levels, device=device)
+    else:
+        raise ValueError(f"Unknown solver spec: {solver_spec}")
+
+
+def _solver_display_name(spec):
+    """Human-readable name for a solver spec."""
+    parts = spec.split("_")
+    name = parts[0]
+    if name == "jacobi":
+        w = parts[1] if len(parts) > 1 else "1"
+        return f"Jacobi(w={w})"
+    elif name == "gs":
+        return "Gauss-Seidel"
+    elif name == "sor":
+        w = parts[1] if len(parts) > 1 else "1.5"
+        return f"SOR(w={w})"
+    elif name == "mg":
+        return "Multigrid"
+    return spec
+
+
+def _build_pde(f_raw, N, dim, device, equation, k2_flat, b_vel, reaction_c):
+    """Build PDE object for iterative comparison (no solve)."""
+    x = torch.linspace(0, 1, N + 1, device=device)[:-1]
+    if dim == 1:
+        a_func = lambda xi: 1.0
+        if equation == "Poisson":
+            return PoissonEquation1D(a_func=a_func, f_func=f_raw,
+                                     boundary="Periodic", x=x, A=None, solve=False, device=device)
+        else:
+            return HelmholtzEquation1D(a_func=a_func, f_func=f_raw, k2=k2_flat,
+                                       boundary="Periodic", x=x, A=None, solve=False, device=device)
+    else:
+        y = torch.linspace(0, 1, N + 1, device=device)[:-1]
+        a_func = lambda xi, yi: 1.0
+        if equation == "Poisson":
+            return PoissonEquation2D(a_func=a_func, f_func=f_raw,
+                                     boundary="Periodic", x=x, y=y, A=None, solve=False, device=device)
+        elif equation == "ConvDiff":
+            return ConvectionDiffusion2D(a_func=a_func, f_func=f_raw,
+                                         b_vec=(b_vel, b_vel),
+                                         boundary="Periodic", x=x, y=y, A=None, solve=False, device=device,
+                                         reaction=reaction_c)
+        else:
+            return HelmholtzEquation2D(a_func=a_func, f_func=f_raw, k2=k2_flat,
+                                       boundary="Periodic", x=x, y=y, A=None, solve=False, device=device)
+
+
 def run_iterative_comparison(deeponet, f_raw, u_sol, N, dim, device,
                              equation="Poisson", k2_flat=None,
                              lstm_router=None, b_vel=20.0,
                              reaction_c=0.0,
-                             max_iters=300, tau=24, snapshot_steps=None):
+                             max_iters=300, tau=24, snapshot_steps=None,
+                             solver_type="jacobi"):
     """
-    Compare convergence of Jacobi only, HINTS, True Greedy, and optionally LSTM Router.
-    Supports 1D/2D Poisson, Helmholtz, and ConvDiff.
+    Compare convergence of classical-only, HINTS, True Greedy, and optionally LSTM Router.
+
+    solver_type can be a single spec ('jacobi', 'gs', 'mg_3') or a comma-separated
+    list for multi-solver routing ('jacobi_0.67,jacobi,gs').  When multiple solvers
+    are specified, the oracle and router choose among all K classical solvers + DeepONet.
+    The classical-only and HINTS baselines always use the first solver in the list.
     """
     if snapshot_steps is None:
         snapshot_steps = []
 
     subtract_mean = equation == "Poisson" or (equation == "ConvDiff" and reaction_c == 0.0)
     n_test = f_raw.shape[0]
-    x = torch.linspace(0, 1, N + 1, device=device)[:-1]
 
-    if dim == 1:
-        a_func = lambda xi: 1.0
-        if equation == "Poisson":
-            pde = PoissonEquation1D(a_func=a_func, f_func=f_raw,
-                                    boundary="Periodic", x=x, A=None, solve=False, device=device)
-        else:
-            pde = HelmholtzEquation1D(a_func=a_func, f_func=f_raw, k2=k2_flat,
-                                      boundary="Periodic", x=x, A=None, solve=False, device=device)
-    else:
-        y = torch.linspace(0, 1, N + 1, device=device)[:-1]
-        a_func = lambda xi, yi: 1.0
-        if equation == "Poisson":
-            pde = PoissonEquation2D(a_func=a_func, f_func=f_raw,
-                                    boundary="Periodic", x=x, y=y, A=None, solve=False, device=device)
-        elif equation == "ConvDiff":
-            pde = ConvectionDiffusion2D(a_func=a_func, f_func=f_raw,
-                                        b_vec=(b_vel, b_vel),
-                                        boundary="Periodic", x=x, y=y, A=None, solve=False, device=device,
-                                        reaction=reaction_c)
-        else:
-            pde = HelmholtzEquation2D(a_func=a_func, f_func=f_raw, k2=k2_flat,
-                                      boundary="Periodic", x=x, y=y, A=None, solve=False, device=device)
+    pde = _build_pde(f_raw, N, dim, device, equation, k2_flat, b_vel, reaction_c)
     A = pde.A
     b = pde.b
 
-    u_prev_jacobi = torch.zeros_like(u_sol)
+    # Build solver list
+    solver_spec_list = [s.strip() for s in solver_type.split(",")]
+    solver_names = [_solver_display_name(s) for s in solver_spec_list] + ["DeepONet"]
+    classical_solvers = [_make_classical_solver(s, pde, device) for s in solver_spec_list]
+    K = len(classical_solvers) + 1   # total solvers including DeepONet
+    ml_idx = len(classical_solvers)   # DeepONet index
+
+    # Per-solver baselines: each classical solver run independently
+    n_classical = len(classical_solvers)
+    u_prev_baselines = [torch.zeros_like(u_sol) for _ in range(n_classical)]
+    errors_baselines = [[] for _ in range(n_classical)]
+    errors_baselines_ps = [[] for _ in range(n_classical)]
+
     u_prev_hints = torch.zeros_like(u_sol)
     u_prev_greedy = torch.zeros_like(u_sol)
 
-    errors_jacobi, errors_hints, errors_greedy = [], [], []
-    errors_jacobi_ps, errors_hints_ps, errors_greedy_ps = [], [], []
+    errors_hints, errors_greedy = [], []
+    errors_hints_ps, errors_greedy_ps = [], []
     greedy_choices, greedy_choices_per_sample = [], []
     snapshots = {}
 
-    # LSTM Router track
     run_router = lstm_router is not None
     u_prev_router = torch.zeros_like(u_sol) if run_router else None
     errors_router = [] if run_router else None
@@ -337,22 +427,23 @@ def run_iterative_comparison(deeponet, f_raw, u_sol, N, dim, device,
     router_choices_per_sample = [] if run_router else None
     hidden_state = None
 
-    jacobi_solver = WeightedJacobiSolver(equation=pde, device=device, weight=1.0)
+    primary_solver = classical_solvers[0]
 
     for t in range(max_iters):
         if t % 50 == 0:
             print(f"  Iteration {t}/{max_iters}")
 
-        # --- Jacobi only ---
-        u_new_jacobi = jacobi_solver.iteration(u_prev_jacobi)
-        if subtract_mean:
-            u_new_jacobi = u_new_jacobi - torch.mean(u_new_jacobi, dim=-1, keepdim=True)
-        err_jacobi = torch.linalg.norm(u_new_jacobi - u_sol, dim=-1)
-        errors_jacobi.append(err_jacobi.mean().item())
-        errors_jacobi_ps.append(err_jacobi.cpu().numpy())
-        u_prev_jacobi = u_new_jacobi
+        # --- Classical-only baselines (one per solver) ---
+        for si, solver in enumerate(classical_solvers):
+            u_new_bl = solver.iteration(u_prev_baselines[si])
+            if subtract_mean:
+                u_new_bl = u_new_bl - torch.mean(u_new_bl, dim=-1, keepdim=True)
+            err_bl = torch.linalg.norm(u_new_bl - u_sol, dim=-1)
+            errors_baselines[si].append(err_bl.mean().item())
+            errors_baselines_ps[si].append(err_bl.cpu().numpy())
+            u_prev_baselines[si] = u_new_bl
 
-        # --- HINTS ---
+        # --- HINTS (first solver + periodic DeepONet) ---
         if (t + 1) % tau == 0:
             residual_hints = b - torch.bmm(A, u_prev_hints.unsqueeze(-1)).squeeze(-1)
             inp_hints, rnorm_hints = _build_deeponet_input(residual_hints, k2_flat, equation)
@@ -362,7 +453,7 @@ def run_iterative_comparison(deeponet, f_raw, u_sol, N, dim, device,
                 correction = correction * rnorm_hints
             u_new_hints = u_prev_hints + correction
         else:
-            u_new_hints = jacobi_solver.iteration(u_prev_hints)
+            u_new_hints = primary_solver.iteration(u_prev_hints)
         if subtract_mean:
             u_new_hints = u_new_hints - torch.mean(u_new_hints, dim=-1, keepdim=True)
         err_hints = torch.linalg.norm(u_new_hints - u_sol, dim=-1)
@@ -370,10 +461,15 @@ def run_iterative_comparison(deeponet, f_raw, u_sol, N, dim, device,
         errors_hints_ps.append(err_hints.cpu().numpy())
         u_prev_hints = u_new_hints
 
-        # --- True greedy (oracle) ---
-        u_jacobi_candidate = jacobi_solver.iteration(u_prev_greedy)
-        if subtract_mean:
-            u_jacobi_candidate = u_jacobi_candidate - torch.mean(u_jacobi_candidate, dim=-1, keepdim=True)
+        # --- True greedy oracle (all K solvers) ---
+        candidates = []
+        candidate_errors = []
+        for solver in classical_solvers:
+            u_cand = solver.iteration(u_prev_greedy)
+            if subtract_mean:
+                u_cand = u_cand - torch.mean(u_cand, dim=-1, keepdim=True)
+            candidates.append(u_cand)
+            candidate_errors.append(torch.linalg.norm(u_cand - u_sol, dim=-1))
 
         residual_greedy = b - torch.bmm(A, u_prev_greedy.unsqueeze(-1)).squeeze(-1)
         inp_greedy, rnorm_greedy = _build_deeponet_input(residual_greedy, k2_flat, equation)
@@ -381,23 +477,25 @@ def run_iterative_comparison(deeponet, f_raw, u_sol, N, dim, device,
             correction_greedy = deeponet(inp_greedy).reshape(u_prev_greedy.shape)
         if rnorm_greedy is not None:
             correction_greedy = correction_greedy * rnorm_greedy
-        u_deeponet_candidate = u_prev_greedy + correction_greedy
+        u_don_cand = u_prev_greedy + correction_greedy
         if subtract_mean:
-            u_deeponet_candidate = u_deeponet_candidate - torch.mean(u_deeponet_candidate, dim=-1, keepdim=True)
+            u_don_cand = u_don_cand - torch.mean(u_don_cand, dim=-1, keepdim=True)
+        candidates.append(u_don_cand)
+        candidate_errors.append(torch.linalg.norm(u_don_cand - u_sol, dim=-1))
 
-        err_jac = torch.linalg.norm(u_jacobi_candidate - u_sol, dim=-1)
-        err_don = torch.linalg.norm(u_deeponet_candidate - u_sol, dim=-1)
-        use_deeponet = (err_don < err_jac)
+        all_candidates = torch.stack(candidates, dim=0)       # (K, B, N^2)
+        all_errors = torch.stack(candidate_errors, dim=0)     # (K, B)
+        best_solver = torch.argmin(all_errors, dim=0)         # (B,)
+        u_new_greedy = all_candidates[best_solver, torch.arange(n_test)]
 
-        u_new_greedy = torch.where(use_deeponet.unsqueeze(-1), u_deeponet_candidate, u_jacobi_candidate)
         err_greedy = torch.linalg.norm(u_new_greedy - u_sol, dim=-1)
         errors_greedy.append(err_greedy.mean().item())
         errors_greedy_ps.append(err_greedy.cpu().numpy())
-        greedy_choices.append(use_deeponet.float().mean().item())
-        greedy_choices_per_sample.append(use_deeponet.cpu().numpy())
+        greedy_choices.append((best_solver == ml_idx).float().mean().item())
+        greedy_choices_per_sample.append(best_solver.cpu().numpy())
         u_prev_greedy = u_new_greedy
 
-        # --- LSTM Router ---
+        # --- LSTM Router (all K solvers) ---
         if run_router:
             residual_router = b - torch.bmm(A, u_prev_router.unsqueeze(-1)).squeeze(-1)
             inp_router, rnorm_router = _build_deeponet_input(residual_router, k2_flat, equation)
@@ -407,100 +505,130 @@ def run_iterative_comparison(deeponet, f_raw, u_sol, N, dim, device,
                 chosen_solver, _, hidden_state = lstm_router.predict(
                     recurrent_input.reshape(bs, -1), hidden_state, with_scores=True)
 
-            use_don_router = (chosen_solver == 1)
+            u_new_router = torch.zeros_like(u_prev_router)
+            for i, solver in enumerate(classical_solvers):
+                mask_i = (chosen_solver == i)
+                if mask_i.any():
+                    u_cand_r = solver.iteration(u_prev_router)
+                    if subtract_mean:
+                        u_cand_r = u_cand_r - torch.mean(u_cand_r, dim=-1, keepdim=True)
+                    u_new_router[mask_i] = u_cand_r[mask_i]
 
-            u_jac_r = jacobi_solver.iteration(u_prev_router)
-            with torch.no_grad():
-                correction_r = deeponet(inp_router).reshape(u_prev_router.shape)
-            if rnorm_router is not None:
-                correction_r = correction_r * rnorm_router
-            u_don_r = u_prev_router + correction_r
+            mask_ml = (chosen_solver == ml_idx)
+            if mask_ml.any():
+                with torch.no_grad():
+                    correction_r = deeponet(inp_router).reshape(u_prev_router.shape)
+                if rnorm_router is not None:
+                    correction_r = correction_r * rnorm_router
+                u_don_r = u_prev_router + correction_r
+                if subtract_mean:
+                    u_don_r = u_don_r - torch.mean(u_don_r, dim=-1, keepdim=True)
+                u_new_router[mask_ml] = u_don_r[mask_ml]
 
-            if subtract_mean:
-                u_jac_r = u_jac_r - torch.mean(u_jac_r, dim=-1, keepdim=True)
-                u_don_r = u_don_r - torch.mean(u_don_r, dim=-1, keepdim=True)
-
-            u_new_router = torch.where(use_don_router.unsqueeze(-1), u_don_r, u_jac_r)
             err_router = torch.linalg.norm(u_new_router - u_sol, dim=-1)
             errors_router.append(err_router.mean().item())
             errors_router_ps.append(err_router.cpu().numpy())
-            router_choices.append(use_don_router.float().mean().item())
-            router_choices_per_sample.append(use_don_router.cpu().numpy())
+            router_choices.append((chosen_solver == ml_idx).float().mean().item())
+            router_choices_per_sample.append(chosen_solver.cpu().numpy())
             u_prev_router = u_new_router
 
         step_num = t + 1
         if step_num in snapshot_steps:
             snapshots[step_num] = {
-                "jacobi": u_prev_jacobi.cpu().clone(),
+                "baseline0": u_prev_baselines[0].cpu().clone(),
                 "hints": u_prev_hints.cpu().clone(),
                 "greedy": u_prev_greedy.cpu().clone(),
             }
             if run_router:
                 snapshots[step_num]["router"] = u_prev_router.cpu().clone()
 
-    return (
-        np.array(errors_jacobi),
-        np.array(errors_hints),
-        np.array(errors_greedy),
-        np.array(greedy_choices),
-        np.array(greedy_choices_per_sample),
-        snapshots,
-        np.array(errors_router) if run_router else None,
-        np.array(router_choices) if run_router else None,
-        np.array(router_choices_per_sample) if run_router else None,
-        np.array(errors_jacobi_ps),
-        np.array(errors_hints_ps),
-        np.array(errors_greedy_ps),
-        np.array(errors_router_ps) if run_router else None,
-    )
+    return {
+        "errors_baselines": [np.array(e) for e in errors_baselines],
+        "errors_baselines_ps": [np.array(e) for e in errors_baselines_ps],
+        "errors_hints": np.array(errors_hints),
+        "errors_greedy": np.array(errors_greedy),
+        "greedy_choices": np.array(greedy_choices),
+        "greedy_choices_per_sample": np.array(greedy_choices_per_sample),
+        "snapshots": snapshots,
+        "errors_router": np.array(errors_router) if run_router else None,
+        "router_choices": np.array(router_choices) if run_router else None,
+        "router_choices_per_sample": np.array(router_choices_per_sample) if run_router else None,
+        "errors_hints_ps": np.array(errors_hints_ps),
+        "errors_greedy_ps": np.array(errors_greedy_ps),
+        "errors_router_ps": np.array(errors_router_ps) if run_router else None,
+        "solver_names": solver_names,
+        "baseline_names": [_solver_display_name(s) for s in solver_spec_list],
+    }
 
 
 def visualize_greedy_routing(greedy_choices_per_sample, save_dir="plots",
-                             label="Oracle Greedy", filename="greedy_routing_pattern.png"):
+                             label="Oracle Greedy", filename="greedy_routing_pattern.png",
+                             solver_names=None):
     """
     Visualize per-sample routing decisions.
-    greedy_choices_per_sample: (max_iters, n_test) bool array, True = DeepONet chosen
+    greedy_choices_per_sample: (max_iters, n_test) int array of solver indices.
+    solver_names: list of solver names corresponding to indices 0..K-1.
     """
     os.makedirs(save_dir, exist_ok=True)
-    choices = greedy_choices_per_sample  # (T, n_test)
+    choices = greedy_choices_per_sample.astype(int)  # (T, n_test)
     T, n_test = choices.shape
+    K = int(choices.max()) + 1
+    ml_idx = K - 1
 
-    deeponet_counts = choices.sum(axis=0)
+    if solver_names is None:
+        solver_names = [f"Solver {i}" for i in range(K - 1)] + ["DeepONet"]
+
+    deeponet_counts = (choices == ml_idx).sum(axis=0)
     sort_idx = np.argsort(-deeponet_counts)
     choices_sorted = choices[:, sort_idx]
 
     fig, axes = plt.subplots(2, 2, figsize=(16, 10),
                              gridspec_kw={"height_ratios": [2, 1], "width_ratios": [3, 1]})
 
+    # --- 1. Heatmap: K-way routing ---
+    from matplotlib.colors import ListedColormap, BoundaryNorm
+    base_colors = plt.cm.tab10.colors
+    cmap_colors = [base_colors[i % 10] for i in range(K)]
+    cmap = ListedColormap(cmap_colors[:K])
+    bounds = np.arange(-0.5, K + 0.5, 1)
+    norm = BoundaryNorm(bounds, cmap.N)
+
     ax_heat = axes[0][0]
-    ax_heat.imshow(choices_sorted.T, aspect="auto", cmap="Greens",
-                   interpolation="nearest", extent=[1, T, n_test - 0.5, -0.5])
+    im = ax_heat.imshow(choices_sorted.T, aspect="auto", cmap=cmap, norm=norm,
+                        interpolation="nearest", extent=[1, T, n_test - 0.5, -0.5])
     ax_heat.set_xlabel("Iteration")
     ax_heat.set_ylabel("Sample (sorted by DeepONet usage)")
-    ax_heat.set_title(f"{label} routing: green = DeepONet, white = Jacobi")
+    ax_heat.set_title(f"{label} routing")
+    cbar = fig.colorbar(im, ax=ax_heat, ticks=np.arange(K), fraction=0.03)
+    cbar.ax.set_yticklabels(solver_names[:K], fontsize=8)
 
     # --- 2. Bar chart: DeepONet calls per sample ---
     ax_bar = axes[0][1]
-    ax_bar.barh(np.arange(n_test), deeponet_counts[sort_idx], color="tab:green", alpha=0.7)
+    ax_bar.barh(np.arange(n_test), deeponet_counts[sort_idx], color=cmap_colors[ml_idx], alpha=0.7)
     ax_bar.set_xlabel("# DeepONet calls")
     ax_bar.set_ylabel("Sample")
     ax_bar.set_ylim(n_test - 0.5, -0.5)
     ax_bar.set_title("Total DeepONet calls")
 
-    # --- 3. Aggregate: fraction using DeepONet at each step ---
+    # --- 3. Per-solver fraction over time ---
     ax_frac = axes[1][0]
-    frac_per_step = choices.mean(axis=1)
-    ax_frac.bar(np.arange(1, T + 1), frac_per_step, color="tab:green", alpha=0.7, width=1.0)
+    iters = np.arange(1, T + 1)
+    for k in range(K):
+        frac_k = (choices == k).mean(axis=1)
+        ax_frac.plot(iters, frac_k, color=cmap_colors[k], alpha=0.8,
+                     label=solver_names[k], linewidth=1.5)
     ax_frac.set_xlabel("Iteration")
-    ax_frac.set_ylabel("Fraction of samples\nchoosing DeepONet")
-    ax_frac.set_title("DeepONet selection rate per iteration")
+    ax_frac.set_ylabel("Fraction of samples")
+    ax_frac.set_title("Solver selection rate per iteration")
     ax_frac.set_xlim(0.5, T + 0.5)
-    ax_frac.set_ylim(0, 1.05)
+    ax_frac.set_ylim(-0.05, 1.05)
+    ax_frac.legend(fontsize=7, loc="upper right")
 
     # --- 4. Histogram: total DeepONet calls distribution ---
     ax_hist = axes[1][1]
-    ax_hist.hist(deeponet_counts, bins=np.arange(-0.5, deeponet_counts.max() + 1.5, 1),
-                 color="tab:green", alpha=0.7, edgecolor="white")
+    max_calls = max(int(deeponet_counts.max()), 1)
+    ax_hist.hist(deeponet_counts, bins=np.arange(-0.5, max_calls + 1.5, 1),
+                 color=cmap_colors[ml_idx], alpha=0.7, edgecolor="white")
     ax_hist.set_xlabel("# DeepONet calls")
     ax_hist.set_ylabel("# Samples")
     ax_hist.set_title("Distribution of DeepONet usage")
@@ -511,17 +639,12 @@ def visualize_greedy_routing(greedy_choices_per_sample, save_dir="plots",
     plt.close(fig)
     print(f"Saved routing pattern to {path}")
 
-    print(f"\n  Per-sample DeepONet usage ({label}):")
-    print(f"    Min calls:    {int(deeponet_counts.min())}")
-    print(f"    Max calls:    {int(deeponet_counts.max())}")
-    print(f"    Mean calls:   {deeponet_counts.mean():.1f}")
-    print(f"    Median calls: {np.median(deeponet_counts):.0f}")
-    print(f"    Std calls:    {deeponet_counts.std():.1f}")
-    unique, counts = np.unique(deeponet_counts.astype(int), return_counts=True)
-    print(f"    Distribution: {dict(zip(unique, counts))}")
-
-    steps_with_deeponet = np.where(choices.any(axis=1))[0] + 1
-    print(f"    Iterations where DeepONet was chosen by >= 1 sample: {steps_with_deeponet.tolist()}")
+    print(f"\n  Per-sample solver usage ({label}):")
+    for k in range(K):
+        k_counts = (choices == k).sum(axis=0)
+        print(f"    {solver_names[k]:20s}: mean={k_counts.mean():.1f}, "
+              f"min={int(k_counts.min())}, max={int(k_counts.max())}")
+    print(f"    DeepONet fraction: {(choices == ml_idx).mean():.4f}")
 
 
 def visualize_solution_snapshots(x, u_sol, snapshots, snapshot_steps,
@@ -606,35 +729,68 @@ def visualize_solution_snapshots(x, u_sol, snapshots, snapshot_steps,
     print(f"Saved error snapshots to {path2}")
 
 
-def plot_convergence(errors_jacobi, errors_hints, errors_greedy, greedy_choices,
+def plot_convergence(errors_baselines, errors_hints, errors_greedy, greedy_choices,
                      max_iters, title_suffix="", save_dir="plots",
-                     errors_router=None, router_choices=None):
-    """Plot convergence histories and greedy routing fractions."""
+                     errors_router=None, router_choices=None,
+                     solver_label="Jacobi",
+                     greedy_choices_per_sample=None, router_choices_per_sample=None,
+                     solver_names=None, baseline_names=None,
+                     max_plot_iters=None, no_hints=False):
+    """Plot convergence histories and routing fractions.
+
+    errors_baselines: list of arrays, one per classical solver baseline.
+    baseline_names: display name for each baseline curve.
+    """
     os.makedirs(save_dir, exist_ok=True)
-    iters = np.arange(1, max_iters + 1)
+    T = max_plot_iters if max_plot_iters is not None else max_iters
+    iters = np.arange(1, T + 1)
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
 
-    ax1.semilogy(iters, errors_jacobi, label="Jacobi Only", linewidth=2)
-    ax1.semilogy(iters, errors_hints, label="HINTS (Jacobi + DeepONet)", linewidth=2)
-    ax1.semilogy(iters, errors_greedy, label="True Greedy (oracle)", linewidth=2, color="green")
+    baseline_colors = plt.cm.Set2.colors
+    if baseline_names is None:
+        baseline_names = [solver_label]
+    for bi, (errs, bname) in enumerate(zip(errors_baselines, baseline_names)):
+        ax1.semilogy(iters, errs[:T], label=f"{bname} Only",
+                     linewidth=1.5, color=baseline_colors[bi % len(baseline_colors)],
+                     alpha=0.8)
+    if not no_hints:
+        ax1.semilogy(iters, errors_hints[:T], label=f"HINTS ({baseline_names[0]} + ML)", linewidth=1.5,
+                     color="orange", linestyle="--")
+    ax1.semilogy(iters, errors_greedy[:T], label="True Greedy (oracle)", linewidth=2.5, color="green")
     if errors_router is not None:
-        ax1.semilogy(iters, errors_router, label="LSTM Router (learned)", linewidth=2,
+        ax1.semilogy(iters, errors_router[:T], label="LSTM Router (learned)", linewidth=2,
                      color="red", linestyle="--")
     ax1.set_xlabel("Iteration")
     ax1.set_ylabel("Mean L2 Error")
     ax1.set_title(f"Convergence (Periodic){title_suffix}")
-    ax1.legend()
+    ax1.legend(fontsize=7)
     ax1.grid(True, alpha=0.3)
 
-    ax2.plot(iters, greedy_choices, color="green", alpha=0.7, label="Oracle Greedy")
-    if router_choices is not None:
-        ax2.plot(iters, router_choices, color="red", alpha=0.7, linestyle="--",
-                 label="LSTM Router")
-        ax2.legend()
+    K = len(solver_names) if solver_names else 2
+    if K > 2 and greedy_choices_per_sample is not None:
+        base_colors = plt.cm.tab10.colors
+        for k in range(K):
+            frac_k = (greedy_choices_per_sample == k).mean(axis=1)[:T]
+            ax2.plot(iters, frac_k, color=base_colors[k % 10], alpha=0.7,
+                     label=f"Oracle: {solver_names[k]}", linewidth=1.5)
+        if router_choices_per_sample is not None:
+            for k in range(K):
+                frac_k = (router_choices_per_sample == k).mean(axis=1)[:T]
+                ax2.plot(iters, frac_k, color=base_colors[k % 10], alpha=0.7,
+                         linestyle="--", label=f"Router: {solver_names[k]}", linewidth=1.0)
+        ax2.legend(fontsize=6, loc="upper right")
+        ax2.set_ylabel("Fraction of samples")
+        ax2.set_title("Per-solver selection rate")
+    else:
+        ax2.plot(iters, greedy_choices[:T], color="green", alpha=0.7, label="Oracle Greedy")
+        if router_choices is not None:
+            ax2.plot(iters, router_choices[:T], color="red", alpha=0.7, linestyle="--",
+                     label="LSTM Router")
+            ax2.legend()
+        ax2.set_ylabel("Fraction choosing DeepONet")
+        ax2.set_title("DeepONet selection rate")
     ax2.set_xlabel("Iteration")
-    ax2.set_ylabel("Fraction choosing DeepONet")
-    ax2.set_title("DeepONet selection rate")
     ax2.set_ylim(-0.05, 1.05)
     ax2.grid(True, alpha=0.3)
 
@@ -669,13 +825,31 @@ def main():
                         help="LSTM router checkpoint name (if provided, also runs router comparison)")
     parser.add_argument("--numerical_solvers", type=str, default="jacobi",
                         help="Numerical solvers string for router checkpoint path")
+    parser.add_argument("--solver_type", type=str, default="jacobi",
+                        help="Classical solver: 'jacobi', 'gs', or 'mg' / 'mg_3'")
+    parser.add_argument("--ml_model", type=str, default="deeponet",
+                        choices=["deeponet", "fno"],
+                        help="ML solver type: 'deeponet' or 'fno'")
+    parser.add_argument("--max_plot_iters", type=int, default=None,
+                        help="Truncate convergence plot at this iteration (default: max_iters)")
+    parser.add_argument("--no_hints", action="store_true",
+                        help="Skip HINTS baseline in plots")
     args = parser.parse_args()
+    if args.max_plot_iters is None:
+        args.max_plot_iters = args.max_iters
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     print(f"Config: dim={args.dim}, equation={args.equation}, grf_mode={args.grf_mode}")
 
-    save_dir = os.path.join(args.save_dir, f"{args.dim}d_{args.equation.lower()}_{args.grf_mode}")
+    if "," in args.solver_type:
+        solver_suffix = "_multi_" + args.solver_type.replace(",", "_")
+    elif args.solver_type != "jacobi":
+        solver_suffix = f"_{args.solver_type}"
+    else:
+        solver_suffix = ""
+    ml_suffix = f"_{args.ml_model}" if args.ml_model != "deeponet" else ""
+    save_dir = os.path.join(args.save_dir, f"{args.dim}d_{args.equation.lower()}_{args.grf_mode}{solver_suffix}{ml_suffix}")
     os.makedirs(save_dir, exist_ok=True)
 
     with open("args/deeponet_args.json") as f:
@@ -700,9 +874,12 @@ def main():
         f_raw_flat = f_raw
         k2_flat = k2_raw
 
-    # 2. Load DeepONet
-    print("\n=== Step 2: Load trained DeepONet ===")
-    deeponet = load_deeponet(args.ckp_dir, args.model_name, N, args.dim, args.equation, device)
+    # 2. Load ML model
+    print(f"\n=== Step 2: Load trained {args.ml_model.upper()} ===")
+    if args.ml_model == "fno":
+        deeponet = load_fno(args.ckp_dir, args.model_name, N, args.dim, args.equation, device)
+    else:
+        deeponet = load_deeponet(args.ckp_dir, args.model_name, N, args.dim, args.equation, device)
 
     # 3. Evaluate DeepONet
     print("\n=== Step 3: Evaluate DeepONet ===")
@@ -727,7 +904,10 @@ def main():
     print("\n=== Step 5: Iterative solver comparison ===")
     snapshot_steps = [1, 5, 10, 25, 50, 75, 100, 150, 200, 300]
     snapshot_steps = [s for s in snapshot_steps if s <= args.max_iters]
-    strategies = "Jacobi, HINTS, True Greedy"
+    specs = [s.strip() for s in args.solver_type.split(",")]
+    solver_label = _solver_display_name(specs[0])
+    n_solvers = len(specs) + 1
+    strategies = f"{solver_label} only, HINTS, True Greedy ({n_solvers} solvers)"
     if lstm_router:
         strategies += ", LSTM Router"
     print(f"  Running {args.max_iters} iterations of {strategies}...")
@@ -739,19 +919,30 @@ def main():
         reaction_c=args.reaction_c,
         max_iters=args.max_iters, tau=args.tau,
         snapshot_steps=snapshot_steps,
+        solver_type=args.solver_type,
     )
-    (errors_jacobi, errors_hints, errors_greedy, greedy_choices, greedy_choices_per_sample,
-     snapshots, errors_router, router_choices, router_choices_per_sample,
-     errors_jacobi_ps, errors_hints_ps, errors_greedy_ps, errors_router_ps) = result
+    errors_baselines = result["errors_baselines"]
+    errors_hints = result["errors_hints"]
+    errors_greedy = result["errors_greedy"]
+    greedy_choices = result["greedy_choices"]
+    greedy_choices_per_sample = result["greedy_choices_per_sample"]
+    snapshots = result["snapshots"]
+    errors_router = result["errors_router"]
+    router_choices = result["router_choices"]
+    router_choices_per_sample = result["router_choices_per_sample"]
+    solver_names = result["solver_names"]
+    baseline_names = result["baseline_names"]
 
     print(f"\n  Final errors after {args.max_iters} iterations:")
-    print(f"    Jacobi only:    {errors_jacobi[-1]:.6e}")
+    for bi, bname in enumerate(baseline_names):
+        print(f"    {bname} only: {errors_baselines[bi][-1]:.6e}")
     print(f"    HINTS:          {errors_hints[-1]:.6e}")
     print(f"    True Greedy:    {errors_greedy[-1]:.6e}")
     if errors_router is not None:
         print(f"    LSTM Router:    {errors_router[-1]:.6e}")
     print(f"\n  AUC (sum of errors, lower = better):")
-    print(f"    Jacobi only:    {errors_jacobi.sum():.6e}")
+    for bi, bname in enumerate(baseline_names):
+        print(f"    {bname} only: {errors_baselines[bi].sum():.6e}")
     print(f"    HINTS:          {errors_hints.sum():.6e}")
     print(f"    True Greedy:    {errors_greedy.sum():.6e}")
     if errors_router is not None:
@@ -763,10 +954,12 @@ def main():
     # 6. Visualize routing patterns
     print("\n=== Step 6: Routing patterns ===")
     visualize_greedy_routing(greedy_choices_per_sample, save_dir=save_dir,
-                             label="Oracle Greedy", filename="greedy_routing_pattern.png")
+                             label="Oracle Greedy", filename="greedy_routing_pattern.png",
+                             solver_names=solver_names)
     if router_choices_per_sample is not None:
         visualize_greedy_routing(router_choices_per_sample, save_dir=save_dir,
-                                 label="LSTM Router", filename="router_routing_pattern.png")
+                                 label="LSTM Router", filename="router_routing_pattern.png",
+                                 solver_names=solver_names)
 
     # 7. Visualize solution snapshots (1D only for now)
     if args.dim == 1:
@@ -777,9 +970,14 @@ def main():
     # 8. Plot convergence
     print("\n=== Step 8: Plot convergence ===")
     title_suffix = f": {args.dim}D {args.equation}"
-    plot_convergence(errors_jacobi, errors_hints, errors_greedy, greedy_choices,
+    plot_convergence(errors_baselines, errors_hints, errors_greedy, greedy_choices,
                      args.max_iters, title_suffix=title_suffix, save_dir=save_dir,
-                     errors_router=errors_router, router_choices=router_choices)
+                     errors_router=errors_router, router_choices=router_choices,
+                     solver_label=solver_label,
+                     greedy_choices_per_sample=greedy_choices_per_sample,
+                     router_choices_per_sample=router_choices_per_sample,
+                     solver_names=solver_names, baseline_names=baseline_names,
+                     max_plot_iters=args.max_plot_iters, no_hints=args.no_hints)
 
     print("\nDone! Check the plots/ directory for visualizations.")
 

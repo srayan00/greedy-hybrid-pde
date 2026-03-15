@@ -5,7 +5,7 @@ import argparse
 from ml_solver import DeepONet, FNOforPDE
 from data_generation import  GaussianRandomFieldHierarchical, PDEDataset2, GaussianRandomField
 from pde import PoissonEquation1D, PoissonEquation2D, HelmholtzEquation1D, HelmholtzEquation2D, ConvectionDiffusion2D
-from numerical_solver import WeightedJacobiSolver, MultigridSolver, GaussSeidelSolver
+from numerical_solver import WeightedJacobiSolver, MultigridSolver, GaussSeidelSolver, SORSolver
 from hybrid_solver import LSTMGreedyRouter, HybridSolver
 
 from trainer import Trainer, EarlyStopping, ApproxGreedyRouterLoss, ScheduledSampler, ScheduledBPTT
@@ -33,6 +33,8 @@ parser.add_argument("--args_file", type=str, default=None,
                     help="Override path to LSTM args JSON file")
 parser.add_argument("--k2_mode", type=str, default="exp", choices=["exp", "mild", "const"],
                     help="Helmholtz k2 pushforward: 'exp', 'mild', or 'const'")
+parser.add_argument("--joint", action="store_true",
+                    help="Jointly train FNO and router (default: FNO is frozen)")
 
 
 if __name__ == "__main__":
@@ -104,6 +106,7 @@ if __name__ == "__main__":
     print("Creating Data")
     n_train = 512
     n_val = 32
+    needs_mean_zero = equation == "Poisson" or (equation == "ConvDiff" and args.reaction_c == 0.0)
     if os.path.exists(f"{data_dir}/{data_name}router_train_data_{equation}_{boundary}_{dim}d_{in_channels}c_{n_train}s.pt") and os.path.exists(f"{data_dir}/{data_name}router_val_data_{equation}_{boundary}_{dim}d_{in_channels}c_{n_val}s.pt"):
         print(f"Loading data from {data_dir}...")
         with open(f"{data_dir}/{data_name}router_train_data_{equation}_{boundary}_{dim}d_{in_channels}c_{n_train}s.pt", "rb") as f:
@@ -252,7 +255,8 @@ if __name__ == "__main__":
         ml_ckp = torch.load(ml_ckp_path, map_location=device, weights_only=False)
     
     if ml_ckp:
-        ml_model.load_state_dict(ml_ckp["model"])
+        state = {k: v for k, v in ml_ckp["model"].items() if not k.startswith("_")}
+        ml_model.load_state_dict(state)
     
     if model_type == "lstm":
         if dim == 1:
@@ -321,6 +325,9 @@ if __name__ == "__main__":
             list_of_solvers.append(WeightedJacobiSolver(pde, device, weight))
         elif split[0] == "gs":
             list_of_solvers.append(GaussSeidelSolver(pde, device))
+        elif split[0] == "sor":
+            omega = float(split[1]) if len(split) > 1 else 1.5
+            list_of_solvers.append(SORSolver(pde, omega=omega, device=device))
         elif split[0] == "mg":
             if len(split) > 1:
                 levels = int(split[1])
@@ -392,7 +399,7 @@ if __name__ == "__main__":
             scheduled_bptt.load_state_dict(ckp["scheduler_bptt"])
             print("Scheduled Sampler loaded", flush=True)
 
-    loss_fn = ApproxGreedyRouterLoss(centered=(needs_mean_zero and boundary == "Periodic"), normalized=False)
+    loss_fn = ApproxGreedyRouterLoss(centered=(needs_mean_zero and boundary == "Periodic"), normalized=True, error_clamp=1e2)
 
     start_epoch = 0 if ckp is None else ckp["epoch"] + 1
     print("Starting training...")
@@ -412,7 +419,8 @@ if __name__ == "__main__":
                       max_norm=arguments["max_norm"],
                       early_stopper=early_stopper,
                       warmup_epochs=arguments["warmup_epochs_es"],
-                      lr_scheduler=[scheduler_wu, scheduler_re, scheduler_step])
+                      lr_scheduler=[scheduler_wu, scheduler_re, scheduler_step],
+                      joint=args.joint)
     if ckp:
         print("loading losses")
         train_loss = ckp["train_losses"]

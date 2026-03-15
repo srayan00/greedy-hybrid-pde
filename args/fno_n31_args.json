@@ -1,0 +1,17 @@
+{
+    "model_type": "FNO",
+    "trunc_mode": 12,
+    "hidden_size": 64,
+    "num_layers": 4,
+    "batch_size": 256,
+    "learning_rate": 1e-3,
+    "weight_decay": 5e-3,
+    "warmup_epochs_es": 1,
+    "patience": 10000,
+    "min_delta": 1e-9,
+    "epochs": 10000,
+    "max_norm": 1.0,
+    "N": 31,
+    "n_train": 10000,
+    "n_val": 2000
+}
