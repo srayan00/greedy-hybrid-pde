@@ -13,10 +13,22 @@ class MSEalphaepsilonLoss(torch.nn.Module):
         denominator = torch.abs(targets) ** self.alpha + self.epsilon
         adjusted_error = squared_error / denominator
         return torch.mean(adjusted_error)
-        # mse_loss = torch.mean((predictions - targets) ** 2)
-        # target_norm = torch.sum(targets ** 2)
-        # adjusted_loss = mse_loss / (target_norm**self.alpha + self.epsilon)
-        # return adjusted_loss
+
+
+class RelativeMSELoss(torch.nn.Module):
+    """Sample-level relative MSE: mean over batch of ||pred - target||^2 / max(||target||^2, floor).
+    Each sample contributes equally regardless of magnitude. The floor prevents
+    near-zero-norm samples from dominating the loss."""
+    def __init__(self, floor: float = 1e-6):
+        super().__init__()
+        self.floor = floor
+
+    def forward(self, predictions, targets):
+        flat_pred = predictions.reshape(predictions.shape[0], -1)
+        flat_tgt = targets.reshape(targets.shape[0], -1)
+        per_sample_mse = torch.sum((flat_pred - flat_tgt) ** 2, dim=-1)
+        per_sample_norm = torch.clamp(torch.sum(flat_tgt ** 2, dim=-1), min=self.floor)
+        return torch.mean(per_sample_mse / per_sample_norm)
 
 class ApproxGreedyRouterLoss(torch.nn.Module):
     def __init__(self, centered = True, normalized = False,*args, **kwargs) -> None:
@@ -25,12 +37,7 @@ class ApproxGreedyRouterLoss(torch.nn.Module):
         self.normalized = normalized
 
     def forward(self, prediction, target, reduction = "mean"):
-        print(f"Finiteness logits {torch.isfinite(prediction["routing_scores"]).all()}")
-        print(f"Nans logits {torch.isnan(prediction["routing_scores"]).all()}")
         log_scores = -1*torch.nn.functional.log_softmax(prediction["routing_scores"], dim = -1)
-        print(f"Finiteness logscores {torch.isfinite(log_scores).all()}")
-        print(f"Nanslog scores {torch.isnan(log_scores).all()}")
-        # log_scores = torch.log(1/probs) 
         if self.centered:
             expert_predictions = prediction["complete_expert_predictions"] - torch.mean(prediction["complete_expert_predictions"], dim=-1, keepdim=True)
         else: 
@@ -39,8 +46,6 @@ class ApproxGreedyRouterLoss(torch.nn.Module):
         weights = torch.sum(errors_expert, dim = -1, keepdim=True) - errors_expert
         if self.normalized:
             weights = weights/torch.sum(weights, dim = -1, keepdim=True)
-        print(f"Finiteness of weights{torch.isfinite(weights).all()}")
-        print(f"Nans of weights {torch.isnan(weights).all()}")
         loss_vec = torch.sum(log_scores * weights, dim = -1).transpose(1, 0)
         loss_vec = torch.mean(loss_vec, dim = -1)
         if reduction == "none":
@@ -236,15 +241,11 @@ class Trainer:
         u0 = None
         total_loss = 0
         for it in range(0, self.model.max_iters, self.scheduled_bptt.current_bptt):
-            print(f"on iteration {it} with BPTT: {self.scheduled_bptt.current_bptt}")
-            # Zero gradient todo: make it none
             self.optimizer.zero_grad()
-            # Automatic mixed precision         
             with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=False):
-            # Make Prediction and observe loss
                 channels = source.shape[1]
                 f = source[:, -1, :].reshape(bs, -1)
-                if self.model.equation.equation == "Poisson":
+                if self.model.equation.equation in ("Poisson", "ConvDiff", "Reaction"):
                     if channels > 1:
                         a = source[:, 0, :].reshape(bs, -1)
                     else:
@@ -258,66 +259,43 @@ class Trainer:
                         a = None
 
                 if self.scheduled_sampler:
-                    print(f"Scheduled sampler prob {self.scheduled_sampler.current_prob}")
                     output = self.model(f, a, k2, u0, True, True, self.scheduled_sampler.current_prob, targets.reshape(bs, -1), hidden_state_for_recurrent, self.scheduled_bptt.current_bptt)
                 else:
                     output = self.model(f, a, k2, u0, True, True, 1.0, targets.reshape(bs, -1), hidden_state_for_recurrent, self.scheduled_bptt.current_bptt)
                 loss = self.loss_fn(output, targets.reshape(bs, -1))
 
-            # Automatic mixed precision backward pass
             if self.scaler is not None:
                 self.scaler.scale(loss).backward()
-                print("Backward pass")
-                # Gradient clipping
                 self.scaler.unscale_(self.optimizer)
             else:
-                print("Backward Pass")
                 loss.backward()
         
-            # Clip gradients
             if self.parallel:
                 torch.nn.utils.clip_grad_norm_(self.model.module.parameters(), max_norm = self.max_norm)
             else:
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm = self.max_norm)
-            print(f"Gradient norms of all parameters{self._compute_gradient_norm()}")
 
-            # Optimizer step
             if self.scaler is not None:
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
             else:
-                print("Optimizer Step")
                 self.optimizer.step()
             total_loss += loss.item()
             hidden_state_for_recurrent = self.model.detach_hidden(output["hidden_state_for_recurrent"])
             # Detach to truncate graph between BPTT segments
             u0 = output["predictions"][-1].detach()
-        if isinstance(self.model, DeepONet):
-            print(self.model.branch_net.mlp.linear_layer_0.bias)
-        elif isinstance(self.model, FNOforPDE):
-            print(self.model.fno.fno_blocks.convs[0].weight)
-        if isinstance(self.model, HybridSolver):
-            print(self.model.suite_solver[-1].branch_net.mlp.linear_layer_0.bias)
         if torch.isnan(loss):
-            print("Loss is NaN")
             raise ValueError("Loss is NaN")
         return total_loss
     
     def _run_batch(self, source, targets, epoch):
         bs = source.shape[0]
-        # Zero gradient todo: make it none
         self.optimizer.zero_grad()
-        # Automatic mixed precision 
-        if epoch == 0:
-            scaling = False
-        else:
-            scaling = True
         with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=False):
-        # Make Prediction and observe loss
             if isinstance(self.model, HybridSolver):
                 channels = source.shape[1]
                 f = source[:, -1, :].reshape(bs, -1)
-                if self.model.equation.equation == "Poisson":
+                if self.model.equation.equation in ("Poisson", "ConvDiff", "Reaction"):
                     if channels > 1:
                         a = source[:, 0, :].reshape(bs, -1)
                     else:
@@ -329,53 +307,32 @@ class Trainer:
                         a = source[:, 0, :].reshape(bs, -1)
                     else:
                         a = None
-                if self.scheduled_sampler: #and self.scheduled_bptt is None:
-                    print(f"Scheduled sampler prob {self.scheduled_sampler.current_prob}")
+                if self.scheduled_sampler:
                     output = self.model(f, a, k2, None, True, True, self.scheduled_sampler.current_prob, targets.reshape(bs, -1))
-                # elif self.scheduled_bptt:
-                #     hidden_state_for_recurrent = None
-                #     u0 = None
-                #     for _ in range(0, self.model.max_iters, self.scheduled_bptt.current_bptt):
-
-
                 else:
                     output = self.model(f, a, k2, None, True, True, 1.0, targets.reshape(bs, -1))
                 loss = self.loss_fn(output, targets.reshape(bs, -1))
             if isinstance(self.model, MLSolver):
                 output = self.model(source)
-                print(f"shape of output is {output.shape} and shape of target is {targets.shape}")
                 loss = self.loss_fn(output, targets)
 
-        # Automatic mixed precision backward pass
         if self.scaler is not None:
             self.scaler.scale(loss).backward()
-            print("Backward pass")
-            # Gradient clipping
             self.scaler.unscale_(self.optimizer)
         else:
-            print("Backward Pass")
             loss.backward()
         
-        # Clip gradients
         if self.parallel:
             torch.nn.utils.clip_grad_norm_(self.model.module.parameters(), max_norm = self.max_norm)
         else:
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm = self.max_norm)
-        print(f"Gradient norms of all parameters{self._compute_gradient_norm()}")
 
-        # Optimizer step
         if self.scaler is not None:
             self.scaler.step(self.optimizer)
             self.scaler.update()
         else:
-            print("Optimizer Step")
             self.optimizer.step()
-        if isinstance(self.model, DeepONet):
-            print(self.model.branch_net.mlp.linear_layer_0.bias)
-        elif isinstance(self.model, FNOforPDE):
-            print(self.model.fno.fno_blocks.convs[0].weight)
         if torch.isnan(loss):
-            print("Loss is NaN")
             raise ValueError("Loss is NaN")
         return loss.item()
     
@@ -383,7 +340,7 @@ class Trainer:
         train_loss = 0
         print(f"[GPU{self.gpu_id}] Epoch {epoch} | Steps: {len(self.train_data)}")
         for batch_idx, info in enumerate(self.train_data):
-            torch.autograd.set_detect_anomaly(True)
+            torch.autograd.set_detect_anomaly(False)
             if isinstance(self.model, MLSolver):
                 source = info[0].to(self.gpu_id)
                 targets = info[1].to(self.gpu_id)
@@ -481,7 +438,7 @@ class Trainer:
                     bs = source.shape[0]
                     channels = source.shape[1]
                     f = source[:, -1, :].reshape(bs, -1)
-                    if self.model.equation.equation == "Poisson":
+                    if self.model.equation.equation in ("Poisson", "ConvDiff", "Reaction"):
                         if channels > 1:
                             a = source[:, 0, :].reshape(bs, -1)
                         else:

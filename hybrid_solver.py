@@ -133,8 +133,8 @@ class HybridSolver(torch.nn.Module):
                 if not isinstance(suite_solver[i], (NumericalSolver, MLSolver)):
                     print(f"invalid index{i}")
                     raise TypeError("Each solver in suite_solver must be an instance of NumericalSolver or MLSolver.")
-        if equation.equation not in ["Helmholtz", "Poisson"]:
-            raise ValueError("Unsupported equation type. Supported types are 'Poisson1D', 'Poisson2D', 'Helmholtz1D', 'Helmholtz2D.")
+        if equation.equation not in ["Helmholtz", "Poisson", "ConvDiff", "Reaction"]:
+            raise ValueError("Unsupported equation type. Supported: Poisson, Helmholtz, ConvDiff, Reaction.")
         self.N = N
         self.dim = dim
         self.in_channels = in_channels
@@ -191,10 +191,16 @@ class HybridSolver(torch.nn.Module):
         equations = self.prepare_equations(f, a, k2)
         
         for iteration_num in range(start_iter, end_iters):
-            if iteration_num % 25 == 0:
-                print(f"Iteration {iteration_num+1}/{self.max_iters}")
             residual = equations.compute_residual(u_prev)
-            inputs = self.prepare_inputs(residual.unsqueeze(1), a, k2)
+            # For Helmholtz, normalize residual to unit norm (DeepONet trained on unit-norm f).
+            # Store the norms to scale ML solver output back after prediction.
+            if self.equation.equation == "Helmholtz":
+                res_norms = torch.linalg.norm(residual, dim=-1).clamp(min=1e-15)
+                residual_for_input = residual / res_norms.unsqueeze(-1)
+            else:
+                res_norms = None
+                residual_for_input = residual
+            inputs = self.prepare_inputs(residual_for_input.unsqueeze(1), a, k2)
             if self.router.type in ["HINTS", "Constant"]:
                 use_ml_solver, scores = self.router.predict(torch.tensor([iteration_num]).repeat(bs), with_scores=True)
             elif self.router.type == "LSTMGreedy":
@@ -207,7 +213,12 @@ class HybridSolver(torch.nn.Module):
                 all_expert_predictions = ()
                 for i in range(len(self.suite_solver)):
                     if isinstance(self.suite_solver[i], MLSolver):
-                        all_expert_predictions += (u_prev +  self.suite_solver[i](inputs),) if self.dim == 1 else (u_prev + self.suite_solver[i](inputs).reshape(bs, -1),)
+                        ml_out = self.suite_solver[i](inputs)
+                        if self.dim != 1:
+                            ml_out = ml_out.reshape(bs, -1)
+                        if res_norms is not None:
+                            ml_out = ml_out * res_norms.unsqueeze(-1)
+                        all_expert_predictions += (u_prev + ml_out,)
                     else:
                         self.suite_solver[i].equation = equations
                         expert_predictions = self.suite_solver[i].iteration(u_prev)
@@ -216,16 +227,22 @@ class HybridSolver(torch.nn.Module):
                 predictionsz = torch.zeros_like(u_prev)
                 for i in range(len(self.suite_solver)):
                     if isinstance(self.suite_solver[i], MLSolver):
-                        u_new_i = u_prev[use_ml_solver == i] + self.suite_solver[i](inputs[use_ml_solver == i]) if self.dim == 1 else u_prev[use_ml_solver == i] + self.suite_solver[i](inputs[use_ml_solver == i]).reshape((use_ml_solver == i).sum(), -1)
-                        predictionsz[use_ml_solver == i] = u_new_i
+                        mask_i = (use_ml_solver == i)
+                        if mask_i.any():
+                            ml_out = self.suite_solver[i](inputs[mask_i])
+                            if self.dim != 1:
+                                ml_out = ml_out.reshape(mask_i.sum(), -1)
+                            if res_norms is not None:
+                                ml_out = ml_out * res_norms[mask_i].unsqueeze(-1)
+                            predictionsz[mask_i] = u_prev[mask_i] + ml_out
                     else:
                         self.suite_solver[i].equation = equations
                         u_new_i = self.suite_solver[i].iteration(u_prev, use_ml_solver == i)
                         predictionsz = u_new_i
             if training:
                 all_expert_predictions = torch.stack(all_expert_predictions, dim=0)
-                # Zero center if it's periodic poisson to prevent constants from dominating the error
-                if self.equation.equation == "Poisson" and self.boundary == "Periodic":
+                has_null_space = self.equation.equation == "Poisson" or (self.equation.equation == "ConvDiff" and getattr(self.equation, 'reaction', 0.0) == 0.0)
+                if has_null_space and self.boundary == "Periodic":
                     all_expert_predictions = all_expert_predictions - torch.mean(all_expert_predictions, dim=2, keepdim=True)
                 error = torch.linalg.norm(all_expert_predictions - ground_truth, dim=2)
                 best_solver = torch.argmin(error, dim=0)
@@ -265,13 +282,19 @@ class HybridSolver(torch.nn.Module):
             a_func = a if a is not None else lambda x, y: 1.0
         f_func = f
         k2_func = k2 if self.equation.equation == "Helmholtz" else None
+
+        cached_A = getattr(self, '_cached_A', None)
+        use_cache = (a is None) and (k2 is None) and (cached_A is not None)
+
+        A_arg = cached_A if use_cache else None
+
         if self.dim == 1:
             if self.equation.equation == "Poisson":
                 equation = self.equation.__class__(a_func = a_func,
                                                 f_func = f_func,
                                                 boundary = self.boundary, 
-                                                x = self.xs,#.numpy(), 
-                                                A = None,
+                                                x = self.xs,
+                                                A = A_arg,
                                                 solve = False,
                                                 device = f.device)
             else:
@@ -279,8 +302,8 @@ class HybridSolver(torch.nn.Module):
                                             f_func = f_func,
                                             k2 = k2_func,
                                             boundary = self.boundary, 
-                                            x = self.xs,#.numpy(), 
-                                            A = None,
+                                            x = self.xs,
+                                            A = A_arg,
                                             solve = False,
                                             device = f.device)
         else:
@@ -290,9 +313,30 @@ class HybridSolver(torch.nn.Module):
                                                 boundary = self.boundary,
                                                 x = self.xs,
                                                 y = self.ys,
-                                                A = None,
+                                                A = A_arg,
                                                 solve = False,
                                                 device = f.device)
+            elif self.equation.equation == "ConvDiff":
+                equation = self.equation.__class__(a_func = a_func,
+                                               f_func = f_func,
+                                               b_vec = self.equation.b_vec,
+                                               boundary = self.boundary,
+                                               x = self.xs,
+                                               y = self.ys,
+                                               A = A_arg,
+                                               solve = False,
+                                               device = f.device,
+                                               reaction = self.equation.reaction)
+            elif self.equation.equation == "Reaction":
+                equation = self.equation.__class__(a_func = a_func,
+                                               f_func = f_func,
+                                               reaction = self.equation.reaction,
+                                               boundary = self.boundary,
+                                               x = self.xs,
+                                               y = self.ys,
+                                               A = A_arg,
+                                               solve = False,
+                                               device = f.device)
             else:
                 equation = self.equation.__class__(a_func = a_func,
                                                f_func = f_func,
@@ -300,13 +344,17 @@ class HybridSolver(torch.nn.Module):
                                                boundary = self.boundary,
                                                x = self.xs,
                                                y = self.ys,
-                                               A = None,
+                                               A = A_arg,
                                                solve = False,
                                                device = f.device)
+
+        if (a is None) and (k2 is None) and (cached_A is None):
+            self._cached_A = equation.A
+
         return equation                    
 
     def prepare_inputs(self, f, a, k2 = None):
-        if self.equation.equation == "Poisson":
+        if self.equation.equation in ("Poisson", "ConvDiff", "Reaction"):
             if a is None:
                 return f
             return torch.cat((a.unsqueeze(1), f), dim=1)

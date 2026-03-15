@@ -4,7 +4,7 @@ import numpy as np
 import argparse
 from ml_solver import DeepONet, FNOforPDE
 from data_generation import  GaussianRandomFieldHierarchical, PDEDataset2, GaussianRandomField
-from pde import PoissonEquation1D, PoissonEquation2D, HelmholtzEquation1D, HelmholtzEquation2D
+from pde import PoissonEquation1D, PoissonEquation2D, HelmholtzEquation1D, HelmholtzEquation2D, ConvectionDiffusion2D, ReactionDiffusion2D
 from numerical_solver import WeightedJacobiSolver, MultigridSolver, GaussSeidelSolver
 from hybrid_solver import LSTMGreedyRouter, HybridSolver
 
@@ -19,12 +19,20 @@ parser.add_argument('--dim', type=int, default=1, help='Dimension of the PDE: 1 
 parser.add_argument("--boundary", type=str, default="Periodic", help="Boundary condition: Dirichlet or Periodic")
 parser.add_argument("--in_channels", type=int, default=1, help="Number of input channels")
 parser.add_argument("--extra", type=int, default=200, help="Extra data samples to generate beyond n_train + n_val")
-parser.add_argument("--equation", type=str, default="Poisson", help="PDE to solve: Poisson")
+parser.add_argument("--equation", type=str, default="Poisson", help="PDE to solve: Poisson, Helmholtz, or ConvDiff")
+parser.add_argument("--b_vel", type=float, default=20.0, help="Advection velocity for ConvDiff (b_vec=(b_vel,b_vel))")
+parser.add_argument("--reaction_c", type=float, default=0.0, help="Reaction coefficient (used by Reaction and optionally ConvDiff equations)")
 parser.add_argument("--ckp_dir", type=str, default="./checkpoints", help="Directory to save checkpoints")
 parser.add_argument("--ml_model_name", type=str, default="test", help="ml_model checkpoint name")
 parser.add_argument("--model_name", type=str, default="", help="Model checkpoint name")
 parser.add_argument('--data_name', type=str, default='', help='Name of the dataset to use (if not provided, a new dataset will be generated)')
 parser.add_argument("--data_dir", type=str, default="./data", help="Directory to save/load data")
+parser.add_argument("--grf_mode", type=str, default="fixed", choices=["fixed", "hierarchical"],
+                    help="GRF mode: 'fixed' or 'hierarchical'")
+parser.add_argument("--args_file", type=str, default=None,
+                    help="Override path to LSTM args JSON file")
+parser.add_argument("--k2_mode", type=str, default="exp", choices=["exp", "mild", "const"],
+                    help="Helmholtz k2 pushforward: 'exp', 'mild', or 'const'")
 
 
 if __name__ == "__main__":
@@ -49,8 +57,8 @@ if __name__ == "__main__":
 
     if boundary not in ["Periodic", "Dirichlet"]:
         raise ValueError("Boundary condition must be either 'Dirichlet' or 'Periodic'")
-    if equation not in ["Poisson", "Helmholtz"]:
-        raise ValueError("Currently only Poisson/Helmholtz equation is supported")
+    if equation not in ["Poisson", "Helmholtz", "ConvDiff", "Reaction"]:
+        raise ValueError("Currently only Poisson, Helmholtz, ConvDiff, and Reaction are supported")
     if ml_model_type not in ["deeponet", "fno"]:
         raise ValueError("Model must be either 'deeponet' or 'fno'")
     if dim not in [1, 2]:
@@ -74,6 +82,9 @@ if __name__ == "__main__":
         print(f"Loading training arguments from {args_path}...")
         with open(args_path, "r") as f:
             arguments = json.load(f)
+    elif args.args_file is not None:
+        with open(args.args_file, "r") as f:
+            arguments = json.load(f)
     else:
         with open(f"args/{model_type}_args.json", "r") as f:
             arguments = json.load(f)
@@ -91,8 +102,8 @@ if __name__ == "__main__":
         json.dump(arguments, f)
     # Creating/Loading Data
     print("Creating Data")
-    n_train = 512# arguments["n_train"]
-    n_val = 32 # arguments["n_val"]
+    n_train = 512
+    n_val = 32
     if os.path.exists(f"{data_dir}/{data_name}router_train_data_{equation}_{boundary}_{dim}d_{in_channels}c_{n_train}s.pt") and os.path.exists(f"{data_dir}/{data_name}router_val_data_{equation}_{boundary}_{dim}d_{in_channels}c_{n_val}s.pt"):
         print(f"Loading data from {data_dir}...")
         with open(f"{data_dir}/{data_name}router_train_data_{equation}_{boundary}_{dim}d_{in_channels}c_{n_train}s.pt", "rb") as f:
@@ -103,23 +114,49 @@ if __name__ == "__main__":
         with open(f"args/grf_args.json", "r") as f:
             arguments_grf = json.load(f)
         
-        grf = GaussianRandomField(num_samples=arguments["N"],
-                                  dim=dim,
-                                  alpha=arguments_grf["alpha"],
-                                  beta=arguments_grf["beta"],
-                                  gamma=arguments_grf["gamma"],
-                                  device=device, seed=34)
-        # grf = GaussianRandomFieldHierarchical(num_samples=arguments["N"],
-        #                                       dim=dim,
-        #                                       alpha_min=arguments_grf["alpha_min"],
-        #                                       alpha_max=arguments_grf["alpha_max"],
-        #                                       beta_min=arguments_grf["beta_min"],
-        #                                       beta_max=arguments_grf["beta_max"],
-        #                                       gamma_list=arguments_grf["gamma_list"],
-        #                                       device=device, seed=34)
-        pushforward = None if boundary == "Dirichlet" else lambda x: x - torch.mean(x)
-        f = grf.generate(n_train + n_val + extra, pushfoward=pushforward) if equation == "Poisson" else grf.generate(n_train + n_val + extra, pushfoward=None)
-        k2 = grf.generate(n_train + n_val + extra)
+        if args.grf_mode == "hierarchical":
+            grf = GaussianRandomFieldHierarchical(num_samples=arguments["N"],
+                                                  dim=dim,
+                                                  alpha_min=0.01, alpha_max=100.0,
+                                                  beta_min=0.1, beta_max=1000.0,
+                                                  gamma_list=[0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0],
+                                                  device=device, seed=34)
+        else:
+            grf = GaussianRandomField(num_samples=arguments["N"],
+                                      dim=dim,
+                                      alpha=arguments_grf["alpha"],
+                                      beta=arguments_grf["beta"],
+                                      gamma=arguments_grf["gamma"],
+                                      device=device, seed=34)
+        needs_mean_zero = equation == "Poisson" or (equation == "ConvDiff" and args.reaction_c == 0.0)
+
+        if boundary == "Dirichlet":
+            pushforward = None
+        elif dim == 1:
+            pushforward = lambda x: x - torch.mean(x, dim=-1, keepdim=True)
+        else:
+            pushforward = lambda x: x - torch.mean(x, dim=(-2, -1), keepdim=True)
+        if needs_mean_zero:
+            f = grf.generate(n_train + n_val + extra, pushfoward=pushforward)
+        else:
+            f = grf.generate(n_train + n_val + extra, pushfoward=None)
+
+        # For Helmholtz, normalize f to unit L2 norm per sample (matches DeepONet training)
+        if equation == "Helmholtz":
+            f_flat = f.reshape(f.shape[0], -1)
+            f_norms = torch.linalg.norm(f_flat, dim=-1, keepdim=True).clamp(min=1e-15)
+            if dim == 1:
+                f = f / f_norms
+            else:
+                f = f / f_norms.unsqueeze(-1)
+
+        if args.k2_mode == "const":
+            k2_shape = (n_train + n_val + extra, arguments["N"], arguments["N"]) if dim == 2 else (n_train + n_val + extra, arguments["N"])
+            k2 = 10.0 * torch.ones(k2_shape, device=device)
+        elif args.k2_mode == "mild":
+            k2 = grf.generate(n_train + n_val + extra, pushfoward=lambda x: 10.0 + 5.0 * torch.tanh(x))
+        else:
+            k2 = grf.generate(n_train + n_val + extra)
         if in_channels > 1:
             a = grf.generate(n_train + n_val + extra)
         else:
@@ -147,25 +184,39 @@ if __name__ == "__main__":
             u_sol = torch.tensor(pde.u, dtype=torch.float32, device=device)
             u_sol = u_sol - torch.mean(u_sol, dim = -1, keepdim=True) if equation == "Poisson" and boundary == "Periodic" else u_sol
         else:
+            N2 = arguments["N"] * arguments["N"]
             if equation == "Poisson":
-                pde = PoissonEquation2D(a_func=a.reshape(-1, arguments["N"] * arguments["N"]) if in_channels > 1 else a, 
-                                        f_func=f.reshape(-1, arguments["N"] * arguments["N"]),
+                pde = PoissonEquation2D(a_func=a.reshape(-1, N2) if in_channels > 1 else a, 
+                                        f_func=f.reshape(-1, N2),
                                         boundary=boundary, 
                                         x=x, y=y, device=device)
+            elif equation == "ConvDiff":
+                pde = ConvectionDiffusion2D(a_func=a.reshape(-1, N2) if in_channels > 1 else a,
+                                            f_func=f.reshape(-1, N2),
+                                            b_vec=(args.b_vel, args.b_vel),
+                                            boundary=boundary,
+                                            x=x, y=y, device=device,
+                                            reaction=args.reaction_c)
+            elif equation == "Reaction":
+                pde = ReactionDiffusion2D(a_func=a.reshape(-1, N2) if in_channels > 1 else a,
+                                          f_func=f.reshape(-1, N2),
+                                          reaction=args.reaction_c,
+                                          boundary=boundary,
+                                          x=x, y=y, device=device)
             else:
-                pde = HelmholtzEquation2D(a_func=a.reshape(-1, arguments["N"] * arguments["N"]) if in_channels > 1 else a, 
-                                          f_func=f.reshape(-1, arguments["N"] * arguments["N"]), 
-                                          k2=k2.reshape(-1, arguments["N"] * arguments["N"]),
+                pde = HelmholtzEquation2D(a_func=a.reshape(-1, N2) if in_channels > 1 else a, 
+                                          f_func=f.reshape(-1, N2), 
+                                          k2=k2.reshape(-1, N2),
                                           boundary=boundary, x=x, y=y, device=device)
             u_sol = torch.tensor(pde.u, dtype=torch.float32, device=device)
-            u_sol = u_sol - torch.mean(u_sol, dim=(-2,-1), keepdim=True) if equation == "Poisson" and boundary == "Periodic" else u_sol
+            u_sol = u_sol - torch.mean(u_sol, dim=(-2,-1), keepdim=True) if needs_mean_zero and boundary == "Periodic" else u_sol
         if in_channels > 1:
-            if equation == "Poisson":
+            if equation in ("Poisson", "ConvDiff", "Reaction"):
                 input = torch.concatenate((a[:, None, :], f[:, None, :]), dim=1)
             else:
                 input = torch.concatenate((a[:, None, :], k2[:, None, :], f[:, None, :]), dim=1)
         else:
-            if equation == "Poisson":
+            if equation in ("Poisson", "ConvDiff", "Reaction"):
                 input = f[:, None, :]
             else:
                 input = torch.concatenate((k2[:, None, :], f[:, None, :]), dim=1)
@@ -247,6 +298,23 @@ if __name__ == "__main__":
                                             y=y,
                                             device=device, 
                                             solve = False)
+    elif equation == "ConvDiff":
+        pde = ConvectionDiffusion2D(a_func=lambda x, y: 1,
+                                    f_func=lambda x, y: 1,
+                                    b_vec=(args.b_vel, args.b_vel),
+                                    boundary=boundary,
+                                    x=x, y=y,
+                                    device=device,
+                                    solve=False,
+                                    reaction=args.reaction_c)
+    elif equation == "Reaction":
+        pde = ReactionDiffusion2D(a_func=lambda x, y: 1,
+                                  f_func=lambda x, y: 1,
+                                  reaction=args.reaction_c,
+                                  boundary=boundary,
+                                  x=x, y=y,
+                                  device=device,
+                                  solve=False)
     else:
         if dim == 1:
             pde = HelmholtzEquation1D(a_func= lambda x: 1, f_func=lambda x: 1, k2=lambda x: 1, boundary=boundary, x=x, device=device, solve = False)
@@ -338,7 +406,7 @@ if __name__ == "__main__":
             scheduled_bptt.load_state_dict(ckp["scheduler_bptt"])
             print("Scheduled Sampler loaded", flush=True)
 
-    loss_fn = ApproxGreedyRouterLoss(centered=(equation == "Poisson" and boundary == "Periodic"), normalized=False)
+    loss_fn = ApproxGreedyRouterLoss(centered=(needs_mean_zero and boundary == "Periodic"), normalized=False)
 
     start_epoch = 0 if ckp is None else ckp["epoch"] + 1
     print("Starting training...")

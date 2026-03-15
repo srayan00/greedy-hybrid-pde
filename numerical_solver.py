@@ -41,7 +41,8 @@ class NumericalSolver:
         for it in range(max_iter):
             u_new = self.iteration(u_old, ~mask)
             mask = torch.linalg.norm(u_new - u_old, float('inf'), dim=1) < tol
-            print(f'Iteration {it}, converged samples: {mask.sum().item()}/{mask.shape[0]}')
+            if it % 100 == 0:
+                print(f'Iteration {it}, converged samples: {mask.sum().item()}/{mask.shape[0]}')
             if mask.all():
                 print(f'Converged in {it} iterations.')
                 return u_new
@@ -59,7 +60,8 @@ class NumericalSolver:
             mask = stopping <= it
             u_new = self.iteration(u_old, ~mask)
             # mask = stopping(u_new, u_old)
-            print(f'Iteration {it}, converged samples: {mask.sum().item()}/{mask.shape[0]}')
+            if it % 100 == 0:
+                print(f'Iteration {it}, converged samples: {mask.sum().item()}/{mask.shape[0]}')
             if mask.all():
                 print(f'Converged in {it} iterations.')
                 return u_new
@@ -78,16 +80,15 @@ class WeightedJacobiSolver(NumericalSolver):
         """
         if mask is None:
             mask = torch.ones(self.equation.b.shape[0], device=self.device, dtype=torch.bool)
-        D = torch.diag_embed(torch.diagonal((self.equation.A), dim1=-2, dim2=-1)) # (B, N, N) or (B, N^2, N^2)
-        D_inv = torch.linalg.inv(D)
-        is_batch = D_inv.ndim == 3
+        d_inv = 1.0 / torch.diagonal(self.equation.A, dim1=-2, dim2=-1)
+        is_batch = self.equation.A.ndim == 3
         if is_batch:
             u_new = u_old.clone()
-            output = torch.bmm(self.equation.A[mask], u_old[mask].unsqueeze(-1)).squeeze(-1) # prediction: (B, N) or (B, N^2)
-            u_new[mask] = u_old[mask] + self.weight * torch.bmm(D_inv[mask], (self.equation.b[mask] - output).unsqueeze(-1)).squeeze(-1)
+            output = torch.bmm(self.equation.A[mask], u_old[mask].unsqueeze(-1)).squeeze(-1)
+            u_new[mask] = u_old[mask] + self.weight * d_inv[mask] * (self.equation.b[mask] - output)
         else:
             output = self.equation.A @ u_old
-            u_new = u_old + self.weight * D_inv @ (self.equation.b - output)
+            u_new = u_old + self.weight * d_inv * (self.equation.b - output)
         return u_new
     
     
