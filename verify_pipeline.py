@@ -24,7 +24,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from data_generation import GaussianRandomField, GaussianRandomFieldHierarchical
-from pde import PoissonEquation1D, PoissonEquation2D, HelmholtzEquation1D, HelmholtzEquation2D, ConvectionDiffusion2D, ReactionDiffusion2D
+from pde import PoissonEquation1D, PoissonEquation2D, HelmholtzEquation1D, HelmholtzEquation2D, ConvectionDiffusion2D
 from ml_solver import DeepONet
 from numerical_solver import WeightedJacobiSolver
 from hybrid_solver import HybridSolver, ConstantRouter, HINTSRouter, LSTMGreedyRouter
@@ -121,10 +121,6 @@ def generate_test_data(n_test, N, dim, device, equation="Poisson",
                                         b_vec=(b_vel, b_vel),
                                         boundary="Periodic", x=x, y=y, device=device,
                                         reaction=reaction_c)
-        elif equation == "Reaction":
-            pde = ReactionDiffusion2D(a_func=a_func, f_func=f_flat,
-                                      reaction=reaction_c,
-                                      boundary="Periodic", x=x, y=y, device=device)
         else:
             k2_flat = k2_raw.reshape(n_test, N * N)
             pde = HelmholtzEquation2D(a_func=a_func, f_func=f_flat, k2=k2_flat,
@@ -289,7 +285,7 @@ def run_iterative_comparison(deeponet, f_raw, u_sol, N, dim, device,
                              max_iters=300, tau=24, snapshot_steps=None):
     """
     Compare convergence of Jacobi only, HINTS, True Greedy, and optionally LSTM Router.
-    Supports 1D/2D Poisson, Helmholtz, ConvDiff, and Reaction.
+    Supports 1D/2D Poisson, Helmholtz, and ConvDiff.
     """
     if snapshot_steps is None:
         snapshot_steps = []
@@ -317,10 +313,6 @@ def run_iterative_comparison(deeponet, f_raw, u_sol, N, dim, device,
                                         b_vec=(b_vel, b_vel),
                                         boundary="Periodic", x=x, y=y, A=None, solve=False, device=device,
                                         reaction=reaction_c)
-        elif equation == "Reaction":
-            pde = ReactionDiffusion2D(a_func=a_func, f_func=f_raw,
-                                      reaction=reaction_c,
-                                      boundary="Periodic", x=x, y=y, A=None, solve=False, device=device)
         else:
             pde = HelmholtzEquation2D(a_func=a_func, f_func=f_raw, k2=k2_flat,
                                       boundary="Periodic", x=x, y=y, A=None, solve=False, device=device)
@@ -663,11 +655,11 @@ def main():
     parser.add_argument("--save_dir", type=str, default="./plots")
     parser.add_argument("--dim", type=int, default=1, choices=[1, 2])
     parser.add_argument("--equation", type=str, default="Poisson",
-                        choices=["Poisson", "Helmholtz", "ConvDiff", "Reaction"])
+                        choices=["Poisson", "Helmholtz", "ConvDiff"])
     parser.add_argument("--b_vel", type=float, default=20.0,
                         help="Advection velocity for ConvDiff (b_vec=(b_vel,b_vel))")
     parser.add_argument("--reaction_c", type=float, default=0.0,
-                        help="Reaction coefficient (used by Reaction and optionally ConvDiff equations)")
+                        help="Reaction coefficient for ConvDiff (c in -div(a grad u) + b.grad u + c*u = f)")
     parser.add_argument("--grf_mode", type=str, default="fixed",
                         choices=["fixed", "hierarchical"],
                         help="GRF mode: 'fixed' (single PSD) or 'hierarchical' (varied PSDs)")

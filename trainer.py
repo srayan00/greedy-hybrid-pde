@@ -245,7 +245,7 @@ class Trainer:
             with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=False):
                 channels = source.shape[1]
                 f = source[:, -1, :].reshape(bs, -1)
-                if self.model.equation.equation in ("Poisson", "ConvDiff", "Reaction"):
+                if self.model.equation.equation in ("Poisson", "ConvDiff"):
                     if channels > 1:
                         a = source[:, 0, :].reshape(bs, -1)
                     else:
@@ -295,7 +295,7 @@ class Trainer:
             if isinstance(self.model, HybridSolver):
                 channels = source.shape[1]
                 f = source[:, -1, :].reshape(bs, -1)
-                if self.model.equation.equation in ("Poisson", "ConvDiff", "Reaction"):
+                if self.model.equation.equation in ("Poisson", "ConvDiff"):
                     if channels > 1:
                         a = source[:, 0, :].reshape(bs, -1)
                     else:
@@ -438,7 +438,7 @@ class Trainer:
                     bs = source.shape[0]
                     channels = source.shape[1]
                     f = source[:, -1, :].reshape(bs, -1)
-                    if self.model.equation.equation in ("Poisson", "ConvDiff", "Reaction"):
+                    if self.model.equation.equation in ("Poisson", "ConvDiff"):
                         if channels > 1:
                             a = source[:, 0, :].reshape(bs, -1)
                         else:

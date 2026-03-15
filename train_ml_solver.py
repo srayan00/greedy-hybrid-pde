@@ -4,7 +4,7 @@ import numpy as np
 import argparse
 from ml_solver import DeepONet, FNOforPDE
 from data_generation import GaussianRandomField, GaussianRandomFieldHierarchical, PDEDataset2
-from pde import PoissonEquation1D, PoissonEquation2D, HelmholtzEquation1D, HelmholtzEquation2D, ConvectionDiffusion2D, ReactionDiffusion2D
+from pde import PoissonEquation1D, PoissonEquation2D, HelmholtzEquation1D, HelmholtzEquation2D, ConvectionDiffusion2D
 
 from trainer import Trainer, EarlyStopping, MSEalphaepsilonLoss, RelativeMSELoss
 import json
@@ -17,7 +17,7 @@ parser.add_argument("--in_channels", type=int, default=1, help="Number of input 
 parser.add_argument("--extra", type=int, default=200, help="Extra data samples to generate beyond n_train + n_val")
 parser.add_argument("--equation", type=str, default="Poisson", help="PDE to solve: Poisson, Helmholtz, or ConvDiff")
 parser.add_argument("--b_vel", type=float, default=20.0, help="Advection velocity magnitude for ConvDiff (b_vec = (b_vel, b_vel))")
-parser.add_argument("--reaction_c", type=float, default=0.0, help="Reaction coefficient (used by Reaction and optionally ConvDiff equations)")
+parser.add_argument("--reaction_c", type=float, default=0.0, help="Reaction coefficient for ConvDiff (c in -div(a grad u) + b.grad u + c*u = f)")
 parser.add_argument("--ckp_dir", type=str, default="./checkpoints", help="Directory to save checkpoints")
 parser.add_argument("--model_name", type=str, default="model.pt", help="Model checkpoint name")
 parser.add_argument('--data_name', type=str, default='', help='Name of the dataset to use (if not provided, a new dataset will be generated)')
@@ -50,8 +50,8 @@ if __name__ == "__main__":
 
     if boundary not in ["Periodic", "Dirichlet"]:
         raise ValueError("Boundary condition must be either 'Dirichlet' or 'Periodic'")
-    if equation not in ["Poisson", "Helmholtz", "ConvDiff", "Reaction"]:
-        raise ValueError("Currently only Poisson, Helmholtz, ConvDiff, and Reaction are supported")
+    if equation not in ["Poisson", "Helmholtz", "ConvDiff"]:
+        raise ValueError("Currently only Poisson, Helmholtz, and ConvDiff are supported")
     if model_type not in ["deeponet", "fno"]:
         raise ValueError("Model must be either 'deeponet' or 'fno'")
     if dim not in [1, 2]:
@@ -192,12 +192,6 @@ if __name__ == "__main__":
                                             boundary=boundary,
                                             x=x, y=y, device=device,
                                             reaction=args.reaction_c)
-            elif equation == "Reaction":
-                pde = ReactionDiffusion2D(a_func=a.reshape(-1, N2) if in_channels > 1 else a,
-                                          f_func=f.reshape(-1, N2),
-                                          reaction=args.reaction_c,
-                                          boundary=boundary,
-                                          x=x, y=y, device=device)
             else:
                 pde = HelmholtzEquation2D(a_func=a.reshape(-1, N2) if in_channels > 1 else a, 
                                           f_func=f.reshape(-1, N2), 
@@ -208,12 +202,12 @@ if __name__ == "__main__":
 
         # Defining the input and output of the ML model
         if in_channels > 1:
-            if equation in ("Poisson", "ConvDiff", "Reaction"):
+            if equation in ("Poisson", "ConvDiff"):
                 input = torch.concatenate((a[:, None, :], f[:, None, :]), dim=1)
             else:
                 input = torch.concatenate((a[:, None, :], k2[:, None, :], f[:, None, :]), dim=1)
         else:
-            if equation in ("Poisson", "ConvDiff", "Reaction"):
+            if equation in ("Poisson", "ConvDiff"):
                 input = f[:, None, :]
             else:
                 input = torch.concatenate((k2[:, None, :], f[:, None, :]), dim=1)

@@ -133,8 +133,8 @@ class HybridSolver(torch.nn.Module):
                 if not isinstance(suite_solver[i], (NumericalSolver, MLSolver)):
                     print(f"invalid index{i}")
                     raise TypeError("Each solver in suite_solver must be an instance of NumericalSolver or MLSolver.")
-        if equation.equation not in ["Helmholtz", "Poisson", "ConvDiff", "Reaction"]:
-            raise ValueError("Unsupported equation type. Supported: Poisson, Helmholtz, ConvDiff, Reaction.")
+        if equation.equation not in ["Helmholtz", "Poisson", "ConvDiff"]:
+            raise ValueError("Unsupported equation type. Supported: Poisson, Helmholtz, ConvDiff.")
         self.N = N
         self.dim = dim
         self.in_channels = in_channels
@@ -327,16 +327,6 @@ class HybridSolver(torch.nn.Module):
                                                solve = False,
                                                device = f.device,
                                                reaction = self.equation.reaction)
-            elif self.equation.equation == "Reaction":
-                equation = self.equation.__class__(a_func = a_func,
-                                               f_func = f_func,
-                                               reaction = self.equation.reaction,
-                                               boundary = self.boundary,
-                                               x = self.xs,
-                                               y = self.ys,
-                                               A = A_arg,
-                                               solve = False,
-                                               device = f.device)
             else:
                 equation = self.equation.__class__(a_func = a_func,
                                                f_func = f_func,
@@ -354,7 +344,7 @@ class HybridSolver(torch.nn.Module):
         return equation                    
 
     def prepare_inputs(self, f, a, k2 = None):
-        if self.equation.equation in ("Poisson", "ConvDiff", "Reaction"):
+        if self.equation.equation in ("Poisson", "ConvDiff"):
             if a is None:
                 return f
             return torch.cat((a.unsqueeze(1), f), dim=1)

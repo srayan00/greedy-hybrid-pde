@@ -176,12 +176,12 @@ to avoid overwriting ConvDiff plots, since both use `--equation ConvDiff`).
 
 | Argument | Description |
 |----------|-------------|
-| `--equation` | PDE type: `Poisson`, `Helmholtz`, `ConvDiff`, `Reaction` |
+| `--equation` | PDE type: `Poisson`, `Helmholtz`, `ConvDiff` |
 | `--dim` | Spatial dimension (1 or 2) |
 | `--boundary` | Boundary condition (`Periodic` or `Dirichlet`) |
 | `--grf_mode` | GRF sampling: `fixed` (single set of params) or `hierarchical` (sampled params) |
 | `--b_vel` | Advection velocity for ConvDiff (default 20.0; b_vec = (b_vel, b_vel)) |
-| `--reaction_c` | Reaction coefficient (default 0.0; set to 5.0 for ConvReact, 10.0 for Reaction) |
+| `--reaction_c` | Reaction coefficient for ConvDiff (default 0.0; set to 5.0 for ConvReact) |
 | `--in_channels` | Number of input channels (1 for single-channel PDEs) |
 | `--loss_alpha` | MSE loss weighting (0.0 = plain MSE) |
 | `--router_model_name` | If provided, also runs LSTM router comparison in verify_pipeline.py |
@@ -190,7 +190,7 @@ to avoid overwriting ConvDiff plots, since both use `--equation ConvDiff`).
 
 | File | Role |
 |------|------|
-| `pde.py` | PDE discretizations: Poisson, Helmholtz, ConvDiff, Reaction (1D & 2D) |
+| `pde.py` | PDE discretizations: Poisson, Helmholtz, ConvDiff (1D & 2D) |
 | `data_generation.py` | Gaussian Random Field generators (fixed & hierarchical) |
 | `ml_solver.py` | DeepONet and FNO model definitions |
 | `numerical_solver.py` | Weighted Jacobi, Gauss-Seidel, Multigrid solvers |
