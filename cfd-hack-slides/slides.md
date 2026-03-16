@@ -275,8 +275,8 @@ class: text-center
 <div class="text-center p-3 rounded-lg bg-white/5 border border-red-400/40">
 
 <span class="text-red-400">**LSTM Router (learned)**</span>
-<br><span class="font-mono text-xs">Final L2: 8.99 × 10⁻⁶</span>
-<br><span class="font-mono text-xs text-red-400">AUC: 0.052 — 7.1× lower</span>
+<br><span class="font-mono text-xs">Final L2: 1.13 × 10⁻⁶</span>
+<br><span class="font-mono text-xs text-red-400">AUC: 0.024 — 15.5× lower</span>
 
 </div>
 <div class="text-center p-3 rounded-lg bg-white/5 border border-emerald-400/40">
@@ -307,9 +307,74 @@ class: text-center
 <div class="opacity-80">
 
 **Learned LSTM Router** — trained to imitate:
-- Captures SOR(1.3) dominance (~57%) and per-sample adaptation
-- Uses FNO at matching rate (0.5%) to the oracle
-- AUC: **0.052** — 7.1× better than best classical, still 59× gap to oracle
+- Captures SOR(1.6) dominance (~53%) and per-sample adaptation
+- Uses FNO at similar rate (0.6%) to the oracle
+- AUC: **0.024** — 15.5× better than best classical, still 27× gap to oracle
+
+</div>
+</div>
+
+---
+class: text-center
+---
+
+<div class="h-full flex flex-col items-center justify-center">
+<div class="text-xs tracking-widest uppercase opacity-30 mb-4">Results</div>
+<div class="text-4xl font-bold tracking-tight">2D Convection-Diffusion</div>
+<div class="mt-4 text-lg opacity-50">Oracle greedy routing — SOR(1.0) + SOR(1.3) + SOR(1.6) + FNO</div>
+</div>
+
+---
+
+# 2D ConvDiff: Convergence
+
+<img src="./images/convdiff_fno_convergence.png" class="w-full max-h-72 object-contain rounded-lg border-0" />
+
+<div class="grid grid-cols-3 gap-4 mt-3 text-sm">
+<div class="text-center p-3 rounded-lg bg-white/5 border border-white/10">
+
+**Best Classical (SOR 1.6)**
+<br><span class="font-mono text-xs">Final L2: 1.41 × 10⁻⁸</span>
+<br><span class="font-mono text-xs">AUC: 0.058</span>
+
+</div>
+<div class="text-center p-3 rounded-lg bg-white/5 border border-red-400/40">
+
+<span class="text-red-400">**LSTM Router (learned)**</span>
+<br><span class="font-mono text-xs">Final L2: 1.41 × 10⁻⁸</span>
+<br><span class="font-mono text-xs text-red-400">AUC: 0.020 — 2.9× lower</span>
+
+</div>
+<div class="text-center p-3 rounded-lg bg-white/5 border border-emerald-400/40">
+
+<span class="text-emerald-400">**Oracle Greedy**</span>
+<br><span class="font-mono text-xs">Final L2: 1.41 × 10⁻⁸</span>
+<br><span class="font-mono text-xs text-emerald-400">AUC: 1.78 × 10⁻³ — 33× lower</span>
+
+</div>
+</div>
+
+---
+
+# 2D ConvDiff: Routing Patterns
+
+<img src="./images/convdiff_routing_comparison.png" class="w-full max-h-72 object-contain rounded-lg border-0" />
+
+<div class="grid grid-cols-2 gap-6 mt-3 text-sm">
+<div class="opacity-80">
+
+**Oracle Greedy** — the upper bound:
+- **SOR(1.6)** dominates (~70%), **SOR(1.0)** ~23%, **SOR(1.3)** ~7%
+- FNO used sparingly (~0.5%) for targeted corrections
+- AUC: **1.78 × 10⁻³** — 33× better than best classical
+
+</div>
+<div class="opacity-80">
+
+**Learned LSTM Router** — trained to imitate:
+- Captures SOR(1.6) preference (~45%) with broader spread across variants
+- FNO usage (0.3%) approaching oracle rate
+- AUC: **0.020** — 2.9× better than best classical, still 11× gap to oracle
 
 </div>
 </div>
@@ -318,25 +383,37 @@ class: text-center
 
 # Results Summary
 
-<div class="mt-4">
+<div class="mt-2">
 
-| | **Best Classical (SOR 1.3)** | **LSTM Router (learned)** | **Oracle Greedy** |
+<div class="text-xs tracking-widest uppercase opacity-40 mb-2">2D Poisson</div>
+
+| | **Best Classical (SOR 1.3)** | **LSTM Router** | **Oracle Greedy** |
 |---|---|---|---|
-| **Final L2 Error** | 3.41 × 10⁻⁶ | 8.99 × 10⁻⁶ | **5.22 × 10⁻⁸** (65×↓) |
-| **AUC** | 0.371 | **0.052** (7.1×↓) | **8.77 × 10⁻⁴** (423×↓) |
-| **FNO usage** | — | 0.46% | 0.46% |
+| **AUC** | 0.371 | **0.024** (15.5×↓) | **8.77 × 10⁻⁴** (423×↓) |
+| **Final L2** | 3.41 × 10⁻⁶ | 1.13 × 10⁻⁶ | **5.22 × 10⁻⁸** |
+
+</div>
+
+<div class="mt-3">
+
+<div class="text-xs tracking-widest uppercase opacity-40 mb-2">2D Convection-Diffusion</div>
+
+| | **Best Classical (SOR 1.6)** | **LSTM Router** | **Oracle Greedy** |
+|---|---|---|---|
+| **AUC** | 0.058 | **0.020** (2.9×↓) | **1.78 × 10⁻³** (33×↓) |
+| **Final L2** | 1.41 × 10⁻⁸ | 1.41 × 10⁻⁸ | **1.41 × 10⁻⁸** |
 
 </div>
 
 <div class="mt-4 pl-4 border-l-2 border-emerald-400 opacity-80 text-sm">
 
-**Oracle greedy** routing with 3 SOR variants + an unrolled FNO achieves **423× lower AUC** than the best classical solver — establishing the ceiling for adaptive routing on 2D Poisson.
+**Oracle greedy** routing establishes large ceilings on both equations: **423×** (Poisson) and **33×** (ConvDiff) lower AUC than the best classical solver.
 
 </div>
 
 <div class="mt-3 pl-4 border-l-2 border-cyan-400 opacity-80 text-sm">
 
-The **learned LSTM router** already achieves **7.1× lower AUC** without access to the true solution. The 59× gap to the oracle suggests significant room for improving the learned policy.
+The **learned LSTM router** captures **15.5×** (Poisson) and **2.9×** (ConvDiff) improvements without privileged information — with significant room to close the gap to the oracle.
 
 </div>
 
