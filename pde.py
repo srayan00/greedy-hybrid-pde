@@ -61,17 +61,22 @@ class PDE:
         """
         return NotImplementedError
     
-    def compute_residual(self, u_approx):
+    def compute_residual(self, u_approx, mask = None):
         """
         This function computes the residual for the given approximate solution.
         """
+        if mask is None:
+            mask = torch.ones(self.b.shape[0], dtype=torch.bool, device=self.device)
         if self.A is None or self.b is None:
             raise ValueError("Matrix A and vector b must be built before computing residual.")
         if self.is_batch:
-            output = torch.bmm(self.A, u_approx.unsqueeze(-1)).squeeze(-1)
+            output = torch.bmm(self.A[mask], u_approx[mask].unsqueeze(-1)).squeeze(-1)
         else:
             output = self.A @ u_approx
-        residual = self.b - output
+        if self.is_batch:
+            residual = self.b[mask] - output
+        else:
+            residual = self.b - output
         # if self.equation == "Poisson" and not self.is_coefficient and self.boundary == "Periodic":
         #     # For Poisson with constant coefficient and periodic BCs, the solution is only determined up to a constant. Remove mean to get meaningful residual.
         #     residual = residual - residual.mean(dim=-1, keepdim=True)
@@ -366,9 +371,15 @@ class PoissonEquation2D(PDE):
 
     def solve(self):
         # Use torch.linalg.lstsq for least squares solution
-        u, *_ = torch.linalg.lstsq(self.A, self.b.unsqueeze(-1))
-        return u.squeeze(-1).reshape((self.batch_size, len(self.x), len(self.y))) if self.is_batch else u.squeeze(-1).reshape((len(self.x), len(self.y)))
-
+        # batches of 64 solving at a time
+        if self.is_batch:
+            u = torch.zeros((self.batch_size, len(self.x) * len(self.y), 1), device=self.device)
+            for i in range(0, self.batch_size, 64):
+                u[i:i+64, :, :], *_ = torch.linalg.lstsq(self.A[i:i+64, :, :], self.b[i:i+64, :].unsqueeze(-1))
+            return u.squeeze(-1).reshape((self.batch_size, len(self.x), len(self.y)))
+        else:
+            u, *_ = torch.linalg.lstsq(self.A, self.b.unsqueeze(-1))
+            return u.squeeze(-1).reshape((len(self.x), len(self.y)))
 
 
 
@@ -697,7 +708,7 @@ class HelmholtzEquation2D(PDE):
                 self._set_matrix_entry(A, i, j, (i + 1) % n, j, -a_iph / h_x**2)
                 self._set_matrix_entry(A, i, j, i, (j - 1 + m) % m, -a_jmh / h_y**2)
                 self._set_matrix_entry(A, i, j, i, (j + 1) % m, -a_jph / h_y**2)
-                self._set_matrix_entry(A, i, j, i, j, (a_imh + a_iph) / h_x**2 + (a_jmh + a_jph) / h_y**2 + self._k2_at(i, j))
+                self._set_matrix_entry(A, i, j, i, j, (a_imh + a_iph) / h_x**2 + (a_jmh + a_jph) / h_y**2 - self._k2_at(i, j))
         return A
 
     def build_rhs(self):
@@ -717,9 +728,187 @@ class HelmholtzEquation2D(PDE):
         return b
 
     def solve(self):
+        # u, *_ = torch.linalg.lstsq(self.A, self.b.unsqueeze(-1))
+        # if self.is_batch:
+        #     return u.squeeze(-1).reshape((self.batch_size, len(self.x), len(self.y)))
+        # else:
+        #     return u.squeeze(-1).reshape((len(self.x), len(self.y)))
+        
+        if self.is_batch:
+            u = torch.zeros((self.batch_size, len(self.x) * len(self.y), 1), device=self.device)
+            for i in range(0, self.batch_size, 64):
+                u[i:i+64, :, :], *_ = torch.linalg.lstsq(self.A[i:i+64, :, :], self.b[i:i+64, :].unsqueeze(-1))
+            return u.squeeze(-1).reshape((self.batch_size, len(self.x), len(self.y)))
+        else:
+            u, *_ = torch.linalg.lstsq(self.A, self.b.unsqueeze(-1))
+            return u.squeeze(-1).reshape((len(self.x), len(self.y)))
+  
+
+class ConvectionDiffusion2D(PDE):
+    """
+    Discretizes and solves:  -∇·(a∇u) + b·∇u + c*u = f  on a 2D uniform grid
+    using central differences for both diffusion and advection terms.
+
+    Parameters
+    ----------
+    a_func : callable or tensor
+        Diffusion coefficient (scalar, callable, or tensor).
+    f_func : callable or tensor
+        RHS forcing, shape (batch, N*N) for batch mode.
+    b_vec : tuple (b1, b2)
+        Constant advection velocity vector.
+    reaction : float
+        Constant reaction coefficient c (default 0.0 = pure convection-diffusion).
+        When c > 0 the operator is positive-definite (no null space).
+    boundary : {'Dirichlet', 'Periodic'}
+    x, y : 1D tensors of grid points.
+    """
+
+    def __init__(self, a_func, f_func, b_vec, boundary, x, y, A=None, solve=True, device='cpu', reaction=0.0):
+        super().__init__(a_func, f_func, boundary, x, y, A)
+        self.b_vec = b_vec
+        self.reaction = reaction
+        self.is_batch = False
+        self.batch_size = 1
+
+        if isinstance(a_func, torch.Tensor):
+            if a_func.ndim == 2:
+                self.batch_size = a_func.shape[0]
+                self.is_batch = True
+
+        if isinstance(f_func, torch.Tensor):
+            if f_func.ndim == 2:
+                if not self.is_batch:
+                    self.batch_size = f_func.shape[0]
+                    self.is_batch = True
+                elif f_func.shape[0] != self.batch_size:
+                    raise ValueError("Batch sizes of a_func and f_func must match")
+
+        self.device = device
+        self.equation = "ConvDiff"
+        self.A = self.build_matrix() if A is None else A
+        self.b = self.build_rhs() if not isinstance(self.f_func, torch.Tensor) else self.f_func
+        self.u = self.solve() if solve else None
+
+    def index(self, i, j):
+        return i * len(self.y) + j
+
+    def _a_at(self, i, j):
+        if isinstance(self.a_func, torch.Tensor):
+            return self.a_func[self.index(i, j)] if not self.is_batch else self.a_func[:, self.index(i, j)]
+        else:
+            return self.a_func(self.x[i], self.y[j]) if not self.is_batch else torch.tensor([self.a_func(self.x[i], self.y[j])], device=self.device).expand(self.batch_size)
+
+    def _f_at(self, i, j):
+        if isinstance(self.f_func, torch.Tensor):
+            return self.f_func[self.index(i, j)] if not self.is_batch else self.f_func[:, self.index(i, j)]
+        else:
+            return self.f_func(self.x[i], self.y[j]) if not self.is_batch else torch.tensor([self.f_func(self.x[i], self.y[j])], device=self.device).expand(self.batch_size)
+
+    def _set_matrix_entry(self, A, i, j, new_i, new_j, value):
+        idx = self.index(i, j)
+        new_idx = self.index(new_i, new_j)
+        if self.is_batch:
+            A[:, idx, new_idx] = value
+        else:
+            A[idx, new_idx] = value
+
+    def _set_vector_entry(self, b, i, j, value):
+        idx = self.index(i, j)
+        if self.is_batch:
+            b[:, idx] = value
+        else:
+            b[idx] = value
+
+    def build_matrix_periodic(self):
+        n, m = len(self.x), len(self.y)
+        A = torch.zeros((self.batch_size, n * m, n * m), device=self.device) if self.is_batch else torch.zeros((n * m, n * m), device=self.device)
+        h_x = self.x[1] - self.x[0]
+        h_y = self.y[1] - self.y[0]
+        b1, b2 = self.b_vec
+
+        for i in range(n):
+            for j in range(m):
+                a_ij = self._a_at(i, j)
+                a_ip1 = self._a_at((i + 1) % n, j)
+                a_im1 = self._a_at((i - 1 + n) % n, j)
+                a_jp1 = self._a_at(i, (j + 1) % m)
+                a_jm1 = self._a_at(i, (j - 1 + m) % m)
+
+                a_imh = (a_im1 + a_ij) / 2
+                a_iph = (a_ip1 + a_ij) / 2
+                a_jmh = (a_jm1 + a_ij) / 2
+                a_jph = (a_jp1 + a_ij) / 2
+
+                # Diffusion + advection (central differences) + reaction
+                self._set_matrix_entry(A, i, j, (i - 1 + n) % n, j, -a_imh / h_x**2 - b1 / (2 * h_x))
+                self._set_matrix_entry(A, i, j, (i + 1) % n, j,     -a_iph / h_x**2 + b1 / (2 * h_x))
+                self._set_matrix_entry(A, i, j, i, (j - 1 + m) % m, -a_jmh / h_y**2 - b2 / (2 * h_y))
+                self._set_matrix_entry(A, i, j, i, (j + 1) % m,     -a_jph / h_y**2 + b2 / (2 * h_y))
+                self._set_matrix_entry(A, i, j, i, j, (a_imh + a_iph) / h_x**2 + (a_jmh + a_jph) / h_y**2 + self.reaction)
+        return A
+
+    def build_matrix_dirichlet(self):
+        n, m = len(self.x), len(self.y)
+        A = torch.zeros((self.batch_size, n * m, n * m), device=self.device) if self.is_batch else torch.zeros((n * m, n * m), device=self.device)
+        h_x = self.x[1] - self.x[0]
+        h_y = self.y[1] - self.y[0]
+        b1, b2 = self.b_vec
+
+        for i in range(1, n - 1):
+            for j in range(1, m - 1):
+                a_ij = self._a_at(i, j)
+                a_ip1 = self._a_at(i + 1, j)
+                a_im1 = self._a_at(i - 1, j)
+                a_jp1 = self._a_at(i, j + 1)
+                a_jm1 = self._a_at(i, j - 1)
+
+                a_imh = (a_im1 + a_ij) / 2
+                a_iph = (a_ip1 + a_ij) / 2
+                a_jmh = (a_jm1 + a_ij) / 2
+                a_jph = (a_jp1 + a_ij) / 2
+
+                self._set_matrix_entry(A, i, j, i - 1, j, -a_imh / h_x**2 - b1 / (2 * h_x))
+                self._set_matrix_entry(A, i, j, i + 1, j, -a_iph / h_x**2 + b1 / (2 * h_x))
+                self._set_matrix_entry(A, i, j, i, j - 1, -a_jmh / h_y**2 - b2 / (2 * h_y))
+                self._set_matrix_entry(A, i, j, i, j + 1, -a_jph / h_y**2 + b2 / (2 * h_y))
+                self._set_matrix_entry(A, i, j, i, j, (a_imh + a_iph) / h_x**2 + (a_jmh + a_jph) / h_y**2 + self.reaction)
+
+        for i in range(n):
+            for j in [0, m - 1]:
+                idx = self.index(i, j)
+                if self.is_batch:
+                    A[:, idx, :] = 0; A[:, idx, idx] = 1
+                else:
+                    A[idx, :] = 0; A[idx, idx] = 1
+        for j in range(m):
+            for i in [0, n - 1]:
+                idx = self.index(i, j)
+                if self.is_batch:
+                    A[:, idx, :] = 0; A[:, idx, idx] = 1
+                else:
+                    A[idx, :] = 0; A[idx, idx] = 1
+        return A
+
+    def build_rhs(self):
+        n, m = len(self.x), len(self.y)
+        b = torch.zeros((self.batch_size, n * m), device=self.device) if self.is_batch else torch.zeros(n * m, device=self.device)
+        for i in range(n):
+            for j in range(m):
+                self._set_vector_entry(b, i, j, self._f_at(i, j))
+        if self.boundary == 'Dirichlet':
+            for i in range(n):
+                self._set_vector_entry(b, i, 0, 0)
+                self._set_vector_entry(b, i, m - 1, 0)
+            for j in range(m):
+                self._set_vector_entry(b, 0, j, 0)
+                self._set_vector_entry(b, n - 1, j, 0)
+        return b
+
+    def solve(self):
         u, *_ = torch.linalg.lstsq(self.A, self.b.unsqueeze(-1))
         if self.is_batch:
             return u.squeeze(-1).reshape((self.batch_size, len(self.x), len(self.y)))
         else:
             return u.squeeze(-1).reshape((len(self.x), len(self.y)))
-  
+

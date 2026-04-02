@@ -10,3 +10,4 @@ data/*pt
 old_files/
 train_router_test.py
 args/hierarchical_grf.json
+batch/

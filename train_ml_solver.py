@@ -5,6 +5,7 @@ import argparse
 from ml_solver import DeepONet, FNOforPDE
 from data_generation import GaussianRandomField, GaussianRandomFieldHierarchical, PDEDataset2
 from pde import PoissonEquation1D, PoissonEquation2D, HelmholtzEquation1D, HelmholtzEquation2D
+from numerical_solver import WeightedJacobiSolver
 
 from trainer import Trainer, EarlyStopping, MSEalphaepsilonLoss
 import json
@@ -20,6 +21,8 @@ parser.add_argument("--ckp_dir", type=str, default="./checkpoints", help="Direct
 parser.add_argument("--model_name", type=str, default="model.pt", help="Model checkpoint name")
 parser.add_argument('--data_name', type=str, default='', help='Name of the dataset to use (if not provided, a new dataset will be generated)')
 parser.add_argument("--data_dir", type=str, default="./data", help="Directory to save/load data")
+parser.add_argument("--grf_mode", type = str, default="fixed", help="Mode of the GRF: hierarchical or fixed")
+parser.add_argument("--loss_alpha", type = float, default=0.0, help="Alpha for the loss function")
 
 
 if __name__ == "__main__":
@@ -35,6 +38,8 @@ if __name__ == "__main__":
     data_dir = args.data_dir
     extra = args.extra
     in_channels = args.in_channels
+    grf_mode = args.grf_mode
+    loss_alpha = args.loss_alpha
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -51,9 +56,9 @@ if __name__ == "__main__":
     
     
     # Checkpoint and arguments setup
-    ckp_path = ckp_dir + f"/{model_type}_{model_name}_{equation}_{boundary}_{dim}d_{in_channels}c_full.pth"
-    save_path = ckp_dir + f"/{model_type}_{model_name}_{equation}_{boundary}_{dim}d_{in_channels}c"
-    args_path = ckp_dir + f"/{model_type}_{model_name}_{equation}_{boundary}_{dim}d_{in_channels}c_args.json"
+    ckp_path = ckp_dir + f"/{model_type}_{model_name}_{grf_mode}_{equation}_{boundary}_{dim}d_{in_channels}c_full.pth"
+    save_path = ckp_dir + f"/{model_type}_{model_name}_{grf_mode}_{equation}_{boundary}_{dim}d_{in_channels}c"
+    args_path = ckp_dir + f"/{model_type}_{model_name}_{grf_mode}_{equation}_{boundary}_{dim}d_{in_channels}c_args.json"
 
     # Loading arguments for the ML model
     if os.path.exists(args_path):
@@ -61,8 +66,12 @@ if __name__ == "__main__":
         with open(args_path, "r") as f:
             arguments = json.load(f)
     else:
-        with open(f"args/{model_type}_args.json", "r") as f:
-            arguments = json.load(f)
+        if dim == 2:
+            with open(f"args/{model_type}_2d_args.json", "r") as f:
+                arguments = json.load(f)
+        else:
+            with open(f"args/{model_type}_args.json", "r") as f:
+                arguments = json.load(f)
         with open(f"{args_path}", "w") as f:
             json.dump(arguments, f)
     
@@ -73,38 +82,50 @@ if __name__ == "__main__":
     n_train = arguments["n_train"]
     n_val = arguments["n_val"]
 
-    if os.path.exists(f"{data_dir}/{data_name}train_data_{equation}_{boundary}_{dim}d_{in_channels}c_{n_train}s.pt") and os.path.exists(f"{data_dir}/{data_name}val_data_{equation}_{boundary}_{dim}d_{in_channels}c_{n_val}s.pt"):
+    if os.path.exists(f"{data_dir}/{data_name}train_data_{grf_mode}_{equation}_{boundary}_{dim}d_{in_channels}c_{n_train}s.pt") and os.path.exists(f"{data_dir}/{data_name}val_data_{grf_mode}_{equation}_{boundary}_{dim}d_{in_channels}c_{n_val}s.pt"):
         print(f"Loading data from {data_dir}...")
-        with open(f"{data_dir}/{data_name}train_data_{equation}_{boundary}_{dim}d_{in_channels}c_{n_train}s.pt", "rb") as f:
+        with open(f"{data_dir}/{data_name}train_data_{grf_mode}_{equation}_{boundary}_{dim}d_{in_channels}c_{n_train}s.pt", "rb") as f:
             train_data = torch.load(f)
-        with open(f"{data_dir}/{data_name}val_data_{equation}_{boundary}_{dim}d_{in_channels}c_{n_val}s.pt", "rb") as f:
+        with open(f"{data_dir}/{data_name}val_data_{grf_mode}_{equation}_{boundary}_{dim}d_{in_channels}c_{n_val}s.pt", "rb") as f:
             val_data = torch.load(f)
         print(f"This is what i loaded {train_data[0].shape}, {val_data[0].shape}")
     if len(train_data) == 0 or len(val_data) == 0:
-        with open(f"args/grf_args.json", "r") as f:
-            arguments_grf = json.load(f)
-        
-        # grf = GaussianRandomFieldHierarchical(num_samples=arguments["N"],
-        #                                       dim=dim,
-        #                                       alpha_min=arguments_grf["alpha_min"],
-        #                                       alpha_max=arguments_grf["alpha_max"],
-        #                                       beta_min=arguments_grf["beta_min"],
-        #                                       beta_max=arguments_grf["beta_max"],
-        #                                       gamma_list=arguments_grf["gamma_list"],
-        #                                       device=device, seed=1234)
-        grf = GaussianRandomField(num_samples=arguments["N"],
-                                    dim=dim,
-                                    alpha=arguments_grf["alpha"],
-                                    beta=arguments_grf["beta"],
-                                    gamma=arguments_grf["gamma"],
-                                    device=device,
-                                    seed=1234)
+        if grf_mode == "hierarchical":
+            with open(f"args/hierarchical_grf.json", "r") as f:
+                arguments_grf = json.load(f)
+            grf = GaussianRandomFieldHierarchical(num_samples=arguments["N"],
+                                                    dim=dim,
+                                                    alpha_min=arguments_grf["alpha_min"],
+                                                    alpha_max=arguments_grf["alpha_max"],
+                                                    beta_min=arguments_grf["beta_min"],
+                                                    beta_max=arguments_grf["beta_max"],
+                                                    gamma_list=arguments_grf["gamma_list"],
+                                                    device=device, seed=1234)
+        else:
+            with open(f"args/grf_args.json", "r") as f:
+                arguments_grf = json.load(f)
+            grf = GaussianRandomField(num_samples=arguments["N"],
+                                        dim=dim,
+                                        alpha=arguments_grf["alpha"],
+                                        beta=arguments_grf["beta"],
+                                        gamma=arguments_grf["gamma"],
+                                        device=device,
+                                        seed=1234)
         pushforward = None if boundary == "Dirichlet" else lambda x: x - torch.mean(x)
         # Generate forcing functions
-        f = grf.generate(n_train + n_val + extra, pushfoward=pushforward) if equation == "Poisson" else grf.generate(n_train + n_val + extra, pushfoward=None)
+        f = grf.generate(n_train + n_val + extra, pushfoward=pushforward) if equation == "Poisson" and in_channels == 1 else grf.generate(n_train + n_val + extra, pushfoward=None)
+
+        # if equation == "Poisson" or (equation == "Helmholtz" and in_channels > 1):
+        #     f = grf.generate(n_train + n_val + extra, pushfoward=pushforward) if equation == "Poisson" and in_channels == 1 else grf.generate(n_train + n_val + extra, pushfoward=None)
+        # else:
+        #     if dim == 1:
+        #         f = lambda x: 0.0
+        #     else:
+        #         f = lambda x, y: 0.0
 
         # Generate k2 function for Helmholtz
         k2 = grf.generate(n_train + n_val + extra)
+        # if (equation == "Poisson" and in_channels > 1) or (equation == "Helmholtz" and in_channels > 2):
         if in_channels > 1:
             # Generate coefficient a for variable coefficient PDEs
             a = grf.generate(n_train + n_val + extra)
@@ -145,13 +166,28 @@ if __name__ == "__main__":
                                         x=x, y=y, device=device)
             else:
                 pde = HelmholtzEquation2D(a_func=a.reshape(-1, arguments["N"] * arguments["N"]) if in_channels > 1 else a, 
-                                          f_func=f.reshape(-1, arguments["N"] * arguments["N"]), 
+                                          f_func= f.reshape(-1, arguments["N"] * arguments["N"]), 
                                           k2=k2.reshape(-1, arguments["N"] * arguments["N"]),
                                           boundary=boundary, x=x, y=y, device=device)
             u_sol = torch.tensor(pde.u, dtype=torch.float32, device=device)
             u_sol = u_sol - torch.mean(u_sol, dim=(-2,-1), keepdim=True) if equation == "Poisson" and boundary == "Periodic" and in_channels == 1 else u_sol
 
         # Defining the input and output of the ML model
+        # if in_channels == 1:
+        #     if equation == "Poisson":
+        #         input = f[:, None, :]
+        #     else:
+        #         input = k2[:, None, :]
+        # elif in_channels == 2:
+        #     if equation == "Poisson":
+        #         input = torch.concatenate((a[:, None, :], f[:, None, :]), dim=1)
+        #     else:
+        #         input = torch.concatenate((k2[:, None, :], f[:, None, :]), dim=1)
+        # else:
+        #     if equation == "Poisson":
+        #         raise ValueError("Poisson with in_channels > 2 is not supported")
+        #     else:
+        #         input = torch.concatenate((a[:, None, :], k2[:, None, :], f[:, None, :]), dim=1)
         if in_channels > 1:
             if equation == "Poisson":
                 input = torch.concatenate((a[:, None, :], f[:, None, :]), dim=1)
@@ -166,15 +202,14 @@ if __name__ == "__main__":
         # Compiling the training and validation data and saving it to disk
         train_data = [input[:n_train], u_sol[:n_train]]
         val_data = [input[n_train:(n_train + n_val)], u_sol[n_train:(n_train + n_val)]]
-        with open(f"{data_dir}/{data_name}train_data_{equation}_{boundary}_{dim}d_{in_channels}c_{n_train}s.pt", "wb") as f:
+        with open(f"{data_dir}/{data_name}train_data_{grf_mode}_{equation}_{boundary}_{dim}d_{in_channels}c_{n_train}s.pt", "wb") as f:
             torch.save(train_data, f)
-        with open(f"{data_dir}/{data_name}val_data_{equation}_{boundary}_{dim}d_{in_channels}c_{n_val}s.pt", "wb") as f:
+        with open(f"{data_dir}/{data_name}val_data_{grf_mode}_{equation}_{boundary}_{dim}d_{in_channels}c_{n_val}s.pt", "wb") as f:
             torch.save(val_data, f)
 
     print("Data creation/loading completed.")
     print(f"Train data size: {train_data[0].shape[0]}, Val data size: {val_data[0].shape[0]}")
     print(f"Size of each input: {train_data[0][0].shape}, Size of each solution: {train_data[1][0].shape}")
-    
     # Creating Dataloaders for training and validation
     train_dataset = PDEDataset2(train_data)
     val_dataset = PDEDataset2(val_data)
@@ -241,14 +276,14 @@ if __name__ == "__main__":
     if ckp is not None:
         if ckp["scheduler_step"] is not None:
             scheduler_step.load_state_dict(ckp["scheduler_step"])
-    if dim == 1 and equation == "Poisson":
-        alpha = 0.0
-    elif dim == 1 and equation == "Helmholtz":
-        alpha = 1.0
-    else:
-        alpha = 2.0
+    # if dim == 1 and equation == "Poisson":
+    #     alpha = 0.0
+    # elif dim == 1 and equation == "Helmholtz":
+    #     alpha = 1.0
+    # else:
+    #     alpha = 2.0
 
-    loss_fn = MSEalphaepsilonLoss(alpha=alpha) # torch.nn.MSELoss()
+    loss_fn = MSEalphaepsilonLoss(alpha=loss_alpha) # torch.nn.MSELoss()
 
     start_epoch = 0 if ckp is None else ckp["epoch"] + 1
     print("Starting training...")

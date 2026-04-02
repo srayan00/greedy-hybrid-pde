@@ -9,6 +9,9 @@ class MSEalphaepsilonLoss(torch.nn.Module):
         self.epsilon = epsilon
     
     def forward(self, predictions, targets):
+        # error = torch.linalg.norm(predictions - targets, dim = (1,2)) if len(targets.shape) == 3 else torch.linalg.norm(predictions - targets, dim = -1)
+        # truth_norm = torch.linalg.norm(targets, dim = (1,2)) if len(targets.shape) == 3 else torch.linalg.norm(targets, dim = -1)
+        # adjusted_error = error / (truth_norm**self.alpha + self.epsilon)
         squared_error = (predictions - targets) ** 2
         denominator = torch.abs(targets) ** self.alpha + self.epsilon
         adjusted_error = squared_error / denominator
