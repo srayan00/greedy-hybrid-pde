@@ -1,0 +1,20 @@
+{
+    "model_type": "DeepONetCNN",
+    "branch_dim": 128,
+    "hidden_branch_channels": [4, 16, 32, 64],
+    "kernel_size": 3,
+    "stride": 2,
+    "hidden_trunk": [64, 64, 64],
+    "hidden_branch": [128, 128, 128],
+    "batch_size": 256,
+    "learning_rate": 1e-3,
+    "weight_decay": 5e-3,
+    "warmup_epochs_es": 1,
+    "patience": 10000,
+    "min_delta": 1e-9,
+    "epochs": 10000,
+    "max_norm": 1.0,
+    "N": 31,
+    "n_train": 10000,
+    "n_val": 2000
+}

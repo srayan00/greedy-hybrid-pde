@@ -2,7 +2,7 @@ import torch
 import os
 import numpy as np
 import argparse
-from ml_solver import DeepONet, FNOforPDE
+from ml_solver import DeepONet, FNOforPDE, DeepONetCNN
 from data_generation import GaussianRandomField, GaussianRandomFieldHierarchical, PDEDataset2
 from pde import PoissonEquation1D, PoissonEquation2D, HelmholtzEquation1D, HelmholtzEquation2D
 from numerical_solver import WeightedJacobiSolver
@@ -11,7 +11,7 @@ from trainer import Trainer, EarlyStopping, MSEalphaepsilonLoss
 import json
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--model', type=str, default='deeponet', help='Model to use: deeponet or fno')
+parser.add_argument('--model', type=str, default='deeponet', help='Model to use: deeponet/fno/deeponetcnn')
 parser.add_argument('--dim', type=int, default=1, help='Dimension of the PDE: 1 or 2')
 parser.add_argument("--boundary", type=str, default="Periodic", help="Boundary condition: Dirichlet or Periodic")
 parser.add_argument("--in_channels", type=int, default=1, help="Number of input channels")
@@ -47,8 +47,8 @@ if __name__ == "__main__":
         raise ValueError("Boundary condition must be either 'Dirichlet' or 'Periodic'")
     if equation not in ["Poisson", "Helmholtz"]:
         raise ValueError("Currently only Poisson and Helmholtz equation are supported")
-    if model_type not in ["deeponet", "fno"]:
-        raise ValueError("Model must be either 'deeponet' or 'fno'")
+    if model_type not in ["deeponet", "fno", "deeponetcnn"]:
+        raise ValueError("Model must be either 'deeponet' or 'fno' or 'deeponetcnn'")
     if dim not in [1, 2]:
         raise ValueError("Dimension must be either 1 or 2")
     if in_channels not in [1, 2]:
@@ -66,8 +66,8 @@ if __name__ == "__main__":
         with open(args_path, "r") as f:
             arguments = json.load(f)
     else:
-        if dim == 2:
-            with open(f"args/{model_type}_2d_args.json", "r") as f:
+        if os.path.exists(f"args/{model_type}_{dim}d_args.json"):
+            with open(f"args/{model_type}_{dim}d_args.json", "r") as f:
                 arguments = json.load(f)
         else:
             with open(f"args/{model_type}_args.json", "r") as f:
@@ -231,6 +231,14 @@ if __name__ == "__main__":
     elif model_type == "fno":
         model = FNOforPDE(trunc_mode=arguments["trunc_mode"], dim=dim, in_channels=new_in_channels,
                           hidden_size=arguments["hidden_size"], num_layers=arguments["num_layers"]).to(device)
+    elif model_type == "deeponetcnn":
+        model = DeepONetCNN(N=arguments["N"], dim=dim, in_channels=new_in_channels, device=device, boundary=boundary,
+                        branch_dim=arguments["branch_dim"],
+                        hidden_branch_channels=arguments["hidden_branch_channels"],
+                        kernel_size=arguments["kernel_size"],
+                        stride=arguments["stride"],
+                        hidden_trunk=arguments["hidden_trunk"],
+                        hidden_branch=arguments["hidden_branch"]).to(device)
     ckp = None
 
     # Loading checkpoint if it exists

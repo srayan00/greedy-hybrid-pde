@@ -236,20 +236,20 @@ class LSTMEncoderDecoder(torch.nn.Module):
             output["decoder_hidden_states"] = decoder_hidden
         return output
 
-# class CNNBlock(torch.nn.Module):
-#     def __init__(self, hidden_channels, kernel_size, stride):
-#         super().__init__()
-#         self.hidden_channels = hidden_channels
-#         self.kernel_size = kernel_size
-#         self.stride = stride
-#         ordered_dict = []
-#         for i in range(len(hidden_channels) - 1):
-#             ordered_dict.append(('conv_layer_{}'.format(i), torch.nn.Conv2d(hidden_channels[i], hidden_channels[i+1], kernel_size, stride)))
-#             if i < len(hidden_channels) - 2:
-#                 ordered_dict.append(('bn_layer_{}'.format(i), torch.nn.BatchNorm2d(hidden_channels[i+1])))
-#                 ordered_dict.append(('relu_layer_{}'.format(i), torch.nn.ReLU()))
-#         self.cnn = torch.nn.Sequential(OrderedDict(ordered_dict))
+class CNNBlock(torch.nn.Module):
+    def __init__(self, hidden_channels, kernel_size, stride):
+        super().__init__()
+        self.hidden_channels = hidden_channels
+        self.kernel_size = kernel_size
+        self.stride = stride
+        ordered_dict = []
+        for i in range(len(hidden_channels) - 1):
+            ordered_dict.append(('conv_layer_{}'.format(i), torch.nn.Conv2d(hidden_channels[i], hidden_channels[i+1], kernel_size, stride)))
+            if i < len(hidden_channels) - 2:
+                ordered_dict.append(('bn_layer_{}'.format(i), torch.nn.BatchNorm2d(hidden_channels[i+1])))
+                ordered_dict.append(('relu_layer_{}'.format(i), torch.nn.ReLU()))
+        self.cnn = torch.nn.Sequential(OrderedDict(ordered_dict))
 
     
-#     def forward(self, x):
-#         return self.cnn(x)
+    def forward(self, x):
+        return self.cnn(x)

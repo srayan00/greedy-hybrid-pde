@@ -79,11 +79,13 @@ ALL THE CODE BELOW HAS NOT BEEN USED. IT CAN BE IGNORED. I JUST WANTED TO KEEP I
 """
 
 class DeepONetCNN(MLSolver):
-    def __init__(self, N, dim, device, in_channels = 1, boundary = "Periodic", hidden_branch_channels = [16, 32, 64], hidden_trunk = [16, 32, 64], hidden_branch = [64, 40, 40], kernel_size = 3, stride = 2):
+    def __init__(self, N, dim, device, in_channels = 1, boundary = "Periodic", hidden_branch_channels = [16, 32, 64], hidden_trunk = [16, 32, 64], hidden_branch = [64, 40, 40], branch_dim = 64, kernel_size = 3, stride = 2):
         super().__init__(dim, in_channels)
         self.N = N
         self.hidden_branch_channels = hidden_branch_channels
         self.hidden_trunk = hidden_trunk
+        self.branch_dim = branch_dim
+        self.hidden_branch = hidden_branch
         self.kernel_size = kernel_size
         self.stride = stride
         self.boundary = boundary
@@ -95,22 +97,31 @@ class DeepONetCNN(MLSolver):
             self.coords = coords.reshape(-1, 2).to(device) # N^2 \times 2
         else:
             self.coords = xs.reshape(-1, 1).to(device) # N \times 1
-        self.part_branch_net = models.CNNBlock(hidden_branch_channels, kernel_size, stride)
-        self.second_branch_net = models.MLP(hidden_branch)
-        self.trunk_net = models.MLP(hidden_trunk)
+        branch_channel_list = [in_channels] + hidden_branch_channels
+        self.part_branch_net = models.CNNBlock(branch_channel_list, kernel_size, stride)
+        with torch.no_grad():
+            example = torch.zeros(1, self.in_channels, self.N, self.N)
+            output = self.part_branch_net(example)
+            flattened_dim = output.flatten(1).shape[1]
+        branch_hidden_list = [flattened_dim] + hidden_branch + [branch_dim]
+        self.second_branch_net = models.MLP(branch_hidden_list)
+        trunk_hidden_list = [dim] + hidden_trunk + [branch_dim]
+        self.trunk_net = models.MLP(trunk_hidden_list)
         self.input_size = N if self.dim == 1 else N*N
         self.input_size = self.in_channels*self.input_size
     
     def forward(self, input, coords = None):
         """
-        input is of size (B, 2, N, N) or (B, 2, N)
+        input is of size (B, 2, N, N) or (B, 1, N, N) or (B, 2, N*2)
         coords is of size (num_coords, 2) if dim == 2 else (num_coords, 1)
         """
         bs = input.size(0)
+        if len(input.shape) == 3:
+            input = input.reshape(bs, -1, self.N, self.N)
         
         # input_flat = input.reshape(-1, self.input_size) # (B, N^2)
         first_branch_output = self.part_branch_net(input) # (B, hidden_branch_channels[-1], N, N) or (B, hidden_branch_channels[-1], N)
-        second_branch_output = self.second_branch_net(first_branch_output) # (B, hidden_branch[-1])
+        second_branch_output = self.second_branch_net(first_branch_output.flatten(1)) # (B, branch_dim)
         if coords:
             trunk_output = self.trunk_net(coords) #num_coords, branch_dim
         else:

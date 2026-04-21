@@ -1,5 +1,5 @@
 import torch
-from ml_solver import MLSolver, DeepONet, FNOforPDE, PredictorRejector
+from ml_solver import MLSolver, DeepONet, FNOforPDE, PredictorRejector, DeepONetCNN
 from hybrid_solver import Router, ConstantRouter, HINTSRouter, LSTMGreedyRouter, HybridSolver
 
 class MSEalphaepsilonLoss(torch.nn.Module):
@@ -299,8 +299,10 @@ class Trainer:
             print(self.model.branch_net.mlp.linear_layer_0.bias)
         elif isinstance(self.model, FNOforPDE):
             print(self.model.fno.fno_blocks.convs[0].weight)
-        if isinstance(self.model, HybridSolver):
+        if isinstance(self.model, HybridSolver) and isinstance(self.model.suite_solver[-1], DeepONet):
             print(self.model.suite_solver[-1].branch_net.mlp.linear_layer_0.bias)
+        elif isinstance(self.model, HybridSolver) and isinstance(self.model.suite_solver[-1], DeepONetCNN):
+            print(self.model.suite_solver[-1].part_branch_net.cnn.conv_layer_0.weight)
         if torch.isnan(loss):
             print("Loss is NaN")
             raise ValueError("Loss is NaN")

@@ -1,6 +1,6 @@
 import numpy
 import torch
-from ml_solver import MLSolver, DeepONet, FNOforPDE
+from ml_solver import MLSolver, DeepONet, FNOforPDE, DeepONetCNN
 from numerical_solver import NumericalSolver
 from pde import PDE, PoissonEquation1D, PoissonEquation2D
 import models
@@ -82,6 +82,45 @@ class LSTMGreedyRouter(Router):
                 self.encoder_dim = encoder_dim[1]
             self.lm = torch.nn.Linear(self.encoder_dim, self.hidden_dim)
         self.decoder_dim = decoder_dim
+        self.model = models.LSTMModel(self.decoder_dim , self.hidden_dim, self.num_solvers, num_layers, dropout)
+    
+    def initHidden(self, encoder_hidden):
+        if encoder_hidden is None:
+            return torch.zeros(1, 1, self.hidden_dim)
+        if len(encoder_hidden.shape) == 3:
+            encoder_hidden = torch.mean(encoder_hidden, dim = 1)
+        return self.lm(encoder_hidden)
+    
+    def forward(self, input, hidden):
+        x, hidden = self.model(input, hidden)
+        return x, hidden
+    
+    def predict(self, decoder_hidden, hidden, with_scores = False):
+        final_score, hidden = self.forward(decoder_hidden, hidden)
+        decision = torch.max(final_score, dim = 1).indices
+        if with_scores:
+            return (decision, final_score, hidden)
+        else:
+            return (decision, hidden)
+
+class LSTMGreedyRouter_SideInfo(Router):
+    """
+    A router that uses an LSTM to predict which solver to use 
+    """
+    def __init__(self, encoder_dim, decoder_dim, hidden_dim, num_layers, num_solvers, dropout):
+        super(LSTMGreedyRouter_SideInfo, self).__init__(num_solvers)
+        self.type = "LSTMGreedySideInfo"
+        self.lm = None
+        self.hidden_dim = hidden_dim
+        if encoder_dim is None:
+            self.encoder_dim = 0
+        else:
+            if isinstance(encoder_dim, int):
+                self.encoder_dim = encoder_dim
+            elif isinstance(encoder_dim, tuple):
+                self.encoder_dim = encoder_dim[1]
+            self.lm = torch.nn.Linear(self.encoder_dim, self.hidden_dim)
+        self.decoder_dim = decoder_dim + 3
         self.model = models.LSTMModel(self.decoder_dim , self.hidden_dim, self.num_solvers, num_layers, dropout)
     
     def initHidden(self, encoder_hidden):
@@ -195,12 +234,20 @@ class HybridSolver(torch.nn.Module):
                 print(f"Iteration {iteration_num+1}/{self.max_iters}")
             residual = equations.compute_residual(u_prev)
             inputs = self.prepare_inputs(residual.unsqueeze(1), a, k2)
+            use_ml_solver = torch.zeros((bs,), device = f.device)
             if self.router.type in ["HINTS", "Constant"]:
                 use_ml_solver, scores = self.router.predict(torch.tensor([iteration_num]).repeat(bs), with_scores=True)
             elif self.router.type == "LSTMGreedy":
                 recurrent_inputs = torch.cat((inputs, u_prev.unsqueeze(1)), dim = 1)
                 bs = recurrent_inputs.shape[0]
                 use_ml_solver, scores, hidden_state_for_recurrent = self.router.predict(recurrent_inputs.reshape(bs, -1), hidden_state_for_recurrent, with_scores=True)
+            elif self.router.type == "LSTMGreedySideInfo":
+                recurrent_inputs = torch.cat((inputs, u_prev.unsqueeze(1)), dim = 1)
+                bs = recurrent_inputs.shape[0]
+                norm_residual = torch.norm(residual, dim = 1)
+                side_info = torch.cat((use_ml_solver.unsqueeze(1), norm_residual.unsqueeze(1), torch.tensor([iteration_num], device = f.device).repeat(bs, 1)), dim = 1)
+                new_recurrent_inputs = torch.cat((recurrent_inputs.reshape(bs, -1), side_info), dim = 1)
+                use_ml_solver, scores, hidden_state_for_recurrent = self.router.predict(new_recurrent_inputs, hidden_state_for_recurrent, with_scores=True)
             else:
                 raise NotImplementedError("Only HINTRouter is implemented in this version.")
             if training:
@@ -251,7 +298,7 @@ class HybridSolver(torch.nn.Module):
                 "predictions": torch.stack(predictions, dim=0),
                 "routing_scores": torch.stack(routing_scores, dim=0) if routing_scores else None,
                 "complete_expert_predictions": torch.stack(complete_expert_predictions, dim=0) if complete_expert_predictions else None,
-                "hidden_state_for_recurrent": hidden_state_for_recurrent if self.router.type == "LSTMGreedy" else None,
+                "hidden_state_for_recurrent": hidden_state_for_recurrent if self.router.type == "LSTMGreedy" or self.router.type == "LSTMGreedySideInfo" else None,
                 "residuals": torch.stack(residuals, dim = 0),
                 "prev_step_errors": torch.stack(prev_step_errors, dim = 0) if prev_step_errors else None
             }

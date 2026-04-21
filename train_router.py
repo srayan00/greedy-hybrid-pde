@@ -2,17 +2,17 @@ import torch
 import os
 import numpy as np
 import argparse
-from ml_solver import DeepONet, FNOforPDE
+from ml_solver import DeepONet, FNOforPDE, DeepONetCNN
 from data_generation import  GaussianRandomFieldHierarchical, PDEDataset2, GaussianRandomField
 from pde import PoissonEquation1D, PoissonEquation2D, HelmholtzEquation1D, HelmholtzEquation2D
 from numerical_solver import WeightedJacobiSolver, MultigridSolver, GaussSeidelSolver, SuccessiveOverRelaxationSolver
-from hybrid_solver import LSTMGreedyRouter, HybridSolver
+from hybrid_solver import LSTMGreedyRouter, HybridSolver, LSTMGreedyRouter_SideInfo
 
 from trainer import Trainer, EarlyStopping, ApproxGreedyRouterLoss, ScheduledSampler, ScheduledBPTT
 import json
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--ml_model', type=str, default='deeponet', help='Model to use: deeponet or fno')
+parser.add_argument('--ml_model', type=str, default='deeponet', help='Model to use: deeponet/fno/deeponetcnn')
 parser.add_argument('--numerical_solvers', type=str, default='jacobi', help='comma-separated list of numerical solvers. Ex: jacobi_1.3,mg_2,gs')
 parser.add_argument("--model", type=str, default='lstm')
 parser.add_argument('--dim', type=int, default=1, help='Dimension of the PDE: 1 or 2')
@@ -53,14 +53,14 @@ if __name__ == "__main__":
         raise ValueError("Boundary condition must be either 'Dirichlet' or 'Periodic'")
     if equation not in ["Poisson", "Helmholtz"]:
         raise ValueError("Currently only Poisson/Helmholtz equation is supported")
-    if ml_model_type not in ["deeponet", "fno"]:
-        raise ValueError("Model must be either 'deeponet' or 'fno'")
+    if ml_model_type not in ["deeponet", "fno", "deeponetcnn"]:
+        raise ValueError("Model must be either 'deeponet' or 'fno' or 'deeponetcnn'")
     if dim not in [1, 2]:
         raise ValueError("Dimension must be either 1 or 2")
     if in_channels not in [1, 2]:
         raise ValueError("in_channels must be either 1 or 2")
-    if model_type != "lstm":
-        raise ValueError("Model must be LSTM")
+    if model_type not in ["lstm", "lstm_side_info"]:
+        raise ValueError("Model must be LSTM or LSTM_SideInfo")
 
     
     
@@ -205,7 +205,14 @@ if __name__ == "__main__":
     elif ml_model_type == "fno":
         ml_model = FNOforPDE(trunc_mode=ml_arguments["trunc_mode"], dim=dim, in_channels=new_in_channels,
                           hidden_size=ml_arguments["hidden_size"], num_layers=ml_arguments["num_layers"]).to(device)
-    
+    elif ml_model_type == "deeponetcnn":
+        ml_model = DeepONetCNN(N=ml_arguments["N"], dim=dim, in_channels=new_in_channels, device=device, boundary=boundary,
+                        branch_dim=ml_arguments["branch_dim"],
+                        hidden_branch_channels=ml_arguments["hidden_branch_channels"],
+                        kernel_size=ml_arguments["kernel_size"],
+                        stride=ml_arguments["stride"],
+                        hidden_trunk=ml_arguments["hidden_trunk"],
+                        hidden_branch=ml_arguments["hidden_branch"]).to(device)
     
     ml_ckp = None
     if os.path.exists(ml_ckp_path):
@@ -220,6 +227,11 @@ if __name__ == "__main__":
             router = LSTMGreedyRouter(None, ml_arguments["N"]*(new_in_channels + 1), arguments["hidden_dim"], arguments["num_layers"], num_solvers, arguments["dropout"]).to(device)
         else:
             router = LSTMGreedyRouter(None, ml_arguments["N"]*ml_arguments["N"]*(new_in_channels + 1), arguments["hidden_dim"], arguments["num_layers"], num_solvers, arguments["dropout"]).to(device)
+    elif model_type == "lstm_side_info":
+        if dim == 1:
+            router = LSTMGreedyRouter_SideInfo(None, ml_arguments["N"]*(new_in_channels + 1), arguments["hidden_dim"], arguments["num_layers"], num_solvers, arguments["dropout"]).to(device)
+        else:
+            router = LSTMGreedyRouter_SideInfo(None, ml_arguments["N"]*ml_arguments["N"]*(new_in_channels + 1), arguments["hidden_dim"], arguments["num_layers"], num_solvers, arguments["dropout"]).to(device)
 
     ckp = None
     if os.path.exists(ckp_path):
