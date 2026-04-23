@@ -5,7 +5,7 @@ import argparse
 from ml_solver import DeepONet, FNOforPDE, DeepONetCNN
 from data_generation import  GaussianRandomFieldHierarchical, PDEDataset2, GaussianRandomField
 from pde import ConvectionDiffusion2D, PoissonEquation1D, PoissonEquation2D, HelmholtzEquation1D, HelmholtzEquation2D
-from numerical_solver import WeightedJacobiSolver, MultigridSolver, GaussSeidelSolver, SuccessiveOverRelaxationSolver
+from numerical_solver import WeightedJacobiSolver, MultigridSolver, GaussSeidelSolver, SuccessiveOverRelaxationSolver, SymmetricSuccessiveOverRelaxationSolver, RichardsonSolver
 from hybrid_solver import LSTMGreedyRouter, HybridSolver, LSTMGreedyRouter_SideInfo
 
 from trainer import Trainer, EarlyStopping, ApproxGreedyRouterLoss, ScheduledSampler, ScheduledBPTT
@@ -323,6 +323,19 @@ if __name__ == "__main__":
             else:
                 omega = 1.0
             list_of_solvers.append(SuccessiveOverRelaxationSolver(pde, device, omega))
+        elif split[0] == "ssor":
+            if len(split) > 1:
+                omega = float(split[1])
+            else:
+                omega = 1.0
+            list_of_solvers.append(SymmetricSuccessiveOverRelaxationSolver(pde, device, omega))
+        elif split[0] == "rich":
+            if len(split) > 1:
+                omega = float(split[1])
+            else:
+                omega = 1.0
+            list_of_solvers.append(RichardsonSolver(pde, device, omega))
+
         else:
             raise ValueError("Invalid Numerical Solver")
     print(f"List of solvers: {list_of_solvers}")

@@ -165,9 +165,66 @@ class SuccessiveOverRelaxationSolver(NumericalSolver):
             u_new = u_old + precond @ (self.equation.b - output)
         return u_new
     
-"""
-Need to implement the Multigrid Solver
-"""
+class SymmetricSuccessiveOverRelaxationSolver(NumericalSolver):
+    def __init__(self, equation: PDE, device = torch.device("cpu"), omega = 1.0):
+        super().__init__(equation, device)
+        self.omega = omega
+        self.preconditioner = None
+        self._cached_A_id = None
+    
+    def _get_preconditioner(self, A):
+        A_id = A.data_ptr()
+        if self.preconditioner is None or A_id != self._cached_A_id:
+            self._cached_A_id = A_id
+            D = torch.diag_embed(torch.diagonal(A, dim1=-2, dim2=-1))
+            U = torch.triu(A, diagonal = 1)
+            L = torch.tril(A, diagonal = -1)
+            first_term = D/self.omega + L
+            second_term = self.omega/(2 - self.omega) + torch.linalg.inv(D)
+            third_term = D/self.omega + U
+            self.preconditioner = torch.bmm(torch.bmm(first_term, second_term), third_term)
+            self.preconditioner = torch.linalg.inv(self.preconditioner)
+        return self.preconditioner
+    
+    def iteration(self, u_old, mask = None):
+        """
+        u_old: (B, N) or (B, N^2) tensor containing the current solution estimates for a batch of samples
+        mask: (B,) boolean tensor indicating which samples have not yet converged. If None, it is assumed that all samples are not converged.
+        """
+        if mask is None:
+            mask = torch.ones(self.equation.b.shape[0], device=self.device, dtype=torch.bool)
+        is_batch = self.equation.A.ndim == 3
+        precond = self._get_preconditioner(self.equation.A)
+        if is_batch:
+            u_new = u_old.clone()
+            output = torch.bmm(self.equation.A[mask], u_old[mask].unsqueeze(-1)).squeeze(-1)
+            u_new[mask] = u_old[mask] + torch.bmm(precond[mask], (self.equation.b[mask] - output).unsqueeze(-1)).squeeze(-1)
+        else:
+            output = self.equation.A @ u_old
+            u_new = u_old + precond @ (self.equation.b - output)
+        return u_new
+
+class RichardsonSolver(NumericalSolver):
+    def __init__(self, equation: PDE, device = torch.device("cpu"), omega = 1.0):
+        super().__init__(equation, device)
+        self.omega = omega
+    
+    def iteration(self, u_old, mask = None):
+        """
+        u_old: (B, N) or (B, N^2) tensor containing the current solution estimates for a batch of samples
+        mask: (B,) boolean tensor indicating which samples have not yet converged. If None, it is assumed that all samples are not converged.
+        """
+        if mask is None:
+            mask = torch.ones(self.equation.b.shape[0], device=self.device, dtype=torch.bool)
+        is_batch = self.equation.A.ndim == 3
+        if is_batch:
+            u_new = u_old.clone()
+            output = torch.bmm(self.equation.A[mask], u_old[mask].unsqueeze(-1)).squeeze(-1)
+            u_new[mask] = u_old[mask] + self.omega * (self.equation.b[mask] - output)
+        else:
+            output = self.equation.A @ u_old
+            u_new = u_old + self.omega * (self.equation.b - output)
+        return u_new
 
 # class MultigridSolver(NumericalSolver):
 #     def __init__(self, equation: PDE, levels=2, device = torch.device("cpu")):
