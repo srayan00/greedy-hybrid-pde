@@ -399,8 +399,9 @@ if __name__ == "__main__":
         if "scheduler_bptt" in ckp and ckp["scheduler_bptt"] is not None:
             scheduled_bptt.load_state_dict(ckp["scheduler_bptt"])
             print("Scheduled Sampler loaded", flush=True)
-
-    loss_fn = ApproxGreedyRouterLoss(centered=(equation == "Poisson" and boundary == "Periodic"), normalized=False)
+    
+    needs_mean_zero = (equation == "Poisson") or (equation == "ConvDiff" and reaction_c == 0.0)
+    loss_fn = ApproxGreedyRouterLoss(centered=(needs_mean_zero and boundary == "Periodic" and in_channels == 1), normalized=False)
 
     start_epoch = 0 if ckp is None else ckp["epoch"] + 1
     print("Starting training...")

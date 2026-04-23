@@ -272,7 +272,8 @@ class HybridSolver(torch.nn.Module):
             if training:
                 all_expert_predictions = torch.stack(all_expert_predictions, dim=0)
                 # Zero center if it's periodic poisson to prevent constants from dominating the error
-                if self.equation.equation == "Poisson" and self.boundary == "Periodic":
+                needs_mean_zero = (self.equation.equation == "Poisson") or (self.equation.equation == "ConvDiff" and self.equation.reaction == 0.0)
+                if needs_mean_zero and self.boundary == "Periodic" and self.in_channels == 1:
                     all_expert_predictions = all_expert_predictions - torch.mean(all_expert_predictions, dim=2, keepdim=True)
                 error = torch.linalg.norm(all_expert_predictions - ground_truth, dim=2)
                 best_solver = torch.argmin(error, dim=0)

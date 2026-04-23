@@ -5,11 +5,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
 import argparse
-from ml_solver import MLSolver, DeepONet, FNOforPDE
+from ml_solver import MLSolver, DeepONet, FNOforPDE, DeepONetCNN
 from data_generation import GaussianRandomField, PDEDataset2, GaussianRandomFieldHierarchical
-from pde import PoissonEquation1D, PoissonEquation2D, HelmholtzEquation1D, HelmholtzEquation2D
-from numerical_solver import WeightedJacobiSolver, MultigridSolver, GaussSeidelSolver
-from hybrid_solver import LSTMGreedyRouter, HybridSolver, ConstantRouter, HINTSRouter
+from pde import PoissonEquation1D, PoissonEquation2D, HelmholtzEquation1D, HelmholtzEquation2D, ConvectionDiffusion2D
+from numerical_solver import WeightedJacobiSolver, MultigridSolver, GaussSeidelSolver, SuccessiveOverRelaxationSolver, SymmetricSuccessiveOverRelaxationSolver, RichardsonSolver
+from hybrid_solver import LSTMGreedyRouter, HybridSolver, ConstantRouter, HINTSRouter, LSTMGreedyRouter_SideInfo
 
 from trainer import ApproxGreedyRouterLoss
 import json
@@ -35,6 +35,8 @@ parser.add_argument("--boundary", type=str, default="Periodic", help="Boundary c
 parser.add_argument("--in_channels", type=int, default=1, help="Number of input channels")
 parser.add_argument('--numerical_solvers', type=str, default='jacobi', help='comma-separated list of numerical solvers. Ex: jacobi_1.3,mg_2,gs')
 parser.add_argument("--equation", type=str, default="Poisson", help="PDE to solve: Poisson")
+parser.add_argument("--reaction_c", type=float, default=0.0, help="Reaction coefficient for Convection-Diffusion equation")
+parser.add_argument("--b_vel", type=float, default=20.0, help="Advection velocity magnitude for Convection-Diffusion equation")
 parser.add_argument("--results_df_name", type=str, default="", help="Name of the results dataframe")
 parser.add_argument("--results_dir", type=str, default="./results", help="Path to save the results")
 
@@ -58,7 +60,7 @@ def test_model(model, dataloader, in_channels, dim, loss = ApproxGreedyRouterLos
             # else:
             #     a = None
             f = input[:, -1, :].reshape(bs, -1)
-            if model.equation.equation == "Poisson":
+            if model.equation.equation =="Poisson" or model.equation.equation == "ConvDiff":
                 if in_channels > 1:
                     a = input[:, 0, :].reshape(bs, -1)
                 else:
@@ -133,7 +135,7 @@ def true_greedy_model(model_hints, test_loader, in_channels, dim, loss = ApproxG
             input, output = batch
             bs = input.shape[0]
             f = input[:, -1, :].reshape(bs, -1)
-            if model_hints.equation.equation == "Poisson":
+            if model_hints.equation.equation =="Poisson" or model_hints.equation.equation == "ConvDiff":
                 if in_channels > 1:
                     a = input[:, 0, :].reshape(bs, -1)
                 else:
@@ -193,6 +195,8 @@ if __name__ == "__main__":
     boundary = args.boundary
     in_channels = args.in_channels
     equation = args.equation
+    reaction_c = args.reaction_c
+    b_vel = args.b_vel
     results_df_name = args.results_df_name
     results_dir = args.results_dir
 
@@ -200,15 +204,15 @@ if __name__ == "__main__":
 
     if boundary not in ["Periodic", "Dirichlet"]:
         raise ValueError("Boundary condition must be either 'Dirichlet' or 'Periodic'")
-    if equation not in ["Poisson", "Helmholtz"]:
-        raise ValueError("Currently only Poisson/Helmholtz equation is supported")
-    if ml_model_type not in ["deeponet", "fno"]:
-        raise ValueError("Model must be either 'deeponet' or 'fno'")
+    if equation not in ["Poisson", "Helmholtz", "ConvDiff"]:
+        raise ValueError("Currently only Poisson/Helmholtz/ConvDiff equation is supported")
+    if ml_model_type not in ["deeponet", "fno", "deeponetcnn"]:
+        raise ValueError("Model must be either 'deeponet' or 'fno' or 'deeponetcnn'")
     if dim not in [1, 2]:
         raise ValueError("Dimension must be either 1 or 2")
     if in_channels not in [1, 2]:
         raise ValueError("in_channels must be either 1 or 2")
-    if model_type != "lstm":
+    if model_type not in ["lstm", "lstm_side_info"]:
         raise ValueError("Model must be LSTM")
     
     ml_ckp_path = ckp_dir + f"/{ml_model_type}_{ml_model_name}_{grf_mode}_{equation}_{boundary}_{dim}d_{in_channels}c_best.pth"
@@ -264,8 +268,12 @@ if __name__ == "__main__":
                                     beta=arguments_grf["beta"],
                                     gamma=arguments_grf["gamma"],
                                     device=device, seed=72)
-        pushforward = None if boundary == "Dirichlet" else lambda x: x - torch.mean(x)
-        f = grf.generate(n_test + extra, pushfoward=pushforward) if equation == "Poisson" and in_channels == 1 else grf.generate(n_test + extra, pushfoward=None)
+        if dim == 1:
+            pushforward = lambda x: x - torch.mean(x, dim=-1, keepdim=True)
+        else:
+            pushforward = lambda x: x - torch.mean(x, dim=(-2, -1), keepdim=True)
+        needs_mean_zero = (equation == "Poisson") or (equation == "ConvDiff" and reaction_c == 0.0)
+        f = grf.generate(n_test + extra, pushfoward=pushforward) if needs_mean_zero and boundary == "Periodic" and in_channels == 1 else grf.generate(n_test + extra, pushfoward=None)
         k2 = grf.generate(n_test + extra)
         if in_channels > 1:
             a = grf.generate(n_test + extra)
@@ -299,20 +307,27 @@ if __name__ == "__main__":
                                         f_func=f.reshape(-1, arguments["N"] * arguments["N"]),
                                         boundary=boundary, 
                                         x=x, y=y, device=device)
+            elif equation == "ConvDiff":
+                pde = ConvectionDiffusion2D(a_func=a.reshape(-1, arguments["N"] * arguments["N"]) if in_channels > 1 else a,
+                                            f_func=f.reshape(-1, arguments["N"] * arguments["N"]),
+                                            b_vec=(b_vel, b_vel),
+                                            boundary=boundary,
+                                            x=x, y=y, device=device,
+                                            reaction=reaction_c)
             else:
                 pde = HelmholtzEquation2D(a_func=a.reshape(-1, arguments["N"] * arguments["N"]) if in_channels > 1 else a, 
                                           f_func=f.reshape(-1, arguments["N"] * arguments["N"]), 
                                           k2=k2.reshape(-1, arguments["N"] * arguments["N"]),
                                           boundary=boundary, x=x, y=y, device=device)
             u_sol = torch.tensor(pde.u, dtype=torch.float32, device=device)
-            u_sol = u_sol - torch.mean(u_sol, dim=(-2,-1), keepdim=True) if equation == "Poisson" and boundary == "Periodic" and in_channels == 1 else u_sol
+            u_sol = u_sol - torch.mean(u_sol, dim=(-2,-1), keepdim=True) if needs_mean_zero and boundary == "Periodic" and in_channels == 1 else u_sol
         if in_channels > 1:
-            if equation == "Poisson":
+            if equation == "Poisson" or equation == "ConvDiff":
                 input = torch.concatenate((a[:, None, :], f[:, None, :]), dim=1)
             else:
                 input = torch.concatenate((a[:, None, :], k2[:, None, :], f[:, None, :]), dim=1)
         else:
-            if equation == "Poisson":
+            if equation == "Poisson" or equation == "ConvDiff":
                 input = f[:, None, :]
             else:
                 input = torch.concatenate((k2[:, None, :], f[:, None, :]), dim=1)
@@ -340,6 +355,16 @@ if __name__ == "__main__":
     elif ml_model_type == "fno":
         ml_model = FNOforPDE(trunc_mode=ml_arguments["trunc_mode"], dim=dim, in_channels=new_in_channels,
                           hidden_size=ml_arguments["hidden_size"], num_layers=ml_arguments["num_layers"]).to(device)
+    elif ml_model_type == "deeponetcnn":
+        ml_model = DeepONetCNN(N=ml_arguments["N"], dim=dim, in_channels=new_in_channels, device=device, boundary=boundary,
+                        branch_dim=ml_arguments["branch_dim"],
+                        hidden_branch_channels=ml_arguments["hidden_branch_channels"],
+                        kernel_size=ml_arguments["kernel_size"],
+                        stride=ml_arguments["stride"],
+                        hidden_trunk=ml_arguments["hidden_trunk"],
+                        hidden_branch=ml_arguments["hidden_branch"]).to(device)
+    else:
+        raise ValueError("Invalid ML Model Type")
     
     
     ml_ckp = None
@@ -355,6 +380,12 @@ if __name__ == "__main__":
             router = LSTMGreedyRouter(None, ml_arguments["N"]*(new_in_channels + 1), arguments["hidden_dim"], arguments["num_layers"], num_solvers, arguments["dropout"]).to(device)
         else:
             router = LSTMGreedyRouter(None, ml_arguments["N"]*ml_arguments["N"]*(new_in_channels + 1), arguments["hidden_dim"], arguments["num_layers"], num_solvers, arguments["dropout"]).to(device)
+    elif model_type == "lstm_side_info":
+        if dim == 1:
+            router = LSTMGreedyRouter_SideInfo(None, ml_arguments["N"]*(new_in_channels + 1), arguments["hidden_dim"], arguments["num_layers"], num_solvers, arguments["dropout"]).to(device)
+        else:
+            router = LSTMGreedyRouter_SideInfo(None, ml_arguments["N"]*ml_arguments["N"]*(new_in_channels + 1), arguments["hidden_dim"], arguments["num_layers"], num_solvers, arguments["dropout"]).to(device)
+
     
     ckp = None
     if os.path.exists(ckp_path):
@@ -388,6 +419,14 @@ if __name__ == "__main__":
                                             y=y,
                                             device=device, 
                                             solve = False)
+    elif equation == "ConvDiff":
+         pde = ConvectionDiffusion2D(a_func=lambda x, y: 1,
+                                    f_func=lambda x, y: 1,
+                                    b_vec=(b_vel, b_vel),
+                                    boundary=boundary,
+                                    x=x, y=y, device=device, 
+                                    reaction=reaction_c,
+                                    solve = False)
     else:
         if dim == 1:
             pde = HelmholtzEquation1D(a_func= lambda x: 1, f_func=lambda x: 1, k2=lambda x: 1, boundary=boundary, x=x, device=device, solve = False)
@@ -398,6 +437,7 @@ if __name__ == "__main__":
     list_of_solvers = []
     for solver in numerical_solvers:
         split = solver.split("_")
+        print(split[0])
         if len(split) > 2:
             raise ValueError("Invalid Numerical Solver")
         if split[0] == "jacobi":
@@ -415,6 +455,25 @@ if __name__ == "__main__":
                 levels = 2
             print(f"This is device {device}")
             list_of_solvers.append(MultigridSolver(pde, levels, device))
+        elif split[0] == "sor":
+            if len(split) > 1:
+                omega = float(split[1])
+            else:
+                omega = 1.0
+            list_of_solvers.append(SuccessiveOverRelaxationSolver(pde, device, omega))
+        elif split[0] == "ssor":
+            if len(split) > 1:
+                omega = float(split[1])
+            else:
+                omega = 1.0
+            list_of_solvers.append(SymmetricSuccessiveOverRelaxationSolver(pde, device, omega))
+        elif split[0] == "rich":
+            if len(split) > 1:
+                omega = float(split[1])
+            else:
+                omega = 1.0
+            list_of_solvers.append(RichardsonSolver(pde, device, omega))
+
         else:
             raise ValueError("Invalid Numerical Solver")
     print(f"List of solvers: {list_of_solvers}")
@@ -422,7 +481,8 @@ if __name__ == "__main__":
     model = HybridSolver(N=arguments["N"], dim=dim, in_channels=in_channels, boundary=boundary, equation=pde,
                                     suite_solver=list_of_solvers+[ml_model], router=router, tol=1e-7, max_iters=arguments["max_iters"], threshold=0.1)
     model.eval()
-    centered = equation == "Poisson" and boundary == "Periodic" and in_channels == 1
+    needs_mean_zero = (equation == "Poisson") or (equation == "ConvDiff" and reaction_c == 0.0)
+    centered = needs_mean_zero and boundary == "Periodic" and in_channels == 1
     loss = ApproxGreedyRouterLoss(centered=centered)
     errors_greedy, loss_greedy, residuals_greedy, mode_1_errors, mode_5_errors, mode_10_errors, solver_decisions_greedy = test_model(model, test_loader, in_channels, dim, loss = loss, centered = centered, loss_t = False)
 
@@ -592,7 +652,7 @@ if __name__ == "__main__":
     # plot the solver decisions in the form of a heatmap in order of ml solver usage
     # need a discrete cmap with 2 colors from tableau10 # encode 0 as numerical solver and 1 as ml solver as a label
     # different color than these two
-    titles = {"jacobi": "Jacobi", "gs": "GS", "mg": "MG"}
+    titles = {"jacobi": "Jacobi", "gs": "GS", "mg": "MG", "sor": "SOR", "ssor": "SSOR", "rich": "Richardson"}
     cmap = colors.ListedColormap(colors.TABLEAU_COLORS.keys())
     # i need two colors f
     two_colors = cmap(np.linspace(0,1,2))
