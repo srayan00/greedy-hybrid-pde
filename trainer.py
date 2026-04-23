@@ -247,7 +247,7 @@ class Trainer:
             # Make Prediction and observe loss
                 channels = source.shape[1]
                 f = source[:, -1, :].reshape(bs, -1)
-                if self.model.equation.equation == "Poisson":
+                if self.model.equation.equation in ["Poisson", "ConvDiff"]:
                     if channels > 1:
                         a = source[:, 0, :].reshape(bs, -1)
                     else:
@@ -322,7 +322,7 @@ class Trainer:
             if isinstance(self.model, HybridSolver):
                 channels = source.shape[1]
                 f = source[:, -1, :].reshape(bs, -1)
-                if self.model.equation.equation == "Poisson":
+                if self.model.equation.equation in ["Poisson", "ConvDiff"]:
                     if channels > 1:
                         a = source[:, 0, :].reshape(bs, -1)
                     else:
@@ -486,7 +486,7 @@ class Trainer:
                     bs = source.shape[0]
                     channels = source.shape[1]
                     f = source[:, -1, :].reshape(bs, -1)
-                    if self.model.equation.equation == "Poisson":
+                    if self.model.equation.equation in ["Poisson", "ConvDiff"]:
                         if channels > 1:
                             a = source[:, 0, :].reshape(bs, -1)
                         else:

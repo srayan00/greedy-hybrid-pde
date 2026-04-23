@@ -142,8 +142,9 @@ class DeepONetCNN(MLSolver):
         return out
 
 class FNOforPDE(MLSolver):
-    def __init__(self, trunc_mode, dim, in_channels=1, hidden_size = 32, num_layers = 2):
+    def __init__(self, trunc_mode, dim, N, in_channels=1, hidden_size = 32, num_layers = 2):
         super().__init__(dim, in_channels)
+        self.N = N
         self.fno = FNO(n_modes = (trunc_mode,)*dim,
                        in_channels = in_channels,
                        out_channels = 1,
@@ -154,6 +155,9 @@ class FNOforPDE(MLSolver):
         """
         input is of size (B, 2, N, N) or (B, 2, N) or (B, 1, N, N) or (B, 1, N)
         """
+        if self.dim == 2 and len(input.shape) == 3:
+            bs, C, _ = input.shape
+            input = input.reshape(bs, C, self.N, self.N)
         out = self.fno(input) # (B, 1, N, N) or (B, 1, N)
         return out.squeeze(1)
 

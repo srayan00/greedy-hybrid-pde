@@ -4,7 +4,7 @@ import numpy as np
 import argparse
 from ml_solver import DeepONet, FNOforPDE, DeepONetCNN
 from data_generation import  GaussianRandomFieldHierarchical, PDEDataset2, GaussianRandomField
-from pde import PoissonEquation1D, PoissonEquation2D, HelmholtzEquation1D, HelmholtzEquation2D
+from pde import ConvectionDiffusion2D, PoissonEquation1D, PoissonEquation2D, HelmholtzEquation1D, HelmholtzEquation2D
 from numerical_solver import WeightedJacobiSolver, MultigridSolver, GaussSeidelSolver, SuccessiveOverRelaxationSolver
 from hybrid_solver import LSTMGreedyRouter, HybridSolver, LSTMGreedyRouter_SideInfo
 
@@ -26,6 +26,8 @@ parser.add_argument("--model_name", type=str, default="", help="Model checkpoint
 parser.add_argument('--data_name', type=str, default='', help='Name of the dataset to use (if not provided, a new dataset will be generated)')
 parser.add_argument("--data_dir", type=str, default="./data", help="Directory to save/load data")
 parser.add_argument("--grf_mode", type = str, default="fixed", help="Mode of the GRF: hierarchical or fixed")
+parser.add_argument("--b_vel", type=float, default=20.0, help="Advection velocity magnitude for ConvDiff (b_vec = (b_vel, b_vel))")
+parser.add_argument("--reaction_c", type=float, default=0.0, help="Reaction coefficient for ConvDiff (c in -div(a grad u) + b.grad u + c*u = f)")
 
 
 if __name__ == "__main__":
@@ -46,13 +48,15 @@ if __name__ == "__main__":
     extra = args.extra
     in_channels = args.in_channels
     grf_mode = args.grf_mode
+    b_vel = args.b_vel
+    reaction_c = args.reaction_c
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     if boundary not in ["Periodic", "Dirichlet"]:
         raise ValueError("Boundary condition must be either 'Dirichlet' or 'Periodic'")
-    if equation not in ["Poisson", "Helmholtz"]:
-        raise ValueError("Currently only Poisson/Helmholtz equation is supported")
+    if equation not in ["Poisson", "Helmholtz", "ConvDiff"]:
+        raise ValueError("Currently only Poisson/Helmholtz/ConvectionDiffusion equation is supported")
     if ml_model_type not in ["deeponet", "fno", "deeponetcnn"]:
         raise ValueError("Model must be either 'deeponet' or 'fno' or 'deeponetcnn'")
     if dim not in [1, 2]:
@@ -123,8 +127,13 @@ if __name__ == "__main__":
                                     beta=arguments_grf["beta"],
                                     gamma=arguments_grf["gamma"],
                                     device=device, seed=34)
-        pushforward = None if boundary == "Dirichlet" else lambda x: x - torch.mean(x)
-        f = grf.generate(n_train + n_val + extra, pushfoward=pushforward) if equation == "Poisson" and in_channels == 1 else grf.generate(n_train + n_val + extra, pushfoward=None)
+        if dim == 1:
+            pushforward = lambda x: x - torch.mean(x, dim=-1, keepdim=True)
+        else:
+            pushforward = lambda x: x - torch.mean(x, dim=(-2, -1), keepdim=True)
+        needs_mean_zero = (equation == "Poisson") or (equation == "ConvDiff" and reaction_c == 0.0)
+        # Generate forcing functions
+        f = grf.generate(n_train + n_val + extra, pushfoward=pushforward) if needs_mean_zero and boundary == "Periodic" and in_channels == 1 else grf.generate(n_train + n_val + extra, pushfoward=None)
         k2 = grf.generate(n_train + n_val + extra)
         if in_channels > 1:
             a = grf.generate(n_train + n_val + extra)
@@ -158,20 +167,27 @@ if __name__ == "__main__":
                                         f_func=f.reshape(-1, arguments["N"] * arguments["N"]),
                                         boundary=boundary, 
                                         x=x, y=y, device=device)
+            elif equation == "ConvDiff":
+                pde = ConvectionDiffusion2D(a_func=a.reshape(-1, arguments["N"] * arguments["N"]) if in_channels > 1 else a,
+                                            f_func=f.reshape(-1, arguments["N"] * arguments["N"]),
+                                            b_vec=(b_vel, b_vel),
+                                            boundary=boundary,
+                                            x=x, y=y, device=device,
+                                            reaction=reaction_c)
             else:
                 pde = HelmholtzEquation2D(a_func=a.reshape(-1, arguments["N"] * arguments["N"]) if in_channels > 1 else a, 
                                           f_func=f.reshape(-1, arguments["N"] * arguments["N"]), 
                                           k2=k2.reshape(-1, arguments["N"] * arguments["N"]),
                                           boundary=boundary, x=x, y=y, device=device)
             u_sol = torch.tensor(pde.u, dtype=torch.float32, device=device)
-            u_sol = u_sol - torch.mean(u_sol, dim=(-2,-1), keepdim=True) if equation == "Poisson" and boundary == "Periodic" and in_channels == 1 else u_sol
+            u_sol = u_sol - torch.mean(u_sol, dim=(-2,-1), keepdim=True) if needs_mean_zero and boundary == "Periodic" and in_channels == 1 else u_sol
         if in_channels > 1:
-            if equation == "Poisson":
+            if equation in ("Poisson", "ConvDiff"):
                 input = torch.concatenate((a[:, None, :], f[:, None, :]), dim=1)
             else:
                 input = torch.concatenate((a[:, None, :], k2[:, None, :], f[:, None, :]), dim=1)
         else:
-            if equation == "Poisson":
+            if equation in ("Poisson", "ConvDiff"):
                 input = f[:, None, :]
             else:
                 input = torch.concatenate((k2[:, None, :], f[:, None, :]), dim=1)
@@ -203,7 +219,7 @@ if __name__ == "__main__":
                         hidden_trunk=ml_arguments["hidden_trunk"],
                         num_trunk_layers=ml_arguments["num_trunk_layers"]).to(device)
     elif ml_model_type == "fno":
-        ml_model = FNOforPDE(trunc_mode=ml_arguments["trunc_mode"], dim=dim, in_channels=new_in_channels,
+        ml_model = FNOforPDE(trunc_mode=ml_arguments["trunc_mode"], dim=dim, N = ml_arguments["N"], in_channels=new_in_channels,
                           hidden_size=ml_arguments["hidden_size"], num_layers=ml_arguments["num_layers"]).to(device)
     elif ml_model_type == "deeponetcnn":
         ml_model = DeepONetCNN(N=ml_arguments["N"], dim=dim, in_channels=new_in_channels, device=device, boundary=boundary,
@@ -265,6 +281,14 @@ if __name__ == "__main__":
                                             y=y,
                                             device=device, 
                                             solve = False)
+    elif equation == "ConvDiff":
+        pde = ConvectionDiffusion2D(a_func=lambda x, y: 1,
+                                    f_func=lambda x, y: 1,
+                                    b_vec=(b_vel, b_vel),
+                                    boundary=boundary,
+                                    x=x, y=y, device=device, 
+                                    reaction=reaction_c,
+                                    solve = False)
     else:
         if dim == 1:
             pde = HelmholtzEquation1D(a_func= lambda x: 1, f_func=lambda x: 1, k2=lambda x: 1, boundary=boundary, x=x, device=device, solve = False)

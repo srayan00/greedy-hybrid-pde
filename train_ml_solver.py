@@ -4,7 +4,7 @@ import numpy as np
 import argparse
 from ml_solver import DeepONet, FNOforPDE, DeepONetCNN
 from data_generation import GaussianRandomField, GaussianRandomFieldHierarchical, PDEDataset2
-from pde import PoissonEquation1D, PoissonEquation2D, HelmholtzEquation1D, HelmholtzEquation2D
+from pde import PoissonEquation1D, PoissonEquation2D, HelmholtzEquation1D, HelmholtzEquation2D, ConvectionDiffusion2D
 from numerical_solver import WeightedJacobiSolver
 
 from trainer import Trainer, EarlyStopping, MSEalphaepsilonLoss
@@ -23,6 +23,9 @@ parser.add_argument('--data_name', type=str, default='', help='Name of the datas
 parser.add_argument("--data_dir", type=str, default="./data", help="Directory to save/load data")
 parser.add_argument("--grf_mode", type = str, default="fixed", help="Mode of the GRF: hierarchical or fixed")
 parser.add_argument("--loss_alpha", type = float, default=0.0, help="Alpha for the loss function")
+parser.add_argument("--b_vel", type=float, default=20.0, help="Advection velocity magnitude for ConvDiff (b_vec = (b_vel, b_vel))")
+parser.add_argument("--reaction_c", type=float, default=0.0, help="Reaction coefficient for ConvDiff (c in -div(a grad u) + b.grad u + c*u = f)")
+
 
 
 if __name__ == "__main__":
@@ -40,13 +43,15 @@ if __name__ == "__main__":
     in_channels = args.in_channels
     grf_mode = args.grf_mode
     loss_alpha = args.loss_alpha
+    b_vel = args.b_vel
+    reaction_c = args.reaction_c
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     if boundary not in ["Periodic", "Dirichlet"]:
         raise ValueError("Boundary condition must be either 'Dirichlet' or 'Periodic'")
-    if equation not in ["Poisson", "Helmholtz"]:
-        raise ValueError("Currently only Poisson and Helmholtz equation are supported")
+    if equation not in ["Poisson", "Helmholtz", "ConvDiff"]:
+        raise ValueError("Currently only Poisson, Helmholtz and ConvectionDiffusion equation are supported")
     if model_type not in ["deeponet", "fno", "deeponetcnn"]:
         raise ValueError("Model must be either 'deeponet' or 'fno' or 'deeponetcnn'")
     if dim not in [1, 2]:
@@ -111,9 +116,13 @@ if __name__ == "__main__":
                                         gamma=arguments_grf["gamma"],
                                         device=device,
                                         seed=1234)
-        pushforward = None if boundary == "Dirichlet" else lambda x: x - torch.mean(x)
+        if dim == 1:
+            pushforward = lambda x: x - torch.mean(x, dim=-1, keepdim=True)
+        else:
+            pushforward = lambda x: x - torch.mean(x, dim=(-2, -1), keepdim=True)
+        needs_mean_zero = (equation == "Poisson") or (equation == "ConvDiff" and reaction_c == 0.0)
         # Generate forcing functions
-        f = grf.generate(n_train + n_val + extra, pushfoward=pushforward) if equation == "Poisson" and in_channels == 1 else grf.generate(n_train + n_val + extra, pushfoward=None)
+        f = grf.generate(n_train + n_val + extra, pushfoward=pushforward) if needs_mean_zero and boundary == "Periodic" and in_channels == 1 else grf.generate(n_train + n_val + extra, pushfoward=None)
 
         # if equation == "Poisson" or (equation == "Helmholtz" and in_channels > 1):
         #     f = grf.generate(n_train + n_val + extra, pushfoward=pushforward) if equation == "Poisson" and in_channels == 1 else grf.generate(n_train + n_val + extra, pushfoward=None)
@@ -164,13 +173,20 @@ if __name__ == "__main__":
                                         f_func=f.reshape(-1, arguments["N"] * arguments["N"]),
                                         boundary=boundary, 
                                         x=x, y=y, device=device)
+            elif equation == "ConvDiff":
+                pde = ConvectionDiffusion2D(a_func=a.reshape(-1, arguments["N"] * arguments["N"]) if in_channels > 1 else a,
+                                            f_func=f.reshape(-1, arguments["N"] * arguments["N"]),
+                                            b_vec=(b_vel, b_vel),
+                                            boundary=boundary,
+                                            x=x, y=y, device=device,
+                                            reaction=reaction_c)
             else:
                 pde = HelmholtzEquation2D(a_func=a.reshape(-1, arguments["N"] * arguments["N"]) if in_channels > 1 else a, 
                                           f_func= f.reshape(-1, arguments["N"] * arguments["N"]), 
                                           k2=k2.reshape(-1, arguments["N"] * arguments["N"]),
                                           boundary=boundary, x=x, y=y, device=device)
             u_sol = torch.tensor(pde.u, dtype=torch.float32, device=device)
-            u_sol = u_sol - torch.mean(u_sol, dim=(-2,-1), keepdim=True) if equation == "Poisson" and boundary == "Periodic" and in_channels == 1 else u_sol
+            u_sol = u_sol - torch.mean(u_sol, dim=(-2,-1), keepdim=True) if needs_mean_zero and boundary == "Periodic" and in_channels == 1 else u_sol
 
         # Defining the input and output of the ML model
         # if in_channels == 1:
@@ -189,12 +205,12 @@ if __name__ == "__main__":
         #     else:
         #         input = torch.concatenate((a[:, None, :], k2[:, None, :], f[:, None, :]), dim=1)
         if in_channels > 1:
-            if equation == "Poisson":
+            if equation in ["Poisson", "ConvDiff"]:
                 input = torch.concatenate((a[:, None, :], f[:, None, :]), dim=1)
             else:
                 input = torch.concatenate((a[:, None, :], k2[:, None, :], f[:, None, :]), dim=1)
         else:
-            if equation == "Poisson":
+            if equation in ["Poisson", "ConvDiff"]:
                 input = f[:, None, :]
             else:
                 input = torch.concatenate((k2[:, None, :], f[:, None, :]), dim=1)
@@ -229,7 +245,7 @@ if __name__ == "__main__":
                         hidden_trunk=arguments["hidden_trunk"],
                         num_trunk_layers=arguments["num_trunk_layers"]).to(device)
     elif model_type == "fno":
-        model = FNOforPDE(trunc_mode=arguments["trunc_mode"], dim=dim, in_channels=new_in_channels,
+        model = FNOforPDE(trunc_mode=arguments["trunc_mode"], dim=dim, N = arguments["N"], in_channels=new_in_channels,
                           hidden_size=arguments["hidden_size"], num_layers=arguments["num_layers"]).to(device)
     elif model_type == "deeponetcnn":
         model = DeepONetCNN(N=arguments["N"], dim=dim, in_channels=new_in_channels, device=device, boundary=boundary,
@@ -244,10 +260,12 @@ if __name__ == "__main__":
     # Loading checkpoint if it exists
     if os.path.exists(ckp_path):
         print(f"Loading model checkpoint from {ckp_path}...")
-        ckp = torch.load(ckp_path, map_location=device)
+        ckp = torch.load(ckp_path, map_location=device, weights_only=False)
     
     if ckp:
         print(f"Resuming training from epoch {ckp['epoch']}")
+        if model_type == "fno" and "_metadata" in ckp["model"]:
+            del ckp["model"]["_metadata"]
         model.load_state_dict(ckp["model"])
     
     # Creating optimizer, early stopping scheduler, learning rate schedulers

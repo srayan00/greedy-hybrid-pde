@@ -172,7 +172,7 @@ class HybridSolver(torch.nn.Module):
                 if not isinstance(suite_solver[i], (NumericalSolver, MLSolver)):
                     print(f"invalid index{i}")
                     raise TypeError("Each solver in suite_solver must be an instance of NumericalSolver or MLSolver.")
-        if equation.equation not in ["Helmholtz", "Poisson"]:
+        if equation.equation not in ["Helmholtz", "Poisson", "ConvDiff"]:
             raise ValueError("Unsupported equation type. Supported types are 'Poisson1D', 'Poisson2D', 'Helmholtz1D', 'Helmholtz2D.")
         self.N = N
         self.dim = dim
@@ -340,6 +340,17 @@ class HybridSolver(torch.nn.Module):
                                                 A = None,
                                                 solve = False,
                                                 device = f.device)
+            elif self.equation.equation == "ConvDiff":
+                equation = self.equation.__class__(a_func = a_func,
+                                                f_func = f_func,
+                                                boundary = self.boundary,
+                                                b_vec = self.equation.b_vec,
+                                                x = self.xs,
+                                                y = self.ys,
+                                                reaction = self.equation.reaction,
+                                                A = None,
+                                                solve = False,
+                                                device = f.device)
             else:
                 equation = self.equation.__class__(a_func = a_func,
                                                f_func = f_func,
@@ -353,7 +364,7 @@ class HybridSolver(torch.nn.Module):
         return equation                    
 
     def prepare_inputs(self, f, a, k2 = None):
-        if self.equation.equation == "Poisson":
+        if self.equation.equation in ["Poisson", "ConvDiff"]:
             if a is None:
                 return f
             return torch.cat((a.unsqueeze(1), f), dim=1)
