@@ -488,61 +488,53 @@ if __name__ == "__main__":
     errors_greedy, loss_greedy, residuals_greedy, mode_1_errors, mode_5_errors, mode_10_errors, solver_decisions_greedy = test_model(model, test_loader, in_channels, dim, loss = loss, centered = centered, loss_t = False)
 
     # weights = {"Jacobi": [0.5, 0.67, 0.75, 0.8, 1.0], "SOR": [1.0, 1.25, 1.5, 1.75, 2], "SSOR": [1.0, 1.25, 1.5, 1.75, 2.0]}
-    weights = {"Jacobi": [0.5, 0.67, 0.75, 0.8, 1.0], "SOR": [1.0, 1.1, 1.25, 1.4, 1.5], "SSOR": [1.0, 1.25, 1.5, 1.75, 2.0]}
+    order_of_solvers = ["jacobi", "gs", "ssor", "jacobi_0.67", "sor_1.5"]
 
     titles = {"jacobi": "Jacobi", "gs": "GS", "mg": "MG", "sor": "SOR", "ssor": "SSOR", "rich": "Richardson"}
-    if num_solvers == 6:
-        print('')
-        errors_results = {}
-        residuals_results = {}
-        mode_1_results = {}
-        mode_5_results = {}
-        mode_10_results = {}
-        solver_decisions_results = {}
-        for w in weights[titles[primary_solver]]:
-            print(f"Testing Learned Greedy-{titles[primary_solver]} w/ weight {w}...")
-            print(f"{primary_solver}_{w}")
-            tmp_sol = f"{primary_solver}_{w}" if w != 1.0 else primary_solver
-            tmp_sol = "gs" if w == 1.0 and primary_solver == "sor" else tmp_sol
-            tmp_ckp_path = ckp_dir + f"/{model_type}router_{model_name}_{grf_mode}_{equation}_{boundary}_{dim}d_{in_channels}c_{tmp_sol}_best.pth"
-            tmp_save_path = ckp_dir + f"/{model_type}router_{model_name}_{grf_mode}_{equation}_{boundary}_{dim}d_{in_channels}c_{tmp_sol}"
-            tmp_args_path = ckp_dir + f"/{model_type}router_{model_name}_{grf_mode}_{equation}_{boundary}_{dim}d_{in_channels}c_{tmp_sol}args.json"
-            if os.path.exists(tmp_args_path):
-                print(f"Loading training arguments from {tmp_args_path}...")
-                with open(tmp_args_path, "r") as f:
-                    tmp_arguments = json.load(f)
+    errors_results = {}
+    residuals_results = {}
+    mode_1_results = {}
+    mode_5_results = {}
+    mode_10_results = {}
+    solver_decisions_results = {}
+    for w in order_of_solvers:
+        tmp_ckp_path = ckp_dir + f"/{model_type}router_side_info_deeponet_{grf_mode}_{equation}_{boundary}_{dim}d_{in_channels}c_{w}_best.pth"
+        tmp_save_path = ckp_dir + f"/{model_type}router_side_info_deeponet_{grf_mode}_{equation}_{boundary}_{dim}d_{in_channels}c_{w}"
+        tmp_args_path = ckp_dir + f"/{model_type}router_side_info_deeponet_{grf_mode}_{equation}_{boundary}_{dim}d_{in_channels}c_{w}args.json"
+        if os.path.exists(tmp_args_path):
+            print(f"Loading training arguments from {tmp_args_path}...")
+            with open(tmp_args_path, "r") as f:
+                tmp_arguments = json.load(f)
+        else:
+            raise ValueError(f"{primary_solver}_{w} Router Args Path Not found")
+        if model_type == "lstm":
+            if dim == 1:
+                router_q = LSTMGreedyRouter(None, ml_arguments["N"]*(new_in_channels + 1), tmp_arguments["hidden_dim"], tmp_arguments["num_layers"], 2, tmp_arguments["dropout"]).to(device)
             else:
-                raise ValueError(f"{primary_solver}_{w} Router Args Path Not found")
-            if model_type == "lstm":
-                if dim == 1:
-                    router_q = LSTMGreedyRouter(None, ml_arguments["N"]*(new_in_channels + 1), tmp_arguments["hidden_dim"], tmp_arguments["num_layers"], 2, tmp_arguments["dropout"]).to(device)
-                else:
-                    router_q = LSTMGreedyRouter(None, ml_arguments["N"]*ml_arguments["N"]*(new_in_channels + 1), tmp_arguments["hidden_dim"], tmp_arguments["num_layers"], 2, tmp_arguments["dropout"]).to(device)
-            elif model_type == "lstm_side_info":
-                if dim == 1:
-                    router_q = LSTMGreedyRouter_SideInfo(None, ml_arguments["N"]*(new_in_channels + 1), tmp_arguments["hidden_dim"], tmp_arguments["num_layers"], 2, tmp_arguments["dropout"]).to(device)
-                else:
-                    router_q = LSTMGreedyRouter_SideInfo(None, ml_arguments["N"]*ml_arguments["N"]*(new_in_channels + 1), tmp_arguments["hidden_dim"], tmp_arguments["num_layers"], 2, tmp_arguments["dropout"]).to(device)
-            ckp = None
-            if os.path.exists(tmp_ckp_path):
-                print(f"Loading model checkpoint from {tmp_ckp_path}...")
-                ckp = torch.load(tmp_ckp_path, map_location=device)
-            if ckp:
-                router_q.load_state_dict(ckp["model"])
-            temp_list_of_solvers, _= generate_list_of_solvers([tmp_sol])
-            model_q = HybridSolver(N=arguments["N"], dim=dim, in_channels=in_channels, boundary=boundary, equation=pde,
-                                    suite_solver=temp_list_of_solvers+[ml_model], router=router_q, tol=1e-7, max_iters=tmp_arguments["max_iters"], threshold=0.1)
-            model_q.eval()
-            error_q, loss_q, residuals_q, mode_1_q, mode_5_q, mode_10_q, solver_decisions_q = test_model(model_q, test_loader, in_channels, dim, loss = loss, centered = centered, loss_t = False)
-            errors_results[w] = error_q
-            residuals_results[w] = residuals_q
-            mode_1_results[w] = mode_1_q
-            mode_5_results[w] = mode_5_q
-            mode_10_results[w] = mode_10_q
-            solver_decisions_results[w] = solver_decisions_q
-        mode_results = {"1": mode_1_results, "5": mode_5_results, "10": mode_10_results}
-
-    
+                router_q = LSTMGreedyRouter(None, ml_arguments["N"]*ml_arguments["N"]*(new_in_channels + 1), tmp_arguments["hidden_dim"], tmp_arguments["num_layers"], 2, tmp_arguments["dropout"]).to(device)
+        elif model_type == "lstm_side_info":
+            if dim == 1:
+                router_q = LSTMGreedyRouter_SideInfo(None, ml_arguments["N"]*(new_in_channels + 1), tmp_arguments["hidden_dim"], tmp_arguments["num_layers"], 2, tmp_arguments["dropout"]).to(device)
+            else:
+                router_q = LSTMGreedyRouter_SideInfo(None, ml_arguments["N"]*ml_arguments["N"]*(new_in_channels + 1), tmp_arguments["hidden_dim"], tmp_arguments["num_layers"], 2, tmp_arguments["dropout"]).to(device)
+        ckp = None
+        if os.path.exists(tmp_ckp_path):
+            print(f"Loading model checkpoint from {tmp_ckp_path}...")
+            ckp = torch.load(tmp_ckp_path, map_location=device)
+        if ckp:
+            router_q.load_state_dict(ckp["model"])
+        temp_list_of_solvers, _= generate_list_of_solvers([w])
+        model_q = HybridSolver(N=arguments["N"], dim=dim, in_channels=in_channels, boundary=boundary, equation=pde,
+                                suite_solver=temp_list_of_solvers+[ml_model], router=router_q, tol=1e-7, max_iters=tmp_arguments["max_iters"], threshold=0.1)
+        model_q.eval()
+        error_q, loss_q, residuals_q, mode_1_q, mode_5_q, mode_10_q, solver_decisions_q = test_model(model_q, test_loader, in_channels, dim, loss = loss, centered = centered, loss_t = False)
+        errors_results[w] = error_q
+        residuals_results[w] = residuals_q
+        mode_1_results[w] = mode_1_q
+        mode_5_results[w] = mode_5_q
+        mode_10_results[w] = mode_10_q
+        solver_decisions_results[w] = solver_decisions_q
+    mode_results = {"mode_1": mode_1_results, "mode_5": mode_5_results, "mode_10": mode_10_results}
     errors_true_greedy, best_solvers = true_greedy_model(model, test_loader, in_channels, dim, loss, centered = centered, loss_t = False, max_iters = arguments["max_iters"], num_solvers = num_solvers)
 
     auc_greedy = np.trapezoid(errors_greedy, axis=0)
@@ -550,17 +542,14 @@ if __name__ == "__main__":
 
     
     methods_list = []
-    for s in ["Jacobi", "SOR", "SSOR"]:
-        for w in weights[s]:
-            methods_list.append(f"Learned Greedy-{s} w/ weight {w}")
-        for n in range(2, 7):
-            methods_list.append(f"Learned Greedy-{s} w/ {n} solvers")
-            methods_list.append(f"True-Greedy-{s} w/ {n} solvers")
+    for n in range(3, 7):
+        methods_list.append(f"Learned Greedy w/ {n} solvers")
+        methods_list.append(f"True-Greedy w/ {n} solvers")
 
 
     
-    if os.path.exists(f"{results_dir}/{results_df_name}_multiple_solvers_{ml_model_type}_{ml_model_name}_error_comparison.csv"):
-        df_error = pd.read_csv(f"{results_dir}/{results_df_name}_multiple_solvers_{ml_model_type}_{ml_model_name}_error_comparison.csv")
+    if os.path.exists(f"{results_dir}/{results_df_name}_multiple_solvers_{ml_model_type}_{ml_model_name}_error_comparison_diff.csv"):
+        df_error = pd.read_csv(f"{results_dir}/{results_df_name}_multiple_solvers_{ml_model_type}_{ml_model_name}_error_comparison_diff.csv")
         df_error = df_error.set_index("Methods")
     else:
         df_error = pd.DataFrame({"Methods": methods_list})
@@ -571,41 +560,37 @@ if __name__ == "__main__":
             df_error[f"AUC_Error_{dim}d_{e}"] = ""
             df_error[f"Mean_AUC_Error_{dim}d_{e}"] = ""
             df_error[f"Std_AUC_Error_{dim}d_{e}"] = ""
+            for w in order_of_solvers:
+                df_error[f"pval_FinalError_{dim}d_{e}_{w}"] = ""
+                df_error[f"pval_AUC_Error_{dim}d_{e}_{w}"] = ""
         df_error.set_index("Methods", inplace = True)
     
-    df_error.loc[f"Learned Greedy-{titles[primary_solver]} w/ {num_solvers} solvers", f"Mean_FinalError_{dim}d_{equation}"] = np.mean(errors_greedy[-1]).item()
-    df_error.loc[f"Learned Greedy-{titles[primary_solver]} w/ {num_solvers} solvers", f"Std_FinalError_{dim}d_{equation}"] = np.std(errors_greedy[-1]).item()
-    df_error.loc[f"Learned Greedy-{titles[primary_solver]} w/ {num_solvers} solvers", f"Mean_AUC_Error_{dim}d_{equation}"] = np.mean(auc_greedy).item()
-    df_error.loc[f"Learned Greedy-{titles[primary_solver]} w/ {num_solvers} solvers", f"Std_AUC_Error_{dim}d_{equation}"] = np.std(auc_greedy).item()
-    df_error.loc[f"Learned Greedy-{titles[primary_solver]} w/ {num_solvers} solvers", f"FinalError_{dim}d_{equation}"] = f"{(np.mean(errors_greedy[-1])*(10**3)).item():.3f} ({(np.std(errors_greedy[-1])*(10**3)).item():.3f})"
-    df_error.loc[f"Learned Greedy-{titles[primary_solver]} w/ {num_solvers} solvers", f"AUC_Error_{dim}d_{equation}"] = f"{(np.mean(auc_greedy).item()):.3f} ({(np.std(auc_greedy).item()):.3f})"
+    df_error.loc[f"Learned Greedy w/ {num_solvers} solvers", f"Mean_FinalError_{dim}d_{equation}"] = np.mean(errors_greedy[-1]).item()
+    df_error.loc[f"Learned Greedy w/ {num_solvers} solvers", f"Std_FinalError_{dim}d_{equation}"] = np.std(errors_greedy[-1]).item()
+    df_error.loc[f"Learned Greedy w/ {num_solvers} solvers", f"Mean_AUC_Error_{dim}d_{equation}"] = np.mean(auc_greedy).item()
+    df_error.loc[f"Learned Greedy w/ {num_solvers} solvers", f"Std_AUC_Error_{dim}d_{equation}"] = np.std(auc_greedy).item()
+    df_error.loc[f"Learned Greedy w/ {num_solvers} solvers", f"FinalError_{dim}d_{equation}"] = f"{(np.mean(errors_greedy[-1])*(10**3)).item():.3f} ({(np.std(errors_greedy[-1])*(10**3)).item():.3f})"
+    df_error.loc[f"Learned Greedy w/ {num_solvers} solvers", f"AUC_Error_{dim}d_{equation}"] = f"{(np.mean(auc_greedy).item()):.3f} ({(np.std(auc_greedy).item()):.3f})"
+    for w in numerical_solvers:
+        auc_temp = np.trapezoid(errors_results[w], axis=0)
+        df_error.loc[f"Learned Greedy w/ {num_solvers} solvers", f"pval_FinalError_{dim}d_{equation}_{w}"] = ttest_rel(errors_results[w][-1], errors_greedy[-1], alternative = "greater").pvalue.item()
+        df_error.loc[f"Learned Greedy w/ {num_solvers} solvers", f"pval_AUC_Error_{dim}d_{equation}_{w}"] = ttest_rel(auc_temp, auc_greedy, alternative = "greater").pvalue.item()
 
-    df_error.loc[f"True-Greedy-{titles[primary_solver]} w/ {num_solvers} solvers", f"Mean_FinalError_{dim}d_{equation}"] = np.mean(errors_true_greedy[-1]).item()
-    df_error.loc[f"True-Greedy-{titles[primary_solver]} w/ {num_solvers} solvers", f"Std_FinalError_{dim}d_{equation}"] = np.std(errors_true_greedy[-1]).item()
-    df_error.loc[f"True-Greedy-{titles[primary_solver]} w/ {num_solvers} solvers", f"Mean_AUC_Error_{dim}d_{equation}"] = np.mean(auc_true_greedy).item()
-    df_error.loc[f"True-Greedy-{titles[primary_solver]} w/ {num_solvers} solvers", f"Std_AUC_Error_{dim}d_{equation}"] = np.std(auc_true_greedy).item()
-    df_error.loc[f"True-Greedy-{titles[primary_solver]} w/ {num_solvers} solvers", f"FinalError_{dim}d_{equation}"] = f"{(np.mean(errors_true_greedy[-1])*(10**3)).item():.3f} ({(np.std(errors_true_greedy[-1])*(10**3)).item():.3f})"
-    df_error.loc[f"True-Greedy-{titles[primary_solver]} w/ {num_solvers} solvers", f"AUC_Error_{dim}d_{equation}"] = f"{(np.mean(auc_true_greedy).item()):.3f} ({(np.std(auc_true_greedy).item()):.3f})"
+    df_error.loc[f"True-Greedy w/ {num_solvers} solvers", f"Mean_FinalError_{dim}d_{equation}"] = np.mean(errors_true_greedy[-1]).item()
+    df_error.loc[f"True-Greedy w/ {num_solvers} solvers", f"Std_FinalError_{dim}d_{equation}"] = np.std(errors_true_greedy[-1]).item()
+    df_error.loc[f"True-Greedy w/ {num_solvers} solvers", f"Mean_AUC_Error_{dim}d_{equation}"] = np.mean(auc_true_greedy).item()
+    df_error.loc[f"True-Greedy w/ {num_solvers} solvers", f"Std_AUC_Error_{dim}d_{equation}"] = np.std(auc_true_greedy).item()
+    df_error.loc[f"True-Greedy w/ {num_solvers} solvers", f"FinalError_{dim}d_{equation}"] = f"{(np.mean(errors_true_greedy[-1])*(10**3)).item():.3f} ({(np.std(errors_true_greedy[-1])*(10**3)).item():.3f})"
+    df_error.loc[f"True-Greedy w/ {num_solvers} solvers", f"AUC_Error_{dim}d_{equation}"] = f"{(np.mean(auc_true_greedy).item()):.3f} ({(np.std(auc_true_greedy).item()):.3f})"
 
-    if num_solvers == 6:
-        for w in weights[titles[primary_solver]]:
-            auc_temp = np.trapezoid(errors_results[w], axis=0)
-            df_error.loc[f"Learned Greedy-{titles[primary_solver]} w/ weight {w}", f"Mean_FinalError_{dim}d_{equation}"] = np.mean(errors_results[w][-1]).item()
-            df_error.loc[f"Learned Greedy-{titles[primary_solver]} w/ weight {w}", f"Std_FinalError_{dim}d_{equation}"] = np.std(errors_results[w][-1]).item()
-            df_error.loc[f"Learned Greedy-{titles[primary_solver]} w/ weight {w}", f"Mean_AUC_Error_{dim}d_{equation}"] = np.mean(auc_temp).item()
-            df_error.loc[f"Learned Greedy-{titles[primary_solver]} w/ weight {w}", f"Std_AUC_Error_{dim}d_{equation}"] = np.std(auc_temp).item()
-            df_error.loc[f"Learned Greedy-{titles[primary_solver]} w/ weight {w}", f"FinalError_{dim}d_{equation}"] = f"{(np.mean(errors_results[w][-1])*(10**3)).item():.3f} ({(np.std(errors_results[w][-1])*(10**3)).item():.3f})"
-            df_error.loc[f"Learned Greedy-{titles[primary_solver]} w/ weight {w}", f"AUC_Error_{dim}d_{equation}"] = f"{(np.mean(auc_temp).item()):.3f} ({(np.std(auc_temp).item()):.3f})"
-    df_error.to_csv(f"{results_dir}/{results_df_name}_multiple_solvers_{ml_model_type}_{ml_model_name}_error_comparison.csv")
+    df_error.to_csv(f"{results_dir}/{results_df_name}_multiple_solvers_{ml_model_type}_{ml_model_name}_error_comparison_diff.csv")
 
     new_methods_list = []
-    for s in ["Jacobi", "SOR", "SSOR"]:
-        for w in weights[s]:
-            new_methods_list.append(f"Learned Greedy-{s} w/ weight {w}")
-        for n in range(2, 7):
-            new_methods_list.append(f"Learned Greedy-{s} w/ {n} solvers")
-    if os.path.exists(f"{results_dir}/{results_df_name}_multiple_solvers_{ml_model_type}_{ml_model_name}_residual_comparison.csv"):
-        df_residual = pd.read_csv(f"{results_dir}/{results_df_name}_multiple_solvers_{ml_model_type}_{ml_model_name}_residual_comparison.csv")
+    
+    for n in range(3, 7):
+        new_methods_list.append(f"Learned Greedy w/ {n} solvers")
+    if os.path.exists(f"{results_dir}/{results_df_name}_multiple_solvers_{ml_model_type}_{ml_model_name}_residual_comparison_diff.csv"):
+        df_residual = pd.read_csv(f"{results_dir}/{results_df_name}_multiple_solvers_{ml_model_type}_{ml_model_name}_residual_comparison_diff.csv")
         df_residual = df_residual.set_index("Methods")
     else:
         df_residual = pd.DataFrame({"Methods": new_methods_list})
@@ -616,31 +601,29 @@ if __name__ == "__main__":
             df_residual[f"AUC_Residual_{dim}d_{e}"] = ""
             df_residual[f"Mean_AUC_Residual_{dim}d_{e}"] = ""
             df_residual[f"Std_AUC_Residual_{dim}d_{e}"] = ""
+            # for w in order_of_solvers:
+            #     df_residual[f"pval_FinalResidual_{dim}d_{e}_{w}"] = ""
+            #     df_residual[f"pval_AUC_Residual_{dim}d_{e}_{w}"] = ""
         df_residual.set_index("Methods", inplace = True)
-    df_residual.loc[f"Learned Greedy-{titles[primary_solver]} w/ {num_solvers} solvers", f"Mean_FinalResidual_{dim}d_{equation}"] = np.mean(residuals_greedy[-1]).item()
-    df_residual.loc[f"Learned Greedy-{titles[primary_solver]} w/ {num_solvers} solvers", f"Std_FinalResidual_{dim}d_{equation}"] = np.std(residuals_greedy[-1]).item()
-    df_residual.loc[f"Learned Greedy-{titles[primary_solver]} w/ {num_solvers} solvers", f"Mean_AUC_Residual_{dim}d_{equation}"] = np.mean(auc_greedy).item()
-    df_residual.loc[f"Learned Greedy-{titles[primary_solver]} w/ {num_solvers} solvers", f"Std_AUC_Residual_{dim}d_{equation}"] = np.std(auc_greedy).item()
-    df_residual.loc[f"Learned Greedy-{titles[primary_solver]} w/ {num_solvers} solvers", f"FinalResidual_{dim}d_{equation}"] = f"{(np.mean(residuals_greedy[-1])*(10**3)).item():.3f} ({(np.std(residuals_greedy[-1])*(10**3)).item():.3f})"
-    df_residual.loc[f"Learned Greedy-{titles[primary_solver]} w/ {num_solvers} solvers", f"AUC_Residual_{dim}d_{equation}"] = f"{(np.mean(auc_greedy).item()):.3f} ({(np.std(auc_greedy).item()):.3f})"
+    df_residual.loc[f"Learned Greedy w/ {num_solvers} solvers", f"Mean_FinalResidual_{dim}d_{equation}"] = np.mean(residuals_greedy[-1]).item()
+    df_residual.loc[f"Learned Greedy w/ {num_solvers} solvers", f"Std_FinalResidual_{dim}d_{equation}"] = np.std(residuals_greedy[-1]).item()
+    df_residual.loc[f"Learned Greedy w/ {num_solvers} solvers", f"Mean_AUC_Residual_{dim}d_{equation}"] = np.mean(auc_greedy).item()
+    df_residual.loc[f"Learned Greedy w/ {num_solvers} solvers", f"Std_AUC_Residual_{dim}d_{equation}"] = np.std(auc_greedy).item()
+    df_residual.loc[f"Learned Greedy w/ {num_solvers} solvers", f"FinalResidual_{dim}d_{equation}"] = f"{(np.mean(residuals_greedy[-1])*(10**3)).item():.3f} ({(np.std(residuals_greedy[-1])*(10**3)).item():.3f})"
+    df_residual.loc[f"Learned Greedy w/ {num_solvers} solvers", f"AUC_Residual_{dim}d_{equation}"] = f"{(np.mean(auc_greedy).item()):.3f} ({(np.std(auc_greedy).item()):.3f})"
+    # for w in numerical_solvers:
+    #     auc_temp = np.trapezoid(residuals_results[w], axis=0)
+    #     df_residual.loc[f"Learned Greedy w/ {num_solvers} solvers", f"pval_FinalResidual_{dim}d_{equation}_{w}"] = ttest_rel(residuals_results[w][-1], residuals_greedy[-1], alternative = "greater").pvalue.item()
+    #     df_residual.loc[f"Learned Greedy w/ {num_solvers} solvers", f"pval_AUC_Residual_{dim}d_{equation}_{w}"] = ttest_rel(auc_temp, auc_greedy, alternative = "greater").pvalue.item()
 
-    if num_solvers == 6:
-        for w in weights[titles[primary_solver]]:
-            auc_temp = np.trapezoid(residuals_results[w], axis=0)
-            df_residual.loc[f"Learned Greedy-{titles[primary_solver]} w/ weight {w}", f"Mean_FinalResidual_{dim}d_{equation}"] = np.mean(residuals_results[w][-1]).item()
-            df_residual.loc[f"Learned Greedy-{titles[primary_solver]} w/ weight {w}", f"Std_FinalResidual_{dim}d_{equation}"] = np.std(residuals_results[w][-1]).item()
-            df_residual.loc[f"Learned Greedy-{titles[primary_solver]} w/ weight {w}", f"Mean_AUC_Residual_{dim}d_{equation}"] = np.mean(auc_temp).item()
-            df_residual.loc[f"Learned Greedy-{titles[primary_solver]} w/ weight {w}", f"Std_AUC_Residual_{dim}d_{equation}"] = np.std(auc_temp).item()
-            df_residual.loc[f"Learned Greedy-{titles[primary_solver]} w/ weight {w}", f"FinalResidual_{dim}d_{equation}"] = f"{(np.mean(residuals_results[w][-1])*(10**3)).item():.3f} ({(np.std(residuals_results[w][-1])*(10**3)).item():.3f})"
-            df_residual.loc[f"Learned Greedy-{titles[primary_solver]} w/ weight {w}", f"AUC_Residual_{dim}d_{equation}"] = f"{(np.mean(auc_temp).item()):.3f} ({(np.std(auc_temp).item()):.3f})"
-    df_residual.to_csv(f"{results_dir}/{results_df_name}_multiple_solvers_{ml_model_type}_{ml_model_name}_residual_comparison.csv")
+    df_residual.to_csv(f"{results_dir}/{results_df_name}_multiple_solvers_{ml_model_type}_{ml_model_name}_residual_comparison_diff.csv")
 
     auc_mode_one = np.trapezoid(mode_1_errors, axis=0)
     auc_mode_five = np.trapezoid(mode_5_errors, axis=0)
     auc_mode_ten = np.trapezoid(mode_10_errors, axis=0)
 
-    if os.path.exists(f"{results_dir}/{results_df_name}_multiple_solvers_{ml_model_type}_{ml_model_name}_mode_comparison.csv"):
-        df_mode = pd.read_csv(f"{results_dir}/{results_df_name}_multiple_solvers_{ml_model_type}_{ml_model_name}_mode_comparison.csv")
+    if os.path.exists(f"{results_dir}/{results_df_name}_multiple_solvers_{ml_model_type}_{ml_model_name}_mode_comparison_diff.csv"):
+        df_mode = pd.read_csv(f"{results_dir}/{results_df_name}_multiple_solvers_{ml_model_type}_{ml_model_name}_mode_comparison_diff.csv")
         df_mode = df_mode.set_index("Methods")
     else:
         df_mode = pd.DataFrame({"Methods": new_methods_list})
@@ -657,67 +640,43 @@ if __name__ == "__main__":
     mode_dict = {"1": mode_1_errors, "5": mode_5_errors, "10": mode_10_errors}
     for m, mode_errors in mode_dict.items():
         auc_mode = np.trapezoid(mode_errors, axis=0)
-        df_mode.loc[f"Learned Greedy-{titles[primary_solver]} w/ {num_solvers} solvers", f"Mean_Final_Mode_{m}_{dim}d_{equation}"] = np.mean(mode_errors[-1]).item()
-        df_mode.loc[f"Learned Greedy-{titles[primary_solver]} w/ {num_solvers} solvers", f"Std_Final_Mode_{m}_{dim}d_{equation}"] = np.std(mode_errors[-1]).item()
-        df_mode.loc[f"Learned Greedy-{titles[primary_solver]} w/ {num_solvers} solvers", f"Mean_AUC_Mode_{m}_{dim}d_{equation}"] = np.mean(auc_mode).item()
-        df_mode.loc[f"Learned Greedy-{titles[primary_solver]} w/ {num_solvers} solvers", f"Std_AUC_Mode_{m}_{dim}d_{equation}"] = np.std(auc_mode).item()
-        df_mode.loc[f"Learned Greedy-{titles[primary_solver]} w/ {num_solvers} solvers", f"Final_Mode_{m}_{dim}d_{equation}"] = f"{(np.mean(mode_errors[-1])*(10**3)).item():.3f} ({(np.std(mode_errors[-1])*(10**3)).item():.3f})"
-        df_mode.loc[f"Learned Greedy-{titles[primary_solver]} w/ {num_solvers} solvers", f"AUC_Mode_{m}_{dim}d_{equation}"] = f"{(np.mean(auc_mode).item()):.3f} ({(np.std(auc_mode).item()):.3f})"
-    if num_solvers == 6:
-        for w in weights[titles[primary_solver]]:
-            for m in ["1", "5", "10"]:
-                auc_temp = np.trapezoid(mode_results[m][w], axis=0)
-                df_mode.loc[f"Learned Greedy-{titles[primary_solver]} w/ weight {w}", f"Mean_Final_Mode_{m}_{dim}d_{equation}"] = np.mean(mode_results[m][w][-1]).item()
-                df_mode.loc[f"Learned Greedy-{titles[primary_solver]} w/ weight {w}", f"Std_Final_Mode_{m}_{dim}d_{equation}"] = np.std(mode_results[m][w][-1]).item()
-                df_mode.loc[f"Learned Greedy-{titles[primary_solver]} w/ weight {w}", f"Mean_AUC_Mode_{m}_{dim}d_{equation}"] = np.mean(auc_temp).item()
-                df_mode.loc[f"Learned Greedy-{titles[primary_solver]} w/ weight {w}", f"Std_AUC_Mode_{m}_{dim}d_{equation}"] = np.std(auc_temp).item()
-                df_mode.loc[f"Learned Greedy-{titles[primary_solver]} w/ weight {w}", f"Final_Mode_{m}_{dim}d_{equation}"] = f"{(np.mean(mode_results[m][w][-1])*(10**3)).item():.3f} ({(np.std(mode_results[m][w][-1])*(10**3)).item():.3f})"
-                df_mode.loc[f"Learned Greedy-{titles[primary_solver]} w/ weight {w}", f"AUC_Mode_{m}_{dim}d_{equation}"] = f"{(np.mean(auc_temp).item()):.3f} ({(np.std(auc_temp).item()):.3f})"
-    df_mode.to_csv(f"{results_dir}/{results_df_name}_multiple_solvers_{ml_model_type}_{ml_model_name}_mode_comparison.csv")
+        df_mode.loc[f"Learned Greedy w/ {num_solvers} solvers", f"Mean_Final_Mode_{m}_{dim}d_{equation}"] = np.mean(mode_errors[-1]).item()
+        df_mode.loc[f"Learned Greedy w/ {num_solvers} solvers", f"Std_Final_Mode_{m}_{dim}d_{equation}"] = np.std(mode_errors[-1]).item()
+        df_mode.loc[f"Learned Greedy w/ {num_solvers} solvers", f"Mean_AUC_Mode_{m}_{dim}d_{equation}"] = np.mean(auc_mode).item()
+        df_mode.loc[f"Learned Greedy w/ {num_solvers} solvers", f"Std_AUC_Mode_{m}_{dim}d_{equation}"] = np.std(auc_mode).item()
+        df_mode.loc[f"Learned Greedy w/ {num_solvers} solvers", f"Final_Mode_{m}_{dim}d_{equation}"] = f"{(np.mean(mode_errors[-1])*(10**3)).item():.3f} ({(np.std(mode_errors[-1])*(10**3)).item():.3f})"
+        df_mode.loc[f"Learned Greedy w/ {num_solvers} solvers", f"AUC_Mode_{m}_{dim}d_{equation}"] = f"{(np.mean(auc_mode).item()):.3f} ({(np.std(auc_mode).item()):.3f})"
+    
+    df_mode.to_csv(f"{results_dir}/{results_df_name}_multiple_solvers_{ml_model_type}_{ml_model_name}_mode_comparison_diff.csv")
 
-    if primary_solver == "sor":
-        specific_methods_list = ["sor", "sor,sor_1.1", "sor,sor_1.1,sor_1.25", "sor,sor_1.1,sor_1.25,sor_1.4", "sor,sor_1.1,sor_1.25,sor_1.4,sor_1.5"]
-        for w in weights[titles[primary_solver]]:
-            specific_methods_list.append(f"{titles[primary_solver]} ({w})")
-    else:
-        raise NotImplementedError(f"Specific methods list not implemented for {primary_solver}")
+    specific_methods_list = ["jacobi,gs", "jacobi,gs,ssor", "jacobi,gs,ssor,jacobi_0.67", "jacobi,gs,ssor,jacobi_0.67,sor_1.5"]
     
 
-
-    if os.path.exists(f"{results_dir}/{results_df_name}_{titles[primary_solver]}_{equation}_solver_decisions_{ml_model_type}_{ml_model_name}.csv"):
-        df_solver_decisions = pd.read_csv(f"{results_dir}/{results_df_name}_{titles[primary_solver]}_{equation}_solver_decisions_{ml_model_type}_{ml_model_name}.csv")
+    if os.path.exists(f"{results_dir}/{results_df_name}_{equation}_solver_decisions_{ml_model_type}_{ml_model_name}_diff.csv"):
+        df_solver_decisions = pd.read_csv(f"{results_dir}/{results_df_name}_{equation}_solver_decisions_{ml_model_type}_{ml_model_name}_diff.csv")
         df_solver_decisions = df_solver_decisions.set_index("Methods")
     else:
         df_solver_decisions = pd.DataFrame({"Methods": specific_methods_list})
-        for w in weights[titles[primary_solver]]:
-            df_solver_decisions[f"{titles[primary_solver]} w/ weight {w}"] = ""
-            df_solver_decisions[f"Mean_{titles[primary_solver]} w/ weight {w}"] = ""
-            df_solver_decisions[f"Std_{titles[primary_solver]} w/ weight {w}"] = ""
+        for w in order_of_solvers:
+            df_solver_decisions[f"{w}"] = ""
+            df_solver_decisions[f"Mean {w}"] = ""
+            df_solver_decisions[f"Std {w}"] = ""
         df_solver_decisions[f"DeepONet"] = ""
-        df_solver_decisions[f"Mean_DeepONet"] = ""
-        df_solver_decisions[f"Std_DeepONet"] = ""
+        df_solver_decisions[f"Mean DeepONet"] = ""
+        df_solver_decisions[f"Std DeepONet"] = ""
         df_solver_decisions.set_index("Methods", inplace = True)
-    if num_solvers == 6:
-        for w in weights[titles[primary_solver]]:
-            freq = np.sum(solver_decisions_results[w] == 0, axis = 0)/arguments["max_iters"]
-            deeponet_freq = 1 - freq
-            df_solver_decisions.loc[f"{titles[primary_solver]} ({w})", f"Mean_{titles[primary_solver]} w/ weight {w}"] = np.mean(freq).item()
-            df_solver_decisions.loc[f"{titles[primary_solver]} ({w})", f"Std_{titles[primary_solver]} w/ weight {w}"] = np.std(freq).item()
-            df_solver_decisions.loc[f"{titles[primary_solver]} ({w})", f"{titles[primary_solver]} w/ weight {w}"] = f"{(np.mean(freq)).item():.3f} ({(np.std(freq)).item():.3f})"
-            df_solver_decisions.loc[f"{titles[primary_solver]} ({w})", f"Mean_DeepONet"] = np.mean(deeponet_freq).item()
-            df_solver_decisions.loc[f"{titles[primary_solver]} ({w})", f"Std_DeepONet"] = np.std(deeponet_freq).item()
-            df_solver_decisions.loc[f"{titles[primary_solver]} ({w})", f"DeepONet"] = f"{(np.mean(deeponet_freq)).item():.3f} ({(np.std(deeponet_freq)).item():.3f})"
+    
     for i in range(num_solvers - 1):
         # solver_decisions_greedy shape is iterations, samples   
         freq = np.sum(solver_decisions_greedy == i, axis = 0)/arguments["max_iters"]
-        df_solver_decisions.loc[f"{args.numerical_solvers}", f"Mean_{titles[primary_solver]} w/ weight {weights[titles[primary_solver]][i]}"] = np.mean(freq).item()
-        df_solver_decisions.loc[f"{args.numerical_solvers}", f"Std_{titles[primary_solver]} w/ weight {weights[titles[primary_solver]][i]}"] = np.std(freq).item()
-        df_solver_decisions.loc[f"{args.numerical_solvers}", f"{titles[primary_solver]} w/ weight {weights[titles[primary_solver]][i]}"] = f"{(np.mean(freq)).item():.3f} ({(np.std(freq)).item():.3f})"
+        df_solver_decisions.loc[f"{args.numerical_solvers}", f"Mean {order_of_solvers[i]}"] = np.mean(freq).item()
+        df_solver_decisions.loc[f"{args.numerical_solvers}", f"Std {order_of_solvers[i]}"] = np.std(freq).item()
+        df_solver_decisions.loc[f"{args.numerical_solvers}", f"{order_of_solvers[i]}"] = f"{(np.mean(freq)).item():.3f} ({(np.std(freq)).item():.3f})"
     freq = np.sum(solver_decisions_greedy == num_solvers - 1, axis = 0)/arguments["max_iters"]
-    df_solver_decisions.loc[f"{args.numerical_solvers}", f"Mean_DeepONet"] = np.mean(freq).item()
-    df_solver_decisions.loc[f"{args.numerical_solvers}", f"Std_DeepONet"] = np.std(freq).item()
+    df_solver_decisions.loc[f"{args.numerical_solvers}", f"Mean DeepONet"] = np.mean(freq).item()
+    df_solver_decisions.loc[f"{args.numerical_solvers}", f"Std DeepONet"] = np.std(freq).item()
     df_solver_decisions.loc[f"{args.numerical_solvers}", f"DeepONet"] = f"{(np.mean(freq)).item():.3f} ({(np.std(freq)).item():.3f})"
-    df_solver_decisions.to_csv(f"{results_dir}/{results_df_name}_{titles[primary_solver]}_{equation}_solver_decisions_{ml_model_type}_{ml_model_name}.csv")
+    df_solver_decisions.to_csv(f"{results_dir}/{results_df_name}_{equation}_solver_decisions_{ml_model_type}_{ml_model_name}_diff.csv")
 
 
     tab10_colors = ["tab:blue", "tab:orange", "tab:green", "tab:red", "tab:purple", "tab:brown", "tab:pink", "tab:gray", "tab:olive", "tab:cyan"]

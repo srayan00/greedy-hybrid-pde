@@ -123,7 +123,7 @@ def test_model(model, dataloader, in_channels, dim, loss = ApproxGreedyRouterLos
     mode_5_errors = np.concatenate(mode_5_errors, axis = 1)
     mode_10_errors = np.concatenate(mode_10_errors, axis = 1)
     solver_decisions = np.concatenate(solver_decisions, axis = 1)
-    return errors_greedy, loss_greedy, residuals, mode_1_errors, mode_5_errors, mode_10_errors, solver_decisions
+    return errors_greedy, loss_greedy, residuals, mode_1_errors, mode_5_errors, mode_10_errors, solver_decisions, predictions, output
 
 def true_greedy_model(model_hints, test_loader, in_channels, dim, loss = ApproxGreedyRouterLoss(), centered = True, loss_t = False, max_iters = 100):
     errors_true_greedy = ()
@@ -175,6 +175,15 @@ def true_greedy_model(model_hints, test_loader, in_channels, dim, loss = ApproxG
         loss_true_greedy = None
     best_solvers = np.concatenate(best_solvers, axis=1)
     return errors_true_greedy, best_solvers
+
+def clear_axes_with_colorbar(ax):
+    if len(ax.images) > 0:
+        im = ax.images[0]
+        cbar = getattr(im, "colorbar", None)
+        if cbar is not None:
+            cbar.remove()
+    ax.clear()
+
 
 if __name__ == "__main__":
     print("Parsing arguments...")
@@ -484,7 +493,7 @@ if __name__ == "__main__":
     needs_mean_zero = (equation == "Poisson") or (equation == "ConvDiff" and reaction_c == 0.0)
     centered = needs_mean_zero and boundary == "Periodic" and in_channels == 1
     loss = ApproxGreedyRouterLoss(centered=centered)
-    errors_greedy, loss_greedy, residuals_greedy, mode_1_errors, mode_5_errors, mode_10_errors, solver_decisions_greedy = test_model(model, test_loader, in_channels, dim, loss = loss, centered = centered, loss_t = False)
+    errors_greedy, loss_greedy, residuals_greedy, mode_1_errors, mode_5_errors, mode_10_errors, solver_decisions_greedy, pred_greedy, _ = test_model(model, test_loader, in_channels, dim, loss = loss, centered = centered, loss_t = False)
 
     if len(list_of_solvers) > 1:
         raise ValueError("Multiple solvers are not supported yet")
@@ -494,7 +503,7 @@ if __name__ == "__main__":
     model_constant = HybridSolver(N=ml_arguments["N"], dim=dim, in_channels=in_channels, boundary=boundary, equation=pde,
                                     suite_solver=list_of_solvers+[ml_model], router=constant_router, tol=1e-7, max_iters=arguments["max_iters"], threshold=0.1).to(device)
     loss = ApproxGreedyRouterLoss(centered=(equation == "Poisson" and boundary == "Periodic"))
-    errors_constant, loss_constant, residuals_constant, mode_one_constant, mode_five_constant, mode_ten_constant, solver_decisions_constant = test_model(model_constant, test_loader, in_channels, dim, loss, centered = centered, loss_t = False)
+    errors_constant, loss_constant, residuals_constant, mode_one_constant, mode_five_constant, mode_ten_constant, solver_decisions_constant, pred_constant, _ = test_model(model_constant, test_loader, in_channels, dim, loss, centered = centered, loss_t = False)
 
     if "jacobi" in numerical_solvers[0] or "gs" in numerical_solvers[0] or "sor" in numerical_solvers[0]:
         hints_num = 25
@@ -504,7 +513,7 @@ if __name__ == "__main__":
     model_hints = HybridSolver(N=ml_arguments["N"], dim=dim, in_channels=in_channels, boundary=boundary, equation=pde,
                                 suite_solver=list_of_solvers+[ml_model], router=hints, tol=1e-7, max_iters=arguments["max_iters"], threshold=0.1).to(device)
 
-    errors_hints, loss_hints, residuals_hints , mode_one_hints, mode_five_hints, mode_ten_hints, solver_decisions_hints = test_model(model_hints, test_loader, in_channels, dim, loss, equation == "Poisson")
+    errors_hints, loss_hints, residuals_hints , mode_one_hints, mode_five_hints, mode_ten_hints, solver_decisions_hints, pred_hints, output_hints = test_model(model_hints, test_loader, in_channels, dim, loss, equation == "Poisson")
 
     errors_true_greedy, best_solvers = true_greedy_model(model_hints, test_loader, in_channels, dim, loss, centered = centered, loss_t = False, max_iters = arguments["max_iters"])
 
@@ -513,148 +522,134 @@ if __name__ == "__main__":
     auc_true_greedy = np.trapezoid(errors_true_greedy, axis=0)
     auc_hints = np.trapezoid(errors_hints, axis=0)
 
-    if os.path.exists(f"{results_dir}/separate_{ml_model_type}_{ml_model_name}_error_comparison.csv"):
-        df_error = pd.read_csv(f"results/separate_{ml_model_type}_{ml_model_name}_error_comparison.csv")
+    titles = {"jacobi": "Jacobi", "gs": "GS", "mg": "MG", "sor": "SOR", "ssor": "SymGS", "rich": "Richardson", "jacobi_0.67": "Jacobi (0.67)", "sor_1.5": "SOR (1.5)"}
+    method_list = []
+    for method in ["jacobi", "gs", "mg", "ssor", "jacobi_0.67", "sor_1.5"]:
+        for t in ["only ", "HINTS-", "Learned Greedy-", "True-Greedy-"]:
+            method_list.append(f"{t}{titles[method]}")
+
+
+    if os.path.exists(f"{results_dir}/{results_df_name}_separate_{ml_model_type}_{ml_model_name}_error_comparison.csv"):
+        df_error = pd.read_csv(f"{results_dir}/{results_df_name}_separate_{ml_model_type}_{ml_model_name}_error_comparison.csv")
         df_error = df_error.set_index("Methods")
     else:
-        df_error = pd.DataFrame({"Methods": ["jacobi only", "HINTS-jacobi", "Learned Greedy-jacobi", "True-Greedy-jacobi","gs only", "HINTS-gs", "Learned Greedy-gs", "True-Greedy-gs", "mg only", "HINTS-mg", "Learned Greedy-mg", "True-Greedy-mg"]})
+        df_error = pd.DataFrame({"Methods": method_list})
 
-        df_error["FinalError_2d_Poisson"] = ""
-        df_error["Mean_FinalError_2d_Poisson"] = ""
-        df_error["Std_FinalError_2d_Poisson"] = ""
-        df_error["pval_FinalError_2d_Poisson"] = ""
-
-        df_error["AUC_Error_2d_Poisson"] = ""
-        df_error["Mean_AUC_Error_2d_Poisson"] = ""
-        df_error["Std_AUC_Error_2d_Poisson"] = ""
-        df_error["pval_AUC_Error_2d_Poisson"] = ""
-
-        df_error["FinalError_2d_Helmholtz"] = ""
-        df_error["Mean_FinalError_2d_Helmholtz"] = ""
-        df_error["Std_FinalError_2d_Helmholtz"] = ""
-        df_error["pval_FinalError_2d_Helmholtz"] = ""
-
-        df_error["AUC_Error_2d_Helmholtz"] = ""
-        df_error["Mean_AUC_Error_2d_Helmholtz"] = ""
-        df_error["Std_AUC_Error_2d_Helmholtz"] = ""
-        df_error["pval_AUC_Error_2d_Helmholtz"] = ""
-
-        df_error["FinalError_2d_Convdiff"] = ""
-        df_error["Mean_FinalError_2d_Convdiff"] = ""
-        df_error["Std_FinalError_2d_Convdiff"] = ""
-        df_error["pval_FinalError_2d_Convdiff"] = ""
-
-        df_error["AUC_Error_2d_Convdiff"] = ""
-        df_error["Mean_AUC_Error_2d_Convdiff"] = ""
-        df_error["Std_AUC_Error_2d_Convdiff"] = ""
-        df_error["pval_AUC_Error_2d_Convdiff"] = ""
+        for e in ["Poisson", "Helmholtz", "ConvDiff"]:
+            df_error[f"FinalError_{dim}d_{e}"] = ""
+            df_error[f"Mean_FinalError_{dim}d_{e}"] = ""
+            df_error[f"Std_FinalError_{dim}d_{e}"] = ""
+            df_error[f"pval_FinalError_{dim}d_{e}"] = ""
+            df_error[f"AUC_Error_{dim}d_{e}"] = ""
+            df_error[f"Mean_AUC_Error_{dim}d_{e}"] = ""
+            df_error[f"Std_AUC_Error_{dim}d_{e}"] = ""
+            df_error[f"pval_AUC_Error_{dim}d_{e}"] = ""
 
         df_error.set_index("Methods", inplace = True)
+    errors_dict = {"only ": errors_constant, "HINTS-": errors_hints, "Learned Greedy-": errors_greedy, "True-Greedy-": errors_true_greedy}
+    for key, value in errors_dict.items():
+        auc_value = np.trapezoid(value, axis=0)
+        df_error.loc[f"{key}{titles[numerical_solvers[0]]}", f"Mean_FinalError_{dim}d_{equation}"] = np.mean(value[-1]).item()
+        df_error.loc[f"{key}{titles[numerical_solvers[0]]}", f"Std_FinalError_{dim}d_{equation}"] = np.std(value[-1]).item()
+        df_error.loc[f"{key}{titles[numerical_solvers[0]]}", f"Mean_AUC_Error_{dim}d_{equation}"] = np.mean(auc_value).item()
+        df_error.loc[f"{key}{titles[numerical_solvers[0]]}", f"Std_AUC_Error_{dim}d_{equation}"] = np.std(auc_value).item()
+        df_error.loc[f"{key}{titles[numerical_solvers[0]]}", f"FinalError_{dim}d_{equation}"] = f"{(np.mean(value[-1])*(10**3)).item():.3f} ({(np.std(value[-1])*(10**3)).item():.3f})"
+        df_error.loc[f"{key}{titles[numerical_solvers[0]]}", f"pval_FinalError_{dim}d_{equation}"] = ttest_rel(value[-1], errors_greedy[-1], alternative = "greater").pvalue.item()
+        df_error.loc[f"{key}{titles[numerical_solvers[0]]}", f"AUC_Error_{dim}d_{equation}"] = f"{(np.mean(auc_value).item()):.3f} ({(np.std(auc_value).item()):.3f})"
+        df_error.loc[f"{key}{titles[numerical_solvers[0]]}", f"pval_AUC_Error_{dim}d_{equation}"] = ttest_rel(auc_value, auc_greedy, alternative = "greater").pvalue.item()
+
+   
+    df_error.to_csv(f"{results_dir}/{results_df_name}_separate_{ml_model_type}_{ml_model_name}_error_comparison.csv")
+    new_method_list = []
     
-    df_error.loc[f"{numerical_solvers[0]} only", f"Mean_FinalError_{dim}d_{equation}"] = np.mean(errors_constant[-1]).item()
-    df_error.loc[f"{numerical_solvers[0]} only", f"Std_FinalError_{dim}d_{equation}"] = np.std(errors_constant[-1]).item()
-    df_error.loc[f"{numerical_solvers[0]} only", f"Mean_AUC_Error_{dim}d_{equation}"] = np.mean(auc_constant).item()
-    df_error.loc[f"{numerical_solvers[0]} only", f"Std_AUC_Error_{dim}d_{equation}"] = np.std(auc_constant).item()
-    df_error.loc[f"{numerical_solvers[0]} only", f"FinalError_{dim}d_{equation}"] = f"{(np.mean(errors_constant[-1])*(10**3)).item():.3f} ({(np.std(errors_constant[-1])*(10**3)).item():.3f})"
-    df_error.loc[f"{numerical_solvers[0]} only", f"pval_FinalError_{dim}d_{equation}"] = ttest_rel(errors_constant[-1], errors_greedy[-1], alternative = "greater").pvalue.item()
-    df_error.loc[f"{numerical_solvers[0]} only", f"AUC_Error_{dim}d_{equation}"] = f"{(np.mean(auc_constant).item()):.3f} ({(np.std(auc_constant).item()):.3f})"
-    df_error.loc[f"{numerical_solvers[0]} only", f"pval_AUC_Error_{dim}d_{equation}"] = ttest_rel(auc_constant, auc_greedy, alternative = "greater").pvalue.item()
-
-    df_error.loc[f"HINTS-{numerical_solvers[0]}", f"Mean_FinalError_{dim}d_{equation}"] = np.mean(errors_hints[-1]).item()
-    df_error.loc[f"HINTS-{numerical_solvers[0]}", f"Std_FinalError_{dim}d_{equation}"] = np.std(errors_hints[-1]).item()
-    df_error.loc[f"HINTS-{numerical_solvers[0]}", f"Mean_AUC_Error_{dim}d_{equation}"] = np.mean(auc_hints).item()
-    df_error.loc[f"HINTS-{numerical_solvers[0]}", f"Std_AUC_Error_{dim}d_{equation}"] = np.std(auc_hints).item()
-    df_error.loc[f"HINTS-{numerical_solvers[0]}", f"FinalError_{dim}d_{equation}"] = f"{(np.mean(errors_hints[-1])*(10**3)).item():.3f} ({(np.std(errors_hints[-1])*(10**3)).item():.3f})"
-    df_error.loc[f"HINTS-{numerical_solvers[0]}", f"pval_FinalError_{dim}d_{equation}"] = ttest_rel(errors_hints[-1], errors_greedy[-1], alternative = "greater").pvalue.item()
-    df_error.loc[f"HINTS-{numerical_solvers[0]}", f"AUC_Error_{dim}d_{equation}"] = f"{(np.mean(auc_hints).item()):.3f} ({(np.std(auc_hints).item()):.3f})"
-    df_error.loc[f"HINTS-{numerical_solvers[0]}", f"pval_AUC_Error_{dim}d_{equation}"] = ttest_rel(auc_hints, auc_greedy, alternative = "greater").pvalue.item()
-
-    df_error.loc[f"Learned Greedy-{numerical_solvers[0]}", f"Mean_FinalError_{dim}d_{equation}"] = np.mean(errors_greedy[-1]).item()
-    df_error.loc[f"Learned Greedy-{numerical_solvers[0]}", f"Std_FinalError_{dim}d_{equation}"] = np.std(errors_greedy[-1]).item()
-    df_error.loc[f"Learned Greedy-{numerical_solvers[0]}", f"Mean_AUC_Error_{dim}d_{equation}"] = np.mean(auc_greedy).item()
-    df_error.loc[f"Learned Greedy-{numerical_solvers[0]}", f"Std_AUC_Error_{dim}d_{equation}"] = np.std(auc_greedy).item()
-    df_error.loc[f"Learned Greedy-{numerical_solvers[0]}", f"FinalError_{dim}d_{equation}"] = f"{(np.mean(errors_greedy[-1])*(10**3)).item():.3f} ({(np.std(errors_greedy[-1])*(10**3)).item():.3f})"
-    df_error.loc[f"Learned Greedy-{numerical_solvers[0]}", f"AUC_Error_{dim}d_{equation}"] = f"{(np.mean(auc_greedy).item()):.3f} ({(np.std(auc_greedy).item()):.3f})"
-    
-    df_error.loc[f"True-Greedy-{numerical_solvers[0]}", f"Mean_FinalError_{dim}d_{equation}"] = np.mean(errors_true_greedy[-1]).item()
-    df_error.loc[f"True-Greedy-{numerical_solvers[0]}", f"Std_FinalError_{dim}d_{equation}"] = np.std(errors_true_greedy[-1]).item()
-    df_error.loc[f"True-Greedy-{numerical_solvers[0]}", f"Mean_AUC_Error_{dim}d_{equation}"] = np.mean(auc_true_greedy).item()
-    df_error.loc[f"True-Greedy-{numerical_solvers[0]}", f"Std_AUC_Error_{dim}d_{equation}"] = np.std(auc_true_greedy).item()
-    df_error.loc[f"True-Greedy-{numerical_solvers[0]}", f"FinalError_{dim}d_{equation}"] = f"{(np.mean(errors_true_greedy[-1])*(10**3)).item():.3f} ({(np.std(errors_true_greedy[-1])*(10**3)).item():.3f})"
-    df_error.loc[f"True-Greedy-{numerical_solvers[0]}", f"AUC_Error_{dim}d_{equation}"] = f"{(np.mean(auc_true_greedy).item()):.3f} ({(np.std(auc_true_greedy).item()):.3f})"
-
-    df_error.to_csv(f"{results_dir}/separate_{ml_model_type}_{ml_model_name}_error_comparison.csv")
-
-    if os.path.exists(f"{results_dir}/separate_{ml_model_type}_{ml_model_name}_residual_comparison.csv"):
-        df_residual = pd.read_csv(f"{results_dir}/separate_{ml_model_type}_{ml_model_name}_residual_comparison.csv")
+    for method in ["jacobi", "gs", "mg", "ssor", "jacobi_0.67", "sor_1.5"]:
+        for t in ["only ", "HINTS-", "Learned Greedy-"]:
+            new_method_list.append(f"{t}{titles[method]}")
+    if os.path.exists(f"{results_dir}/{results_df_name}_separate_{ml_model_type}_{ml_model_name}_residual_comparison.csv"):
+        df_residual = pd.read_csv(f"{results_dir}/{results_df_name}_separate_{ml_model_type}_{ml_model_name}_residual_comparison.csv")
         df_residual = df_residual.set_index("Methods")
     else:
-        df_residual = pd.DataFrame({"Methods": ["jacobi only", "HINTS-jacobi", "Learned Greedy-jacobi", "True-Greedy-jacobi","gs only", "HINTS-gs", "Learned Greedy-gs", "True-Greedy-gs", "mg only", "HINTS-mg", "Learned Greedy-mg", "True-Greedy-mg"]})
-
-        df_residual["FinalResidual_2d_Poisson"] = ""
-        df_residual["Mean_FinalResidual_2d_Poisson"] = ""
-        df_residual["Std_FinalResidual_2d_Poisson"] = ""
-        df_residual["pval_FinalResidual_2d_Poisson"] = ""
-
-        df_residual["AUC_Residual_2d_Poisson"] = ""
-        df_residual["Mean_AUC_Residual_2d_Poisson"] = ""
-        df_residual["Std_AUC_Residual_2d_Poisson"] = ""
-        df_residual["pval_AUC_Residual_2d_Poisson"] = ""
-
-        df_residual["FinalResidual_2d_Helmholtz"] = ""
-        df_residual["Mean_FinalResidual_2d_Helmholtz"] = ""
-        df_residual["Std_FinalResidual_2d_Helmholtz"] = ""
-        df_residual["pval_FinalResidual_2d_Helmholtz"] = ""
-
-        df_residual["AUC_Residual_2d_Helmholtz"] = ""
-        df_residual["Mean_AUC_Residual_2d_Helmholtz"] = ""
-        df_residual["Std_AUC_Residual_2d_Helmholtz"] = ""
-        df_residual["pval_AUC_Residual_2d_Helmholtz"] = ""
-
-
-        df_residual["FinalResidual_2d_Convdiff"] = ""
-        df_residual["Mean_FinalResidual_2d_Convdiff"] = ""
-        df_residual["Std_FinalResidual_2d_Convdiff"] = ""
-        df_residual["pval_FinalResidual_2d_Convdiff"] = ""
-
-        df_residual["AUC_Residual_2d_Convdiff"] = ""
-        df_residual["Mean_AUC_Residual_2d_Convdiff"] = ""
-        df_residual["Std_AUC_Residual_2d_Convdiff"] = ""
-        df_residual["pval_AUC_Residual_2d_Convdiff"] = ""
+        df_residual = pd.DataFrame({"Methods": new_method_list})
+        for e in ["Poisson", "Helmholtz", "ConvDiff"]:
+            df_residual[f"FinalResidual_{dim}d_{e}"] = ""
+            df_residual[f"Mean_FinalResidual_{dim}d_{e}"] = ""
+            df_residual[f"Std_FinalResidual_{dim}d_{e}"] = ""
+            df_residual[f"pval_FinalResidual_{dim}d_{e}"] = ""
+            df_residual[f"AUC_Residual_{dim}d_{e}"] = ""
+            df_residual[f"Mean_AUC_Residual_{dim}d_{e}"] = ""
+            df_residual[f"Std_AUC_Residual_{dim}d_{e}"] = ""
+            df_residual[f"pval_AUC_Residual_{dim}d_{e}"] = ""
         df_residual.set_index("Methods", inplace = True)
-    df_residual.loc[f"{numerical_solvers[0]} only", f"Mean_FinalResidual_{dim}d_{equation}"] = np.mean(residuals_constant[-1]).item()
-    df_residual.loc[f"{numerical_solvers[0]} only", f"Std_FinalResidual_{dim}d_{equation}"] = np.std(residuals_constant[-1]).item()
-    df_residual.loc[f"{numerical_solvers[0]} only", f"Mean_AUC_Residual_{dim}d_{equation}"] = np.mean(auc_constant).item()
-    df_residual.loc[f"{numerical_solvers[0]} only", f"Std_AUC_Residual_{dim}d_{equation}"] = np.std(auc_constant).item()
-    df_residual.loc[f"{numerical_solvers[0]} only", f"FinalResidual_{dim}d_{equation}"] = f"{(np.mean(residuals_constant[-1])*(10**3)).item():.3f} ({(np.std(residuals_constant[-1])*(10**3)).item():.3f})"
-    df_residual.loc[f"{numerical_solvers[0]} only", f"pval_FinalResidual_{dim}d_{equation}"] = ttest_rel(residuals_constant[-1], residuals_greedy[-1], alternative = "greater").pvalue.item()
-    df_residual.loc[f"{numerical_solvers[0]} only", f"AUC_Residual_{dim}d_{equation}"] = f"{(np.mean(auc_constant).item()):.3f} ({(np.std(auc_constant).item()):.3f})"
-    df_residual.loc[f"{numerical_solvers[0]} only", f"pval_AUC_Residual_{dim}d_{equation}"] = ttest_rel(auc_constant, auc_greedy, alternative = "greater").pvalue.item()
+    auc_residual_constant = np.trapezoid(residuals_constant, axis=0)
+    auc_residual_hints = np.trapezoid(residuals_hints, axis=0)
+    auc_residual_greedy = np.trapezoid(residuals_greedy, axis=0)
+    # auc_residual_true_greedy = np.trapezoid(residuals_true_greedy, axis=0)
+    residuals_dict = {"only ": residuals_constant, "HINTS-": residuals_hints, "Learned Greedy-": residuals_greedy}
+    for key, value in residuals_dict.items():
+        auc_value = np.trapezoid(value, axis=0)
+        df_residual.loc[f"{key}{titles[numerical_solvers[0]]}", f"Mean_FinalResidual_{dim}d_{equation}"] = np.mean(value[-1]).item()
+        df_residual.loc[f"{key}{titles[numerical_solvers[0]]}", f"Std_FinalResidual_{dim}d_{equation}"] = np.std(value[-1]).item()
+        df_residual.loc[f"{key}{titles[numerical_solvers[0]]}", f"Mean_AUC_Residual_{dim}d_{equation}"] = np.mean(auc_value).item()
+        df_residual.loc[f"{key}{titles[numerical_solvers[0]]}", f"Std_AUC_Residual_{dim}d_{equation}"] = np.std(auc_value).item()
+        df_residual.loc[f"{key}{titles[numerical_solvers[0]]}", f"FinalResidual_{dim}d_{equation}"] = f"{(np.mean(value[-1])*(10**3)).item():.3f} ({(np.std(value[-1])*(10**3)).item():.3f})"
+        df_residual.loc[f"{key}{titles[numerical_solvers[0]]}", f"pval_FinalResidual_{dim}d_{equation}"] = ttest_rel(value[-1], residuals_greedy[-1], alternative = "greater").pvalue.item()
+        df_residual.loc[f"{key}{titles[numerical_solvers[0]]}", f"AUC_Residual_{dim}d_{equation}"] = f"{(np.mean(auc_value).item()):.3f} ({(np.std(auc_value).item()):.3f})"
+        df_residual.loc[f"{key}{titles[numerical_solvers[0]]}", f"pval_AUC_Residual_{dim}d_{equation}"] = ttest_rel(auc_value, auc_greedy, alternative = "greater").pvalue.item()
+   
+    df_residual.to_csv(f"{results_dir}/{results_df_name}_separate_{ml_model_type}_{ml_model_name}_residual_comparison.csv")
 
-    df_residual.loc[f"HINTS-{numerical_solvers[0]}", f"Mean_FinalResidual_{dim}d_{equation}"] = np.mean(residuals_hints[-1]).item()
-    df_residual.loc[f"HINTS-{numerical_solvers[0]}", f"Std_FinalResidual_{dim}d_{equation}"] = np.std(residuals_hints[-1]).item()
-    df_residual.loc[f"HINTS-{numerical_solvers[0]}", f"Mean_AUC_Residual_{dim}d_{equation}"] = np.mean(auc_hints).item()
-    df_residual.loc[f"HINTS-{numerical_solvers[0]}", f"Std_AUC_Residual_{dim}d_{equation}"] = np.std(auc_hints).item()
-    df_residual.loc[f"HINTS-{numerical_solvers[0]}", f"FinalResidual_{dim}d_{equation}"] = f"{(np.mean(residuals_hints[-1])*(10**3)).item():.3f} ({(np.std(residuals_hints[-1])*(10**3)).item():.3f})"
-    df_residual.loc[f"HINTS-{numerical_solvers[0]}", f"pval_FinalResidual_{dim}d_{equation}"] = ttest_rel(residuals_hints[-1], residuals_greedy[-1], alternative = "greater").pvalue.item()
-    df_residual.loc[f"HINTS-{numerical_solvers[0]}", f"AUC_Residual_{dim}d_{equation}"] = f"{(np.mean(auc_hints).item()):.3f} ({(np.std(auc_hints).item()):.3f})"
-    df_residual.loc[f"HINTS-{numerical_solvers[0]}", f"pval_AUC_Residual_{dim}d_{equation}"] = ttest_rel(auc_hints, auc_greedy, alternative = "greater").pvalue.item()
+    auc_mode_one = np.trapezoid(mode_1_errors, axis=0)
+    auc_mode_five = np.trapezoid(mode_5_errors, axis=0)
+    auc_mode_ten = np.trapezoid(mode_10_errors, axis=0)
 
-    df_residual.loc[f"Learned Greedy-{numerical_solvers[0]}", f"Mean_FinalResidual_{dim}d_{equation}"] = np.mean(residuals_greedy[-1]).item()
-    df_residual.loc[f"Learned Greedy-{numerical_solvers[0]}", f"Std_FinalResidual_{dim}d_{equation}"] = np.std(residuals_greedy[-1]).item()
-    df_residual.loc[f"Learned Greedy-{numerical_solvers[0]}", f"Mean_AUC_Residual_{dim}d_{equation}"] = np.mean(auc_greedy).item()
-    df_residual.loc[f"Learned Greedy-{numerical_solvers[0]}", f"Std_AUC_Residual_{dim}d_{equation}"] = np.std(auc_greedy).item()
-    df_residual.loc[f"Learned Greedy-{numerical_solvers[0]}", f"FinalResidual_{dim}d_{equation}"] = f"{(np.mean(residuals_greedy[-1])*(10**3)).item():.3f} ({(np.std(residuals_greedy[-1])*(10**3)).item():.3f})"
-    df_residual.loc[f"Learned Greedy-{numerical_solvers[0]}", f"AUC_Residual_{dim}d_{equation}"] = f"{(np.mean(auc_greedy).item()):.3f} ({(np.std(auc_greedy).item()):.3f})"
+    auc_mode_one_constant = np.trapezoid(mode_one_constant, axis=0)
+    auc_mode_five_constant = np.trapezoid(mode_five_constant, axis=0)
+    auc_mode_ten_constant = np.trapezoid(mode_ten_constant, axis=0)
 
-    df_residual.to_csv(f"{results_dir}/separate_{ml_model_type}_{ml_model_name}_residual_comparison.csv")
+    auc_mode_one_hints = np.trapezoid(mode_one_hints, axis=0)
+    auc_mode_five_hints = np.trapezoid(mode_five_hints, axis=0)
+    auc_mode_ten_hints = np.trapezoid(mode_ten_hints, axis=0)
 
-    # plot the solver decisions in the form of a heatmap in order of ml solver usage
-    # need a discrete cmap with 2 colors from tableau10 # encode 0 as numerical solver and 1 as ml solver as a label
-    # different color than these two
-    titles = {"jacobi": "Jacobi", "gs": "GS", "mg": "MG", "sor": "SOR", "ssor": "SSOR", "rich": "Richardson"}
+
+    if os.path.exists(f"{results_dir}/{results_df_name}_separate_{ml_model_type}_{ml_model_name}_mode_comparison.csv"):
+        df_mode = pd.read_csv(f"{results_dir}/{results_df_name}_separate_{ml_model_type}_{ml_model_name}_mode_comparison.csv")
+        df_mode = df_mode.set_index("Methods")
+    else:
+        df_mode = pd.DataFrame({"Methods": new_method_list})
+        for e in ["Poisson", "Helmholtz", "ConvDiff"]:
+            for m in ["1", "5", "10"]:
+                df_mode[f"Final_Mode_{m}_Error_{dim}d_{e}"] = ""
+                df_mode[f"Mean_Final_Mode_{m}_{dim}d_{e}"] = ""
+                df_mode[f"Std_Final_Mode_{m}_{dim}d_{e}"] = ""
+                df_mode[f"pval_Final_Mode_{m}_{dim}d_{e}"] = ""
+                df_mode[f"AUC_Mode_{m}_{dim}d_{e}"] = ""
+                df_mode[f"Mean_AUC_Mode_{m}_{dim}d_{e}"] = ""
+                df_mode[f"Std_AUC_Mode_{m}_{dim}d_{e}"] = ""
+                df_mode[f"pval_AUC_Mode_{m}_{dim}d_{e}"] = ""
+        df_mode.set_index("Methods", inplace = True)
+    
+    mode_one_dict = {"only ": mode_one_constant, "HINTS-": mode_one_hints, "Learned Greedy-": mode_1_errors}
+    mode_five_dict = {"only ": mode_five_constant, "HINTS-": mode_five_hints, "Learned Greedy-": mode_5_errors}
+    mode_ten_dict = {"only ": mode_ten_constant, "HINTS-": mode_ten_hints, "Learned Greedy-": mode_10_errors}
+    mode_dict = {"1": mode_one_dict, "5": mode_five_dict, "10": mode_ten_dict}
+    for m, mode_num_dict in mode_dict.items():
+        auc_greedy_mode = np.trapezoid(mode_num_dict["Learned Greedy-"], axis=0)
+        for key, value in mode_num_dict.items():
+            auc_value = np.trapezoid(value, axis=0)
+            df_mode.loc[f"{key}{titles[numerical_solvers[0]]}", f"Mean_Final_Mode_{m}_{dim}d_{equation}"] = np.nanmean(value[-1]).item()
+            df_mode.loc[f"{key}{titles[numerical_solvers[0]]}", f"Std_Final_Mode_{m}_{dim}d_{equation}"] = np.nanstd(value[-1]).item()
+            df_mode.loc[f"{key}{titles[numerical_solvers[0]]}", f"pval_Final_Mode_{m}_{dim}d_{equation}"] = ttest_rel(value[-1], mode_num_dict["Learned Greedy-"][-1], alternative = "greater").pvalue.item()
+            df_mode.loc[f"{key}{titles[numerical_solvers[0]]}", f"Mean_AUC_Mode_{m}_{dim}d_{equation}"] = np.nanmean(auc_value).item()
+            df_mode.loc[f"{key}{titles[numerical_solvers[0]]}", f"Std_AUC_Mode_{m}_{dim}d_{equation}"] = np.nanstd(auc_value).item()
+            df_mode.loc[f"{key}{titles[numerical_solvers[0]]}", f"pval_AUC_Mode_{m}_{dim}d_{equation}"] = ttest_rel(auc_value, auc_greedy_mode, alternative = "greater").pvalue.item()
+            df_mode.loc[f"{key}{titles[numerical_solvers[0]]}", f"Final_Mode_{m}_Error_{dim}d_{equation}"] = f"{(np.nanmean(value[-1])*(10**3)).item():.3f} ({(np.nanstd(value[-1])*(10**3)).item():.3f})"
+            df_mode.loc[f"{key}{titles[numerical_solvers[0]]}", f"AUC_Mode_{m}_{dim}d_{equation}"] = f"{(np.nanmean(auc_value).item()):.3f} ({(np.nanstd(auc_value).item()):.3f})"
+    
+    df_mode.to_csv(f"{results_dir}/{results_df_name}_separate_{ml_model_type}_{ml_model_name}_mode_comparison.csv")
+    
+
+    
     cmap = colors.ListedColormap(colors.TABLEAU_COLORS.keys())
-    # i need two colors f
     two_colors = cmap(np.linspace(0,1,2))
     two_colors = ["tab:blue", "tab:orange"] 
     
@@ -668,10 +663,6 @@ if __name__ == "__main__":
     axes[0].set_xlabel("Iteration")
     axes[0].set_ylabel("Sample")
     axes[0].set_title("Solver Decisions for Learned Greedy")
-    # common colorbar fo.collection[0] is giving an index error
-    # common colorbar fo.collection[0] is giving an index error
-    # common colorbar fo.collection[0] is giving an index error
-    # common colorbar fo.collection[0] is giving an index error
 
     axes[1].imshow(best_solvers.transpose(), cmap = cmap)
     axes[1].set_xlabel("Iteration")
@@ -691,24 +682,43 @@ if __name__ == "__main__":
     plt.close()
 
     # if the pickle file exists, load it otherwise create a new figure
-    j = 0
-    
+    j = -1
+    appendix = False
     if numerical_solvers[0] == "gs":
         j = 1
         # two_colors = [[1, 1, 1, 1], "tab:orange"]
-    elif numerical_solvers[0] == "mg":
+    elif numerical_solvers[0] == "mg" or numerical_solvers[0] == "ssor":
         # two_colors = [[1, 1, 1, 1], "tab:green"]
         j = 2
-    cmap = colors.ListedColormap(two_colors)
-    if os.path.exists(f"{results_dir}/{ml_model_type}_{ml_model_name}_{equation}_{boundary}_{dim}d_{in_channels}c_solver_decisions_2.pkl"):
-        fig, axes = pickle.load(open(f"{results_dir}/{ml_model_type}_{ml_model_name}_{equation}_{boundary}_{dim}d_{in_channels}c_solver_decisions_2.pkl", "rb"))
+    elif numerical_solvers[0] == "jacobi":
+        j = 0
     else:
-        fig, axes = plt.subplots(nrows = 2, ncols = 3, sharex = True, sharey = True, figsize = (15, 10))
-        cbar = fig.colorbar(axes[0, j].imshow(solver_decisions_greedy.transpose(), cmap = cmap, aspect = 7), ax = axes, location = "right")
-        cbar.ax.yaxis.set_label_position("right")
-        cbar.set_ticks([0.25, 0.75])
-        cbar.set_ticklabels(["Numerical Solver", "ML Solver"])
+        appendix = True
+        if numerical_solvers[0] == "jacobi_0.67":
+            j = 0
+        else:
+            j = 1
+    cmap = colors.ListedColormap(two_colors)
 
+    # SOLVER DECISIONS PLOT
+    if not appendix:
+        if os.path.exists(f"{results_dir}/{results_df_name}_{ml_model_type}_{ml_model_name}_{equation}_{boundary}_{dim}d_{in_channels}c_solver_decisions_2.pkl"):
+            fig, axes = pickle.load(open(f"{results_dir}/{results_df_name}_{ml_model_type}_{ml_model_name}_{equation}_{boundary}_{dim}d_{in_channels}c_solver_decisions_2.pkl", "rb"))
+        else:
+            fig, axes = plt.subplots(nrows = 2, ncols = 3, sharex = True, sharey = True, figsize = (15, 10))
+            cbar = fig.colorbar(axes[0, j].imshow(solver_decisions_greedy.transpose(), cmap = cmap, aspect = 7), ax = axes, location = "right")
+            cbar.ax.yaxis.set_label_position("right")
+            cbar.set_ticks([0.25, 0.75])
+            cbar.set_ticklabels(["Numerical Solver", "ML Solver"])
+    else:
+        if os.path.exists(f"{results_dir}/{results_df_name}_{ml_model_type}_{ml_model_name}_{equation}_{boundary}_{dim}d_{in_channels}c_solver_decisions_2_appendix.pkl"):
+            fig, axes = pickle.load(open(f"{results_dir}/{results_df_name}_{ml_model_type}_{ml_model_name}_{equation}_{boundary}_{dim}d_{in_channels}c_solver_decisions_2_appendix.pkl", "rb"))
+        else:
+            fig, axes = plt.subplots(nrows = 2, ncols = 2, sharex = True, sharey = True, figsize = (10, 10))
+            cbar = fig.colorbar(axes[0, j].imshow(solver_decisions_greedy.transpose(), cmap = cmap, aspect = 7), ax = axes, location = "right")
+            cbar.ax.yaxis.set_label_position("right")
+            cbar.set_ticks([0.25, 0.75])
+            cbar.set_ticklabels(["Numerical Solver", "ML Solver"])
 
     axes[0, j].clear()
     axes[0, j].imshow(solver_decisions_greedy.transpose(), cmap = cmap, aspect = 7)
@@ -722,51 +732,227 @@ if __name__ == "__main__":
     axes[1, j].set_ylabel("Sample")
     axes[1, j].set_title(f"True Greedy {titles[numerical_solvers[0]]}")
     
-    fig.suptitle(f"Solver Decisions for Learned Greedy and Best Solvers True Greedy")
-    plt.savefig(f"{results_dir}/{ml_model_type}_{ml_model_name}_{equation}_{boundary}_{dim}d_{in_channels}c_solver_decisions_2.png")
-    pickle.dump((fig, axes), open(f"{results_dir}/{ml_model_type}_{ml_model_name}_{equation}_{boundary}_{dim}d_{in_channels}c_solver_decisions_2.pkl", "wb"))
+    fig.suptitle(f"Solver Decisions for Learned Greedy and True Greedy for {equation}")
+    if appendix:
+        plt.savefig(f"{results_dir}/{results_df_name}_{ml_model_type}_{ml_model_name}_{equation}_{boundary}_{dim}d_{in_channels}c_solver_decisions_2_appendix.png")
+        pickle.dump((fig, axes), open(f"{results_dir}/{results_df_name}_{ml_model_type}_{ml_model_name}_{equation}_{boundary}_{dim}d_{in_channels}c_solver_decisions_2_appendix.pkl", "wb"))
+    else:   
+        plt.savefig(f"{results_dir}/{results_df_name}_{ml_model_type}_{ml_model_name}_{equation}_{boundary}_{dim}d_{in_channels}c_solver_decisions_2.png")
+        pickle.dump((fig, axes), open(f"{results_dir}/{results_df_name}_{ml_model_type}_{ml_model_name}_{equation}_{boundary}_{dim}d_{in_channels}c_solver_decisions_2.pkl", "wb"))
     plt.close()
-
-    # deeponet usage plot
-
-    if os.path.exists(f"{results_dir}/{ml_model_type}_{ml_model_name}_{equation}_{boundary}_{dim}d_{in_channels}c_deeponet_usage.pkl"):
-        fig, axes = pickle.load(open(f"{results_dir}/{ml_model_type}_{ml_model_name}_{equation}_{boundary}_{dim}d_{in_channels}c_deeponet_usage.pkl", "rb"))
+    
+    # Deeponet usage plots for both equations
+    offset = -0.02 if appendix else 0
+    if not appendix:
+        if os.path.exists(f"{results_dir}/{results_df_name}_{ml_model_type}_deeponet_usage.pkl"):
+            fig, axes = pickle.load(open(f"{results_dir}/{results_df_name}_{ml_model_type}_deeponet_usage.pkl", "rb"))
+        else:
+            fig, axes = plt.subplots(ncols = 3, nrows = 2, sharey = True, figsize = (15, 10))
+            row_titles = ['Poisson', 'ConvDiff']
+            y = [0.29, 0.7]
+            
+            for k, title in enumerate(row_titles):
+                fig.text(0.07 + offset, y[k], title, rotation=90, va='center', ha='center', fontsize=18)
     else:
-        fig, axes = plt.subplots(ncols = 3, sharey = True, figsize = (15, 5))
-
+        if os.path.exists(f"{results_dir}/{results_df_name}_{ml_model_type}_deeponet_usage_appendix.pkl"):
+            fig, axes = pickle.load(open(f"{results_dir}/{results_df_name}_{ml_model_type}_deeponet_usage_appendix.pkl", "rb"))
+        else:
+            fig, axes = plt.subplots(ncols = 2, nrows = 2, sharey = True, figsize = (10, 10))
+            row_titles = ['Poisson', 'ConvDiff']
+            y = [0.29, 0.7]
+            for k, title in enumerate(row_titles):
+                fig.text(0.07 + offset, y[k], title, rotation=90, va='center', ha='center', fontsize=18)
+    if equation == "Poisson":
+        i = 1
+    else:
+        i = 0
     
-    
-    axes[j].clear()
-    axes[j].plot(np.sum(solver_decisions_greedy, axis = -1)/n_test, label = "Learned Greedy")
-    axes[j].plot(np.sum(best_solvers, axis = -1)/n_test, label = "True Greedy")
-    axes[j].set_xlabel("Iteration")
-    axes[j].set_ylabel("DeepONet Usage (%)")
-    axes[j].set_title(f"{titles[numerical_solvers[0]]}")
-    axes[j].legend()
-    fig.suptitle(f"DeepONet Usage for Learned Greedy and True Greedy")
-    plt.savefig(f"{results_dir}/{ml_model_type}_{ml_model_name}_{equation}_{boundary}_{dim}d_{in_channels}c_deeponet_usage.png")
-    pickle.dump((fig, axes), open(f"{results_dir}/{ml_model_type}_{ml_model_name}_{equation}_{boundary}_{dim}d_{in_channels}c_deeponet_usage.pkl", "wb"))
+    axes[i, j].clear()
+    axes[i, j].plot(np.sum(solver_decisions_greedy, axis = -1)/n_test, label = "Learned Greedy")
+    axes[i, j].plot(np.sum(best_solvers, axis = -1)/n_test, label = "True Greedy")
+    axes[i, j].set_xlabel("Iteration")
+    axes[i, j].set_ylabel("DeepONet Usage (%)")
+    axes[i, j].set_title(f"{titles[numerical_solvers[0]]}", fontsize = 18, pad = 20)
+    axes[i, j].legend()
+    fig.suptitle(f"DeepONet Usage: Learned Greedy v/s True Greedy", fontsize = 24)
+    if appendix:
+        plt.savefig(f"{results_dir}/{results_df_name}_{ml_model_type}_deeponet_usage_appendix.png")
+        pickle.dump((fig, axes), open(f"{results_dir}/{results_df_name}_{ml_model_type}_deeponet_usage_appendix.pkl", "wb"))
+    else:
+        plt.savefig(f"{results_dir}/{results_df_name}_{ml_model_type}_deeponet_usage.png")
+        pickle.dump((fig, axes), open(f"{results_dir}/{results_df_name}_{ml_model_type}_deeponet_usage.pkl", "wb"))
     plt.close()
+
+    # new_colors = {"jacobi": "tab:blue", "gs": "tab:orange", "mg": "tab:green", "ssor": "tab:red", "jacobi_0.67": "tab:purple", "sor_1.5": "tab:brown"}
+    # if not appendix:
+    #     if os.path.exists(f"{results_dir}/{results_df_name}_{ml_model_type}_deeponet_usage_learned_greedy.pkl"):
+    #         fig, axes = pickle.load(open(f"{results_dir}/{results_df_name}_{ml_model_type}_deeponet_usage_learned_greedy.pkl", "rb"))
+    #     else:
+    #         fig, axes = plt.subplots(ncols = 2, sharey = True, figsize = (10, 5))
+    
+    #     axes[i].plot(np.sum(solver_decisions_greedy, axis = -1)[:100]/n_test, label = f"Greedy {titles[numerical_solvers[0]]}", color = new_colors[numerical_solvers[0]])
+    #     axes[i].set_xlabel("Iteration")
+    #     axes[i].set_ylabel("DeepONet Usage (%)")
+    #     axes[i].set_title(f"{equation}", fontsize = 18)
+    #     if axes[i].get_legend() is not None:
+    #         axes[i].get_legend().remove()
+    #     axes[i].legend()
+    #     fig.suptitle(f"DeepONet Usage", fontsize = 24)
+    #     if not appendix:
+    #         plt.savefig(f"{results_dir}/{results_df_name}_{ml_model_type}_deeponet_usage_learned_greedy.png")
+    #         pickle.dump((fig, axes), open(f"{results_dir}/{results_df_name}_{ml_model_type}_deeponet_usage_learned_greedy.pkl", "wb"))
+    #         plt.close()
+    #     else:
+    #         plt.savefig(f"{results_dir}/{results_df_name}_{ml_model_type}_deeponet_usage_learned_greedy_appendix.png")
+    #         pickle.dump((fig, axes), open(f"{results_dir}/{results_df_name}_{ml_model_type}_deeponet_usage_learned_greedy_appendix.pkl", "wb"))
+    #         plt.close()
 
     # Sample error convergence plot
 
-    if os.path.exists(f"{results_dir}/{ml_model_type}_{ml_model_name}_{equation}_{boundary}_{dim}d_{in_channels}c_sample_error_convergence.pkl"):
-        fig, axes = pickle.load(open(f"{results_dir}/{ml_model_type}_{ml_model_name}_{equation}_{boundary}_{dim}d_{in_channels}c_sample_error_convergence.pkl", "rb"))
+    
+    idx_of_interest = 29
+    if not appendix:
+        if os.path.exists(f"{results_dir}/{results_df_name}_{ml_model_type}_sample_error_convergence.pkl"):
+            fig, axes = pickle.load(open(f"{results_dir}/{results_df_name}_{ml_model_type}_sample_error_convergence.pkl", "rb"))
+        else:
+            fig, axes = plt.subplots(ncols = 3, nrows = 2, sharey = True, figsize = (15, 10))
+            row_titles = ['Poisson', 'ConvDiff']
+            y = [0.29, 0.7]
+            for k, title in enumerate(row_titles):
+                fig.text(0.07 + offset, y[k], title, rotation=90, va='center', ha='center', fontsize=18)
     else:
-        fig, axes = plt.subplots(ncols = 3, sharey = True, figsize = (15, 5))
+        if os.path.exists(f"{results_dir}/{results_df_name}_{ml_model_type}_sample_error_convergence_appendix.pkl"):
+            fig, axes = pickle.load(open(f"{results_dir}/{results_df_name}_{ml_model_type}_sample_error_convergence_appendix.pkl", "rb"))
+        else:
+            fig, axes = plt.subplots(ncols = 2, nrows = 2, sharey = True, figsize = (10, 10))
+            row_titles = ['Poisson', 'ConvDiff']
+            y = [0.29, 0.7]
+            for k, title in enumerate(row_titles):
+                fig.text(0.07 + offset, y[k], title, rotation=90, va='center', ha='center', fontsize=18)
+    
+    axes[i, j].clear()
+    axes[i, j].plot(errors_constant[:, idx_of_interest], label = f"{titles[numerical_solvers[0]]} Only")
+    axes[i, j].plot(errors_hints[:, idx_of_interest], label = f"HINTS-{titles[numerical_solvers[0]]}")
+    axes[i, j].plot(errors_greedy[:, idx_of_interest], label = f"Learned Greedy-{titles[numerical_solvers[0]]}")
+    # axes[i, j].plot(errors_true_greedy[:, idx_of_interest], label = f"True Greedy-{titles[numerical_solvers[0]]}")
+    axes[i, j].set_xlabel("Iteration")
+    axes[i, j].set_ylabel("Error")
+    axes[i, j].set_title(f"{titles[numerical_solvers[0]]}", fontsize = 18, pad = 20)
+    axes[i, j].set_yscale("log")
+    axes[i, j].legend()
+    fig.suptitle(f"Sample Error Convergence for Different Routing Strategies", fontsize = 24)
+    if appendix:
+        plt.savefig(f"{results_dir}/{results_df_name}_{ml_model_type}_sample_error_convergence_appendix.png")
+        pickle.dump((fig, axes), open(f"{results_dir}/{results_df_name}_{ml_model_type}_sample_error_convergence_appendix.pkl", "wb"))
+    else:
+        plt.savefig(f"{results_dir}/{results_df_name}_{ml_model_type}_sample_error_convergence.png")
+        pickle.dump((fig, axes), open(f"{results_dir}/{results_df_name}_{ml_model_type}_sample_error_convergence.pkl", "wb"))
+    
+    # Sample visaulization plots
 
-    axes[j].clear()
-    idx_of_interest = 43
-    axes[j].plot(errors_constant[:, idx_of_interest], label = f"{titles[numerical_solvers[0]]} Only")
-    axes[j].plot(errors_hints[:, idx_of_interest], label = f"HINTS-{titles[numerical_solvers[0]]}")
-    axes[j].plot(errors_greedy[:, idx_of_interest], label = f"Learned Greedy-{titles[numerical_solvers[0]]}")
-    # axes[j].plot(errors_true_greedy[:, idx_of_interest], label = f"True Greedy-{titles[numerical_solvers[0]]}")
-    axes[j].set_xlabel("Iteration")
-    axes[j].set_ylabel("Error")
-    axes[j].set_title(f"{titles[numerical_solvers[0]]}")
-    axes[j].set_yscale("log")
-    axes[j].legend()
-    fig.suptitle(f"Sample Error Convergence for Different Routing Strategies")
-    plt.savefig(f"{results_dir}/{ml_model_type}_{ml_model_name}_{equation}_{boundary}_{dim}d_{in_channels}c_sample_error_convergence.png")
-    pickle.dump((fig, axes), open(f"{results_dir}/{ml_model_type}_{ml_model_name}_{equation}_{boundary}_{dim}d_{in_channels}c_sample_error_convergence.pkl", "wb"))
-    plt.close()
+    predictions = {"only ": pred_constant[-1, -1].reshape(arguments["N"], arguments["N"]).detach().cpu().numpy(), "HINTS-": pred_hints[-1, -1].reshape(arguments["N"], arguments["N"]).detach().cpu().numpy(), "Learned Greedy-": pred_greedy[-1, -1].reshape(arguments["N"], arguments["N"]).detach().cpu().numpy()}
+    output_question = output_hints[-1].detach().cpu().numpy().reshape(arguments["N"], arguments["N"])
+    if not appendix:
+        if os.path.exists(f"{results_dir}/{results_df_name}_{ml_model_type}_{equation}_{boundary}_{dim}d_{in_channels}c_sample_visualization.pkl"):
+            fig, axes = pickle.load(open(f"{results_dir}/{results_df_name}_{ml_model_type}_{equation}_{boundary}_{dim}d_{in_channels}c_sample_visualization.pkl", "rb"))
+        else:
+            fig, axes = plt.subplots(ncols = 4, nrows = 3, sharey = True, sharex = True, figsize = (20, 15)) # ncols, nrows
+            row_titles = ["Greedy","HINTS",  "Solver Only"]
+            y = [0.23, 0.5, 0.77]
+            for k, title in enumerate(row_titles):
+                fig.text(0.09 + offset, y[k], title, rotation=90, va='center', ha='center', fontsize=18)
+            axes[0, -1].set_axis_off()
+            axes[2, -1].set_axis_off()
+            norm = colors.Normalize(vmin = np.min(output_question), vmax = np.max(output_question))
+            trueee = axes[1, -1].imshow(output_question, norm = norm,  extent = [0, 1, 0, 1])
+            axes[1, -1].set_title("Truth", fontsize = 18)
+            cbar = fig.colorbar(trueee, ax=axes[:, :], fraction=0.25, pad=0.02)
+
+    else:
+        if os.path.exists(f"{results_dir}/{results_df_name}_{ml_model_type}_{equation}_{boundary}_{dim}d_{in_channels}c_sample_visualization_appendix.pkl"):
+            fig, axes = pickle.load(open(f"{results_dir}/{results_df_name}_{ml_model_type}_{equation}_{boundary}_{dim}d_{in_channels}c_sample_visualization_appendix.pkl", "rb"))
+        else:
+            fig, axes = plt.subplots(ncols = 3, nrows = 3, sharey = True, sharex = True, figsize = (15, 15))
+            row_titles = ["Greedy","HINTS",  "Solver Only"]
+            y = [0.23, 0.5, 0.77]
+            for k, title in enumerate(row_titles):
+                fig.text(0.09 + offset, y[k], title, rotation=90, va='center', ha='center', fontsize=18)
+            axes[0, -1].set_axis_off()
+            axes[2, -1].set_axis_off()
+            # TRUE
+            norm = colors.Normalize(vmin = np.min(output_question), vmax = np.max(output_question))
+            trueee = axes[1, -1].imshow(output_question, norm = norm,  extent = [0, 1, 0, 1])
+            axes[1, -1].set_title("Truth", fontsize = 18)
+            cbar = fig.colorbar(trueee, ax=axes[:, :], fraction=0.25, pad=0.02)
+            
+
+    
+
+    norm = colors.Normalize(vmin = np.min(output_question), vmax = np.max(output_question))
+    # solver only
+    axes[0, j].clear()
+    axes[0, j].set_title(titles[numerical_solvers[0]], fontsize = 18, pad = 26)
+    axes[0, j].imshow(predictions["only "], norm = norm,  extent = [0, 1, 0, 1])
+
+    axes[1, j].clear()
+    axes[1, j].imshow(predictions["HINTS-"], norm = norm,  extent = [0, 1, 0, 1])
+
+    axes[2, j].clear()
+    axes[2, j].imshow(predictions["Learned Greedy-"], norm = norm,  extent = [0, 1, 0, 1])
+    fig.suptitle(f"Sample Predictions for {equation}", fontsize = 24, x= 0.4)
+    if not appendix:
+        plt.savefig(f"{results_dir}/{results_df_name}_{ml_model_type}_{equation}_{boundary}_{dim}d_{in_channels}c_sample_visualization.png")
+        pickle.dump((fig, axes), open(f"{results_dir}/{results_df_name}_{ml_model_type}_{equation}_{boundary}_{dim}d_{in_channels}c_sample_visualization.pkl", "wb"))
+        plt.close()
+    else:
+        plt.savefig(f"{results_dir}/{results_df_name}_{ml_model_type}_{equation}_{boundary}_{dim}d_{in_channels}c_sample_visualization_appendix.png")
+        pickle.dump((fig, axes), open(f"{results_dir}/{results_df_name}_{ml_model_type}_{equation}_{boundary}_{dim}d_{in_channels}c_sample_visualization_appendix.pkl", "wb"))
+        plt.close()
+
+    # Error Visualization Plots
+    if not appendix:
+        if os.path.exists(f"{results_dir}/{results_df_name}_{ml_model_type}_{equation}_{boundary}_{dim}d_{in_channels}c_error_visualization.pkl"):
+            fig, axes = pickle.load(open(f"{results_dir}/{results_df_name}_{ml_model_type}_{equation}_{boundary}_{dim}d_{in_channels}c_error_visualization.pkl", "rb"))
+        else:
+            fig, axes = plt.subplots(ncols = 3, nrows = 3, sharey = True, sharex = True, figsize = (15, 15))
+            row_titles = ["Greedy","HINTS", "Solver Only"]
+            y = [0.23, 0.5, 0.77]
+            for k, title in enumerate(row_titles):
+                fig.text(0.09 + offset, y[k], title, rotation=90, va='center', ha='center', fontsize=18)
+            
+    else:
+        if os.path.exists(f"{results_dir}/{results_df_name}_{ml_model_type}_{equation}_{boundary}_{dim}d_{in_channels}c_error_visualization_appendix.pkl"):
+            fig, axes = pickle.load(open(f"{results_dir}/{results_df_name}_{ml_model_type}_{equation}_{boundary}_{dim}d_{in_channels}c_error_visualization_appendix.pkl", "rb"))
+        else:
+            fig, axes = plt.subplots(ncols = 2, nrows = 3, sharey = True, sharex = True, figsize = (10, 15))
+            row_titles = ["Greedy","HINTS", "Solver Only"]
+            y = [0.23, 0.5, 0.77]
+            for k, title in enumerate(row_titles):
+                fig.text(0.09 + offset, y[k], title, rotation=90, va='center', ha='center', fontsize=18)
+    
+
+       
+    clear_axes_with_colorbar(axes[0, j])
+    only = axes[0, j].imshow(output_question - predictions["only "], extent = [0, 1, 0, 1])
+    cbar = axes[0, j].figure.colorbar(only, ax = axes[0, j])
+    axes[0, j].set_title(titles[numerical_solvers[0]], fontsize = 18, pad = 26)
+
+
+    clear_axes_with_colorbar(axes[1, j])
+    hints = axes[1, j].imshow(output_question - predictions["HINTS-"], extent = [0, 1, 0, 1])
+    cbar2= axes[1, j].figure.colorbar(hints, ax = axes[1, j])
+
+    clear_axes_with_colorbar(axes[2, j])
+    greedy = axes[2, j].imshow(output_question - predictions["Learned Greedy-"], extent = [0, 1, 0, 1])
+    cbar3 = axes[2, j].figure.colorbar(greedy, ax = axes[2, j])
+
+    fig.suptitle(f"Error of Sample Predictions for {equation}", fontsize = 24)
+
+    if not appendix:
+        plt.savefig(f"{results_dir}/{results_df_name}_{ml_model_type}_{equation}_{boundary}_{dim}d_{in_channels}c_error_visualization.png")
+        pickle.dump((fig, axes), open(f"{results_dir}/{results_df_name}_{ml_model_type}_{equation}_{boundary}_{dim}d_{in_channels}c_error_visualization.pkl", "wb"))
+        plt.close()
+    else:
+        plt.savefig(f"{results_dir}/{results_df_name}_{ml_model_type}_{equation}_{boundary}_{dim}d_{in_channels}c_error_visualization_appendix.png")
+        pickle.dump((fig, axes), open(f"{results_dir}/{results_df_name}_{ml_model_type}_{equation}_{boundary}_{dim}d_{in_channels}c_error_visualization_appendix.pkl", "wb"))
+        plt.close()
