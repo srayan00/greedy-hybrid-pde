@@ -15,7 +15,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--ml_model', type=str, default='deeponet', help='Model to use: deeponet/fno/deeponetcnn')
 parser.add_argument('--numerical_solvers', type=str, default='jacobi', help='comma-separated list of numerical solvers. Ex: jacobi_1.3,mg_2,gs')
 parser.add_argument("--model", type=str, default='lstm')
-parser.add_argument('--dim', type=int, default=1, help='Dimension of the PDE: 1 or 2')
+parser.add_argument('--dim', type=int, default=2, help='Dimension of the PDE: 1 or 2')
 parser.add_argument("--boundary", type=str, default="Periodic", help="Boundary condition: Dirichlet or Periodic")
 parser.add_argument("--in_channels", type=int, default=1, help="Number of input channels")
 parser.add_argument("--extra", type=int, default=200, help="Extra data samples to generate beyond n_train + n_val")
@@ -155,7 +155,7 @@ if __name__ == "__main__":
             if equation == "Poisson":
                 pde = PoissonEquation1D(a_func=a, 
                                         f_func=f, 
-                                        boundary=boundary, 
+                                        boundary=boundary, in_channels=in_channels,
                                         x=x, device=device)
             else:
                 pde = HelmholtzEquation1D(a_func=a, f_func=f, k2=k2, boundary=boundary,x=x,device=device)
@@ -165,20 +165,20 @@ if __name__ == "__main__":
             if equation == "Poisson":
                 pde = PoissonEquation2D(a_func=a.reshape(-1, arguments["N"] * arguments["N"]) if in_channels > 1 else a, 
                                         f_func=f.reshape(-1, arguments["N"] * arguments["N"]),
-                                        boundary=boundary, 
+                                        boundary=boundary, in_channels=in_channels, 
                                         x=x, y=y, device=device)
             elif equation == "ConvDiff":
                 pde = ConvectionDiffusion2D(a_func=a.reshape(-1, arguments["N"] * arguments["N"]) if in_channels > 1 else a,
                                             f_func=f.reshape(-1, arguments["N"] * arguments["N"]),
                                             b_vec=(b_vel, b_vel),
                                             boundary=boundary,
-                                            x=x, y=y, device=device,
+                                            x=x, y=y, in_channels=in_channels, device=device,
                                             reaction=reaction_c)
             else:
                 pde = HelmholtzEquation2D(a_func=a.reshape(-1, arguments["N"] * arguments["N"]) if in_channels > 1 else a, 
                                           f_func=f.reshape(-1, arguments["N"] * arguments["N"]), 
                                           k2=k2.reshape(-1, arguments["N"] * arguments["N"]),
-                                          boundary=boundary, x=x, y=y, device=device)
+                                          boundary=boundary, x=x, y=y, in_channels=in_channels, device=device)
             u_sol = torch.tensor(pde.u, dtype=torch.float32, device=device)
             u_sol = u_sol - torch.mean(u_sol, dim=(-2,-1), keepdim=True) if needs_mean_zero and boundary == "Periodic" and in_channels == 1 else u_sol
         if in_channels > 1:

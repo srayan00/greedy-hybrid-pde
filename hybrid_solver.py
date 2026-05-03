@@ -319,6 +319,7 @@ class HybridSolver(torch.nn.Module):
                                                 f_func = f_func,
                                                 boundary = self.boundary, 
                                                 x = self.xs,#.numpy(), 
+                                                in_channels = self.in_channels,
                                                 A = None,
                                                 solve = False,
                                                 device = f.device)
@@ -328,6 +329,7 @@ class HybridSolver(torch.nn.Module):
                                             k2 = k2_func,
                                             boundary = self.boundary, 
                                             x = self.xs,#.numpy(), 
+                                            in_channels = self.in_channels,
                                             A = None,
                                             solve = False,
                                             device = f.device)
@@ -338,6 +340,7 @@ class HybridSolver(torch.nn.Module):
                                                 boundary = self.boundary,
                                                 x = self.xs,
                                                 y = self.ys,
+                                                in_channels = self.in_channels,
                                                 A = None,
                                                 solve = False,
                                                 device = f.device)
@@ -349,6 +352,7 @@ class HybridSolver(torch.nn.Module):
                                                 x = self.xs,
                                                 y = self.ys,
                                                 reaction = self.equation.reaction,
+                                                in_channels = self.in_channels,
                                                 A = None,
                                                 solve = False,
                                                 device = f.device)
@@ -359,6 +363,7 @@ class HybridSolver(torch.nn.Module):
                                                boundary = self.boundary,
                                                x = self.xs,
                                                y = self.ys,
+                                               in_channels = self.in_channels,
                                                A = None,
                                                solve = False,
                                                device = f.device)

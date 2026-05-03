@@ -49,6 +49,8 @@ def test_model(model, dataloader, in_channels, dim, loss = ApproxGreedyRouterLos
     mode_1_errors = ()
     mode_5_errors = ()
     mode_10_errors = ()
+    predictions_all = ()
+    output_all = ()
     with torch.no_grad():
         for batch in dataloader:
             model.reset()
@@ -90,7 +92,8 @@ def test_model(model, dataloader, in_channels, dim, loss = ApproxGreedyRouterLos
             if loss_t:
                 loss_greedy += (loss(pred, output.reshape(bs, -1), "none").detach().cpu().numpy(), )
             error = (predictions - output.reshape(bs, -1).unsqueeze(0)).detach().cpu().numpy()
-                        
+            predictions_all += (predictions.detach().cpu().numpy(),)
+            output_all += (output.detach().cpu().numpy(),)
             if dim == 1:
                 mode_wise_error = np.fft.rfftn(error, axes = [-1])
                 mode_1_error = mode_wise_error[:, :, 1]
@@ -123,7 +126,9 @@ def test_model(model, dataloader, in_channels, dim, loss = ApproxGreedyRouterLos
     mode_5_errors = np.concatenate(mode_5_errors, axis = 1)
     mode_10_errors = np.concatenate(mode_10_errors, axis = 1)
     solver_decisions = np.concatenate(solver_decisions, axis = 1)
-    return errors_greedy, loss_greedy, residuals, mode_1_errors, mode_5_errors, mode_10_errors, solver_decisions, predictions, output
+    output_all = np.concatenate(output_all, axis = 0)
+    predictions_all = np.concatenate(predictions_all, axis = 1)
+    return errors_greedy, loss_greedy, residuals, mode_1_errors, mode_5_errors, mode_10_errors, solver_decisions, predictions_all, output_all
 
 def true_greedy_model(model_hints, test_loader, in_channels, dim, loss = ApproxGreedyRouterLoss(), centered = True, loss_t = False, max_iters = 100):
     errors_true_greedy = ()
@@ -505,7 +510,7 @@ if __name__ == "__main__":
     loss = ApproxGreedyRouterLoss(centered=(equation == "Poisson" and boundary == "Periodic"))
     errors_constant, loss_constant, residuals_constant, mode_one_constant, mode_five_constant, mode_ten_constant, solver_decisions_constant, pred_constant, _ = test_model(model_constant, test_loader, in_channels, dim, loss, centered = centered, loss_t = False)
 
-    if "jacobi" in numerical_solvers[0] or "gs" in numerical_solvers[0] or "sor" in numerical_solvers[0]:
+    if "jacobi" in numerical_solvers[0] or "gs" in numerical_solvers[0] or "sor" in numerical_solvers[0] or "ssor" in numerical_solvers[0]:
         hints_num = 25
     else:
         hints_num = 15
@@ -809,8 +814,8 @@ if __name__ == "__main__":
 
     # Sample error convergence plot
 
-    
-    idx_of_interest = 29
+
+    idx_of_interest = 29 #95
     if not appendix:
         if os.path.exists(f"{results_dir}/{results_df_name}_{ml_model_type}_sample_error_convergence.pkl"):
             fig, axes = pickle.load(open(f"{results_dir}/{results_df_name}_{ml_model_type}_sample_error_convergence.pkl", "rb"))
@@ -850,8 +855,8 @@ if __name__ == "__main__":
     
     # Sample visaulization plots
 
-    predictions = {"only ": pred_constant[-1, -1].reshape(arguments["N"], arguments["N"]).detach().cpu().numpy(), "HINTS-": pred_hints[-1, -1].reshape(arguments["N"], arguments["N"]).detach().cpu().numpy(), "Learned Greedy-": pred_greedy[-1, -1].reshape(arguments["N"], arguments["N"]).detach().cpu().numpy()}
-    output_question = output_hints[-1].detach().cpu().numpy().reshape(arguments["N"], arguments["N"])
+    predictions = {"only ": pred_constant[-1, idx_of_interest].reshape(arguments["N"], arguments["N"]), "HINTS-": pred_hints[-1, idx_of_interest].reshape(arguments["N"], arguments["N"]), "Learned Greedy-": pred_greedy[-1, idx_of_interest].reshape(arguments["N"], arguments["N"])}
+    output_question = output_hints[idx_of_interest].reshape(arguments["N"], arguments["N"])
     if not appendix:
         if os.path.exists(f"{results_dir}/{results_df_name}_{ml_model_type}_{equation}_{boundary}_{dim}d_{in_channels}c_sample_visualization.pkl"):
             fig, axes = pickle.load(open(f"{results_dir}/{results_df_name}_{ml_model_type}_{equation}_{boundary}_{dim}d_{in_channels}c_sample_visualization.pkl", "rb"))

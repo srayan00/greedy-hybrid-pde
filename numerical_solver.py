@@ -89,11 +89,15 @@ class WeightedJacobiSolver(NumericalSolver):
         if mask is None:
             mask = torch.ones(self.equation.b.shape[0], device=self.device, dtype=torch.bool)
         D_inv = self._get_D_inv(self.equation.A)
-        is_batch = D_inv.ndim == 3
-        if is_batch:
+        is_batch = self.equation.is_batch
+        if is_batch and self.equation.in_channels > 1:
             u_new = u_old.clone()
             output = torch.bmm(self.equation.A[mask], u_old[mask].unsqueeze(-1)).squeeze(-1) # prediction: (B, N) or (B, N^2)
             u_new[mask] = u_old[mask] + self.weight * torch.bmm(D_inv[mask], (self.equation.b[mask] - output).unsqueeze(-1)).squeeze(-1)
+        elif is_batch:
+            u_new = u_old.clone()
+            output = torch.matmul(self.equation.A, u_old[mask].unsqueeze(-1)).squeeze(-1) # prediction: (B, N) or (B, N^2)
+            u_new[mask] = u_old[mask] + self.weight * torch.matmul(D_inv, (self.equation.b[mask] - output).unsqueeze(-1)).squeeze(-1)
         else:
             output = self.equation.A @ u_old
             u_new = u_old + self.weight * D_inv @ (self.equation.b - output)
@@ -121,11 +125,15 @@ class GaussSeidelSolver(NumericalSolver):
         if mask is None:
             mask = torch.ones(self.equation.b.shape[0], device=self.device, dtype=torch.bool)
         L_inv = self._get_L_inv(self.equation.A)
-        is_batch = L_inv.ndim == 3
-        if is_batch:
+        is_batch = self.equation.is_batch
+        if is_batch and self.equation.in_channels > 1:
             u_new = u_old.clone()
             output = torch.bmm(self.equation.A[mask], u_old[mask].unsqueeze(-1)).squeeze(-1)
             u_new[mask] = u_old[mask] + torch.bmm(L_inv[mask], (self.equation.b[mask] - output).unsqueeze(-1)).squeeze(-1)
+        elif is_batch:
+            u_new = u_old.clone()
+            output = torch.matmul(self.equation.A, u_old[mask].unsqueeze(-1)).squeeze(-1)
+            u_new[mask] = u_old[mask] + torch.matmul(L_inv, (self.equation.b[mask] - output).unsqueeze(-1)).squeeze(-1)
         else:
             output = self.equation.A @ u_old
             u_new = u_old + L_inv @ (self.equation.b - output)
@@ -155,11 +163,15 @@ class SuccessiveOverRelaxationSolver(NumericalSolver):
         if mask is None:
             mask = torch.ones(self.equation.b.shape[0], device=self.device, dtype=torch.bool)
         precond = self.omega * self._get_D_plus_omega_L_inv(self.equation.A)
-        is_batch = precond.ndim == 3
-        if is_batch:
+        is_batch = self.equation.is_batch
+        if is_batch and self.equation.in_channels > 1:
             u_new = u_old.clone()
             output = torch.bmm(self.equation.A[mask], u_old[mask].unsqueeze(-1)).squeeze(-1)
             u_new[mask] = u_old[mask] + torch.bmm(precond[mask], (self.equation.b[mask] - output).unsqueeze(-1)).squeeze(-1)
+        elif is_batch:
+            u_new = u_old.clone()
+            output = torch.matmul(self.equation.A, u_old[mask].unsqueeze(-1)).squeeze(-1)
+            u_new[mask] = u_old[mask] + torch.matmul(precond, (self.equation.b[mask] - output).unsqueeze(-1)).squeeze(-1)
         else:
             output = self.equation.A @ u_old
             u_new = u_old + precond @ (self.equation.b - output)
@@ -182,7 +194,10 @@ class SymmetricSuccessiveOverRelaxationSolver(NumericalSolver):
             first_term = D/self.omega + L
             second_term = self.omega/(2 - self.omega) + torch.linalg.inv(D)
             third_term = D/self.omega + U
-            self.preconditioner = torch.bmm(torch.bmm(first_term, second_term), third_term)
+            if self.equation.is_batch and self.equation.in_channels > 1:
+                self.preconditioner = torch.bmm(torch.bmm(first_term, second_term), third_term)
+            else:
+                self.preconditioner = torch.matmul(first_term, second_term) @ third_term
             self.preconditioner = torch.linalg.inv(self.preconditioner)
         return self.preconditioner
     
@@ -193,12 +208,16 @@ class SymmetricSuccessiveOverRelaxationSolver(NumericalSolver):
         """
         if mask is None:
             mask = torch.ones(self.equation.b.shape[0], device=self.device, dtype=torch.bool)
-        is_batch = self.equation.A.ndim == 3
+        is_batch = self.equation.is_batch
         precond = self._get_preconditioner(self.equation.A)
-        if is_batch:
+        if is_batch and self.equation.in_channels > 1:
             u_new = u_old.clone()
             output = torch.bmm(self.equation.A[mask], u_old[mask].unsqueeze(-1)).squeeze(-1)
             u_new[mask] = u_old[mask] + torch.bmm(precond[mask], (self.equation.b[mask] - output).unsqueeze(-1)).squeeze(-1)
+        elif is_batch:
+            u_new = u_old.clone()
+            output = torch.matmul(self.equation.A, u_old[mask].unsqueeze(-1)).squeeze(-1)
+            u_new[mask] = u_old[mask] + torch.matmul(precond, (self.equation.b[mask] - output).unsqueeze(-1)).squeeze(-1)
         else:
             output = self.equation.A @ u_old
             u_new = u_old + precond @ (self.equation.b - output)
@@ -216,10 +235,14 @@ class RichardsonSolver(NumericalSolver):
         """
         if mask is None:
             mask = torch.ones(self.equation.b.shape[0], device=self.device, dtype=torch.bool)
-        is_batch = self.equation.A.ndim == 3
-        if is_batch:
+        is_batch = self.equation.is_batch
+        if is_batch and self.equation.in_channels > 1:
             u_new = u_old.clone()
             output = torch.bmm(self.equation.A[mask], u_old[mask].unsqueeze(-1)).squeeze(-1)
+            u_new[mask] = u_old[mask] + self.omega * (self.equation.b[mask] - output)
+        elif is_batch:
+            u_new = u_old.clone()
+            output = torch.matmul(self.equation.A, u_old[mask].unsqueeze(-1)).squeeze(-1)
             u_new[mask] = u_old[mask] + self.omega * (self.equation.b[mask] - output)
         else:
             output = self.equation.A @ u_old
@@ -368,8 +391,8 @@ class MultigridSolver(NumericalSolver):
         else:
             raise ValueError("Boundary condition must be either 'Dirichlet' or 'Periodic'")
         curr_equation = curr_equation if curr_equation is not None else self.equation
-        is_batch = curr_equation.A.ndim == 3
-        if is_batch:
+        is_batch = curr_equation.is_batch
+        if is_batch and curr_equation.in_channels > 1:
             restrictor = restrictor.unsqueeze(0).repeat(curr_equation.batch_size, 1, 1)
             interpolator = interpolator.unsqueeze(0).repeat(curr_equation.batch_size, 1, 1)
         return restrictor, interpolator
@@ -381,7 +404,7 @@ class MultigridSolver(NumericalSolver):
             curr_equation = self.equation
         if restrictor is None or interpolator is None:
             restrictor, interpolator = self.build_restrictor_interpolator(curr_equation)
-        new_A = curr_equation.A[mask]
+        new_A = curr_equation.A[mask] if curr_equation.is_batch and curr_equation.in_channels > 1 else curr_equation.A
         return restrictor @ new_A @ interpolator
     
     def build_coefficient_matrix_dirichlet(self, curr_equation=None, restrictor=None, interpolator=None, mask = None):

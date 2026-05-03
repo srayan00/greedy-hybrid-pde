@@ -2,6 +2,7 @@ __pycache__/
 *.sbat
 slurm_logs/
 playground_sahana/
+playground/
 plots/
 results/
 checkpoints/*json
