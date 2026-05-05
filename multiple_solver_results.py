@@ -27,6 +27,7 @@ parser.add_argument("--extra", type=int, default=200, help="Extra data samples t
 parser.add_argument("--ckp_dir", type=str, default="./checkpoints", help="Directory to save checkpoints")
 parser.add_argument("--ml_model_name", type=str, default="test", help="ml_model checkpoint name")
 parser.add_argument("--model_name", type=str, default="", help="Model checkpoint name")
+parser.add_argument("--single_model_name", type=str, default="side_info_deeponet", help="Single solver model checkpoint name")
 parser.add_argument("--data_dir", type=str, default="./data", help="Directory to save/load data")
 parser.add_argument('--data_name', type=str, default='', help='Name of the dataset to use (if not provided, a new dataset will be generated)')
 parser.add_argument("--grf_mode", type = str, default="fixed", help="Mode of the GRF: hierarchical or fixed")
@@ -230,6 +231,7 @@ if __name__ == "__main__":
     ckp_dir = args.ckp_dir
     ml_model_name = args.ml_model_name
     model_name = args.model_name
+    single_model_name = args.single_model_name
     data_dir = args.data_dir
     data_name = args.data_name
     grf_mode = args.grf_mode
@@ -498,9 +500,9 @@ if __name__ == "__main__":
     mode_10_results = {}
     solver_decisions_results = {}
     for w in order_of_solvers:
-        tmp_ckp_path = ckp_dir + f"/{model_type}router_side_info_deeponet_{grf_mode}_{equation}_{boundary}_{dim}d_{in_channels}c_{w}_best.pth"
-        tmp_save_path = ckp_dir + f"/{model_type}router_side_info_deeponet_{grf_mode}_{equation}_{boundary}_{dim}d_{in_channels}c_{w}"
-        tmp_args_path = ckp_dir + f"/{model_type}router_side_info_deeponet_{grf_mode}_{equation}_{boundary}_{dim}d_{in_channels}c_{w}args.json"
+        tmp_ckp_path = ckp_dir + f"/{model_type}router_{single_model_name}_{grf_mode}_{equation}_{boundary}_{dim}d_{in_channels}c_{w}_best.pth"
+        tmp_save_path = ckp_dir + f"/{model_type}router_{single_model_name}_{grf_mode}_{equation}_{boundary}_{dim}d_{in_channels}c_{w}"
+        tmp_args_path = ckp_dir + f"/{model_type}router_{single_model_name}_{grf_mode}_{equation}_{boundary}_{dim}d_{in_channels}c_{w}args.json"
         if os.path.exists(tmp_args_path):
             print(f"Loading training arguments from {tmp_args_path}...")
             with open(tmp_args_path, "r") as f:

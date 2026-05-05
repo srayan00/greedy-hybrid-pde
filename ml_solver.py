@@ -122,7 +122,7 @@ class DeepONetCNN(MLSolver):
         # input_flat = input.reshape(-1, self.input_size) # (B, N^2)
         first_branch_output = self.part_branch_net(input) # (B, hidden_branch_channels[-1], N, N) or (B, hidden_branch_channels[-1], N)
         second_branch_output = self.second_branch_net(first_branch_output.flatten(1)) # (B, branch_dim)
-        if coords:
+        if coords is not None:
             trunk_output = self.trunk_net(coords) #num_coords, branch_dim
         else:
             trunk_output = self.trunk_net(self.coords) # (N^2, branch_dim)

@@ -839,7 +839,7 @@ if __name__ == "__main__":
     axes[i, j].plot(errors_constant[:, idx_of_interest], label = f"{titles[numerical_solvers[0]]} Only")
     axes[i, j].plot(errors_hints[:, idx_of_interest], label = f"HINTS-{titles[numerical_solvers[0]]}")
     axes[i, j].plot(errors_greedy[:, idx_of_interest], label = f"Learned Greedy-{titles[numerical_solvers[0]]}")
-    # axes[i, j].plot(errors_true_greedy[:, idx_of_interest], label = f"True Greedy-{titles[numerical_solvers[0]]}")
+    axes[i, j].plot(errors_true_greedy[:, idx_of_interest], label = f"True Greedy-{titles[numerical_solvers[0]]}")
     axes[i, j].set_xlabel("Iteration")
     axes[i, j].set_ylabel("Error")
     axes[i, j].set_title(f"{titles[numerical_solvers[0]]}", fontsize = 18, pad = 20)

@@ -252,7 +252,7 @@ class PoissonEquation2D(PDE):
         self.device = device
         self.equation = "Poisson"
         self.A = self.build_matrix() if A is None else A
-        self.b = self.build_rhs() if not isinstance(self.f_func, torch.Tensor) else self.f_func
+        self.b = self.build_rhs() # if not isinstance(self.f_func, torch.Tensor) else self.f_func
         self.u = self.solve() if solve else None
 
     def index(self, i, j):
@@ -314,7 +314,7 @@ class PoissonEquation2D(PDE):
         for i in range(n):
             for j in [0, m - 1]:
                 idx = self.index(i, j)
-                if self.is_batch:
+                if self.is_batch and self.in_channels > 1:
                     A[:, idx, :] = 0
                     A[:, idx, idx] = 1
                 else:
@@ -323,7 +323,7 @@ class PoissonEquation2D(PDE):
         for j in range(m):
             for i in [0, n - 1]:
                 idx = self.index(i, j)
-                if self.is_batch:
+                if self.is_batch and self.in_channels > 1:
                     A[:, idx, :] = 0
                     A[:, idx, idx] = 1
                 else:
@@ -463,7 +463,7 @@ class HelmholtzEquation1D(PDE):
         self.device = device
         self.equation = "Helmholtz"
         self.A = self.build_matrix() if A is None else A # .to(device)
-        self.b = self.build_rhs() if not isinstance(self.f_func, torch.Tensor) else self.f_func #.to(device)
+        self.b = self.build_rhs() #if not isinstance(self.f_func, torch.Tensor) else self.f_func #.to(device)
         self.u = self.solve() if solve else None
 
     # ----- helpers -----
@@ -616,7 +616,7 @@ class HelmholtzEquation2D(PDE):
         self.equation = "Helmholtz"
 
         self.A = self.build_matrix() if A is None else A# .to(device)
-        self.b = self.build_rhs() if not isinstance(self.f_func, torch.Tensor) else self.f_func# .to(device)
+        self.b = self.build_rhs() # if not isinstance(self.f_func, torch.Tensor) else self.f_func# .to(device)
         self.u = self.solve() if solve else None
 
     def index(self, i, j):
@@ -809,7 +809,7 @@ class ConvectionDiffusion2D(PDE):
         self.device = device
         self.equation = "ConvDiff"
         self.A = self.build_matrix() if A is None else A
-        self.b = self.build_rhs() if not isinstance(self.f_func, torch.Tensor) else self.f_func
+        self.b = self.build_rhs() # if not isinstance(self.f_func, torch.Tensor) else self.f_func
         self.u = self.solve() if solve else None
 
     def index(self, i, j):
@@ -905,14 +905,14 @@ class ConvectionDiffusion2D(PDE):
         for i in range(n):
             for j in [0, m - 1]:
                 idx = self.index(i, j)
-                if self.is_batch:
+                if self.is_batch and self.in_channels > 1:
                     A[:, idx, :] = 0; A[:, idx, idx] = 1
                 else:
                     A[idx, :] = 0; A[idx, idx] = 1
         for j in range(m):
             for i in [0, n - 1]:
                 idx = self.index(i, j)
-                if self.is_batch:
+                if self.is_batch and self.in_channels > 1:
                     A[:, idx, :] = 0; A[:, idx, idx] = 1
                 else:
                     A[idx, :] = 0; A[idx, idx] = 1
