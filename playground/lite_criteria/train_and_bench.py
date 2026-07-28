@@ -169,14 +169,17 @@ class _LiteRouterBase:
         self._last_dec = d
         return d
 
-    def save(self, path: str):
-        torch.save({
+    def save(self, path: str, *, epoch: Optional[int] = None):
+        blob = {
             "weights": [torch.tensor(w) for w in self.weights],
             "feat_mode": self.feat_mode,
             "arch": self.arch,
             "mu": torch.tensor(self.mu),
             "sd": torch.tensor(self.sd),
-        }, path)
+        }
+        if epoch is not None:
+            blob["epoch"] = int(epoch)
+        torch.save(blob, path)
 
 
 class LiteRouter(_LiteRouterBase):
@@ -431,6 +434,75 @@ def collect_feature_stats(pde, solver, corrector, *, feat_mode, max_iters,
     return mu, sd
 
 
+def feature_stats_cache_path(
+    data_path: str,
+    solver,
+    *,
+    feat_mode: str,
+    max_iters: int,
+    res_floor: float,
+    seed: int,
+    n_stats: int,
+) -> str:
+    """Cache path keyed by fixed dataset + solver rollout settings."""
+    d = os.path.dirname(data_path) or "."
+    base = os.path.splitext(os.path.basename(data_path))[0]
+    solver_name = getattr(solver, "name", str(solver))
+    rf = f"{res_floor:.0e}".replace("+", "")
+    tag = f"{base}_{solver_name}_{feat_mode}_mi{max_iters}_rf{rf}_s{seed}_n{n_stats}"
+    return os.path.join(d, f"featstats_{tag}.pt")
+
+
+def make_or_load_feature_stats(
+    pde,
+    solver,
+    corrector,
+    *,
+    feat_mode: str,
+    max_iters: int,
+    res_floor: float,
+    masks,
+    seed: int,
+    stats_path: Optional[str] = None,
+    f=None,
+    u_star=None,
+    n_inst: int = 64,
+):
+    """Oracle warmup for router input normalization; cache per (dataset, solver)."""
+    meta = {
+        "equation": getattr(pde, "equation", None),
+        "N": pde.N,
+        "solver": getattr(solver, "name", str(solver)),
+        "feat_mode": feat_mode,
+        "max_iters": max_iters,
+        "res_floor": res_floor,
+        "seed": seed,
+        "n_stats": n_inst,
+    }
+    if stats_path and os.path.exists(stats_path):
+        blob = torch.load(stats_path, map_location="cpu", weights_only=False)
+        for k, v in meta.items():
+            if blob.get(k) != v:
+                print(f"  feature-stats cache stale ({k}: {blob.get(k)!r} != {v!r}), "
+                      f"recomputing ...", flush=True)
+                break
+        else:
+            print(f"  loading cached feature stats from {stats_path}", flush=True)
+            return blob["mu"], blob["sd"]
+
+    print(f"  estimating feature stats (feats={feat_mode}, dim={FEAT_DIMS[feat_mode]}) ...",
+          flush=True)
+    mu, sd = collect_feature_stats(
+        pde, solver, corrector, feat_mode=feat_mode, max_iters=max_iters,
+        res_floor=res_floor, masks=masks, rng=np.random.default_rng(seed + 999),
+        f=f, u_star=u_star, n_inst=n_inst)
+    if stats_path:
+        os.makedirs(os.path.dirname(stats_path) or ".", exist_ok=True)
+        torch.save({**meta, "mu": mu, "sd": sd}, stats_path)
+        print(f"  cached feature stats -> {stats_path}", flush=True)
+    return mu, sd
+
+
 def make_or_load_router_dataset(pde, *, n_train, n_val, seed, data_path=None):
     """Fixed (f, u*) set matching the paper's train_router.py protocol.
 
@@ -552,6 +624,10 @@ def train_lite_router(
     n_train: Optional[int] = None,
     n_val: int = 128,
     data_path: Optional[str] = None,
+    stats_path: Optional[str] = None,
+    ckpt_dir: Optional[str] = None,
+    ckpt_prefix: Optional[str] = None,
+    ckpt_every: int = 1,
 ):
     rng = np.random.default_rng(seed)
     torch.manual_seed(seed)
@@ -571,16 +647,21 @@ def train_lite_router(
         n_batches = int(math.ceil(n_train / batch_size))
         print(f"  fixed-dataset mode: n_train={n_train} batch_size={batch_size} "
               f"batches/epoch={n_batches}", flush=True)
-        stats_f, stats_u = f_train[: min(64, n_train)], u_train[: min(64, n_train)]
+        stats_n = min(n_inst, 64)
+        stats_f, stats_u = f_train[:stats_n], u_train[:stats_n]
     else:
         n_batches = batches_per_epoch
         stats_f = stats_u = None
+        stats_n = min(n_inst, 64)
 
-    print(f"  estimating feature stats (feats={feat_mode}, dim={feat_dim}) ...", flush=True)
-    mu, sd = collect_feature_stats(
+    if stats_path is None and data_path:
+        stats_path = feature_stats_cache_path(
+            data_path, solver, feat_mode=feat_mode, max_iters=max_iters,
+            res_floor=res_floor, seed=seed, n_stats=stats_n)
+    mu, sd = make_or_load_feature_stats(
         pde, solver, corrector, feat_mode=feat_mode, max_iters=max_iters,
-        res_floor=res_floor, masks=masks, rng=np.random.default_rng(seed + 999),
-        f=stats_f, u_star=stats_u, n_inst=min(n_inst, 64))
+        res_floor=res_floor, masks=masks, seed=seed, stats_path=stats_path,
+        f=stats_f, u_star=stats_u, n_inst=stats_n)
 
     if arch == "gru":
         model = TorchLiteGRU(feat_dim=feat_dim, hidden=hidden).to(device)
@@ -588,6 +669,12 @@ def train_lite_router(
         model = TorchLiteMLP(feat_dim=feat_dim, hidden=hidden).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=lr)
     tf = tf_start
+    cls = LiteGRURouter if arch == "gru" else LiteRouter
+
+    if ckpt_dir:
+        os.makedirs(ckpt_dir, exist_ok=True)
+    if ckpt_prefix is None and ckpt_dir:
+        ckpt_prefix = os.path.join(ckpt_dir, f"lite_router_{arch}_{feat_mode}")
 
     for ep in range(epochs):
         model.train()
@@ -621,8 +708,13 @@ def train_lite_router(
             f"pred_no_frac {ep_no/d:.3f}  tf={tf:.3f}",
             flush=True,
         )
+        if ckpt_prefix and ckpt_every > 0 and ((ep + 1) % ckpt_every == 0 or ep == epochs - 1):
+            snap = cls(model.export_weights(), feat_mode=feat_mode, mu=mu, sd=sd)
+            ep_path = f"{ckpt_prefix}_ep{ep:03d}.pth"
+            os.makedirs(os.path.dirname(ep_path) or ".", exist_ok=True)
+            snap.save(ep_path, epoch=ep)
+            print(f"  checkpoint -> {ep_path}", flush=True)
 
-    cls = LiteGRURouter if arch == "gru" else LiteRouter
     return cls(model.export_weights(), feat_mode=feat_mode, mu=mu, sd=sd)
 
 
@@ -630,35 +722,6 @@ def train_lite_router(
 # ---------------------------------------------------------------------------
 # Rollouts + criteria
 # ---------------------------------------------------------------------------
-
-def _oracle_decision_sequence(pde, solver, corrector, f, u_truth,
-                              max_iters, res_floor) -> List[int]:
-    """Untimed pass of the one-step true-error greedy policy (paper Alg. 1).
-
-    Returns the decision at every iteration so the timed benchmark can replay
-    it through the exact same code path as HINTS/router, without the timing
-    contamination of running both experts inside the measured loop.
-    """
-    N = pde.N
-    u = np.zeros((1, N, N))
-    fn = float(l2(f)[0])
-    decisions: List[int] = []
-    for _ in range(max_iters):
-        r = pde.residual(u, f)
-        rel_res = float(l2(r)[0]) / fn
-        if (not math.isfinite(rel_res)) or (not np.isfinite(u).all()):
-            break
-        if rel_res <= res_floor:
-            break
-        u_c = solver.step(u, f, r)
-        u_n = u + corrector.correct(r)
-        e_c = float(l2(demean(u_c - u_truth))[0])
-        e_n = float(l2(demean(u_n - u_truth))[0])
-        d = 1 if e_n < e_c else 0
-        decisions.append(d)
-        u = u_n if d else u_c
-    return decisions
-
 
 def run_rollout(
     pde,
@@ -680,10 +743,6 @@ def run_rollout(
     hints_tau = int(policy[5:]) if policy.startswith("hints") else None
     if router is not None:
         router.reset()
-    oracle_seq = None
-    if policy == "oracle":
-        oracle_seq = _oracle_decision_sequence(
-            pde, solver, corrector, f, u_truth, max_iters, res_floor)
     prev_decision = 0
     trace = {"t": [], "rel_res": [], "rel_err": [], "decision": []}
 
@@ -705,29 +764,41 @@ def run_rollout(
             trace["decision"].append(-1)
             break
 
-        if policy == "classical":
-            decision = 0
-        elif hints_tau is not None:
-            decision = 1 if (it + 1) % hints_tau == 0 else 0
-        elif policy == "router":
+        if policy == "oracle":
+            # One-pass error-greedy (paper Alg. 1): run both experts once,
+            # time them separately, charge only the winner. Avoids the old
+            # two-pass replay (which re-executed the chosen expert) while
+            # keeping reported wall-clock free of the unchosen expert's cost.
             t0 = time.perf_counter()
-            decision = router.decide(rel_res, it, prev_decision, r=r, pde=pde)
-            t_cum += time.perf_counter() - t0
-        elif policy == "oracle":
-            # Replay the pre-computed greedy decisions (paper Alg. 1) through
-            # the same timed path as HINTS/router: decisions are free (it's an
-            # oracle), only the chosen expert's step is charged, and the
-            # measured loop never executes the unchosen expert.
-            decision = oracle_seq[it] if it < len(oracle_seq) else 0
+            u_c = solver.step(u, f, r)
+            t_c = time.perf_counter() - t0
+            t0 = time.perf_counter()
+            u_n = u + corrector.correct(r)
+            t_n = time.perf_counter() - t0
+            e_c = float(l2(demean(u_c - u_truth))[0])
+            e_n = float(l2(demean(u_n - u_truth))[0])
+            decision = 1 if e_n < e_c else 0
+            t_cum += t_n if decision else t_c
+            u = u_n if decision else u_c
         else:
-            raise ValueError(policy)
+            if policy == "classical":
+                decision = 0
+            elif hints_tau is not None:
+                decision = 1 if (it + 1) % hints_tau == 0 else 0
+            elif policy == "router":
+                t0 = time.perf_counter()
+                decision = router.decide(rel_res, it, prev_decision, r=r, pde=pde)
+                t_cum += time.perf_counter() - t0
+            else:
+                raise ValueError(policy)
 
-        t0 = time.perf_counter()
-        if decision == 1:
-            u = u + corrector.correct(r)
-        else:
-            u = solver.step(u, f, r)
-        t_cum += time.perf_counter() - t0
+            t0 = time.perf_counter()
+            if decision == 1:
+                u = u + corrector.correct(r)
+            else:
+                u = solver.step(u, f, r)
+            t_cum += time.perf_counter() - t0
+
         prev_decision = decision
         trace["decision"].append(decision)
 
@@ -864,14 +935,41 @@ def evaluate(
             }
             rows.append(row)
             decs.append(tr["decision"])
+        def _finite(xs):
+            return [float(x) for x in xs if x is not None and math.isfinite(float(x))]
+
+        t_err = _finite([r["err"][pt][0] for r in rows])
+        it_err = _finite([r["err"][pt][1] for r in rows])
+        t_res = _finite([r["res"][pt][0] for r in rows])
+        it_res = _finite([r["res"][pt][1] for r in rows])
+        no_calls = [float(r["n_no_calls"]) for r in rows]
+        no_fracs = []
+        for r, d in zip(rows, decs):
+            dd = d[d >= 0]
+            if len(dd):
+                no_fracs.append(float((dd == 1).mean()))
+        div = diversity_stats(decs)
         block = {
             "rows": rows,
-            "diversity": diversity_stats(decs),
-            "median_time_err_primary": float(np.median([r["err"][pt][0] for r in rows])),
-            "median_iters_err_primary": float(np.median([r["err"][pt][1] for r in rows])),
-            "median_time_res_primary": float(np.median([r["res"][pt][0] for r in rows])),
-            "median_iters_res_primary": float(np.median([r["res"][pt][1] for r in rows])),
-            "median_no_calls": float(np.median([r["n_no_calls"] for r in rows])),
+            "diversity": div,
+            "n_converged_err_primary": len(t_err),
+            "mean_time_err_primary": float(np.mean(t_err)) if t_err else float("inf"),
+            "std_time_err_primary": float(np.std(t_err)) if t_err else float("nan"),
+            "median_time_err_primary": float(np.median(t_err)) if t_err else float("inf"),
+            "mean_iters_err_primary": float(np.mean(it_err)) if it_err else float("inf"),
+            "std_iters_err_primary": float(np.std(it_err)) if it_err else float("nan"),
+            "median_iters_err_primary": float(np.median(it_err)) if it_err else float("inf"),
+            "mean_time_res_primary": float(np.mean(t_res)) if t_res else float("inf"),
+            "std_time_res_primary": float(np.std(t_res)) if t_res else float("nan"),
+            "median_time_res_primary": float(np.median(t_res)) if t_res else float("inf"),
+            "mean_iters_res_primary": float(np.mean(it_res)) if it_res else float("inf"),
+            "std_iters_res_primary": float(np.std(it_res)) if it_res else float("nan"),
+            "median_iters_res_primary": float(np.median(it_res)) if it_res else float("inf"),
+            "mean_no_calls": float(np.mean(no_calls)) if no_calls else 0.0,
+            "std_no_calls": float(np.std(no_calls)) if no_calls else 0.0,
+            "median_no_calls": float(np.median(no_calls)) if no_calls else 0.0,
+            "mean_no_fraction": float(np.mean(no_fracs)) if no_fracs else 0.0,
+            "std_no_fraction": float(np.std(no_fracs)) if no_fracs else 0.0,
             # keep h2 aliases when present for backward compat with prior JSON readers
             "median_time_err_h2": float(np.median([r["err"].get(str(1.0 / N ** 2), (np.inf, np.inf))[0] for r in rows])),
             "median_iters_err_h2": float(np.median([r["err"].get(str(1.0 / N ** 2), (np.inf, np.inf))[1] for r in rows])),
@@ -880,13 +978,13 @@ def evaluate(
         }
         results["policies"][policy] = block
         print(
-            f"[{policy:>10s}] err@{primary_tol:g} {block['median_time_err_primary']*1e3:.2f}ms / "
-            f"{block['median_iters_err_primary']:.0f}it | "
-            f"res@{primary_tol:g} {block['median_time_res_primary']*1e3:.2f}ms / "
-            f"{block['median_iters_res_primary']:.0f}it | "
-            f"NO={block['median_no_calls']:.0f} | "
-            f"div both={block['diversity']['frac_instances_both_experts']:.2f} "
-            f"no_frac={block['diversity']['mean_no_fraction']:.3f}±{block['diversity']['std_no_fraction']:.3f} "
+            f"[{policy:>10s}] err@{primary_tol:g} "
+            f"{block['mean_time_err_primary']*1e3:.2f}±{block['std_time_err_primary']*1e3:.2f}ms "
+            f"(med {block['median_time_err_primary']*1e3:.2f}) / "
+            f"{block['mean_iters_err_primary']:.0f}±{block['std_iters_err_primary']:.0f}it | "
+            f"NO%={100*block['mean_no_fraction']:.1f}±{100*block['std_no_fraction']:.1f} "
+            f"(#{block['mean_no_calls']:.0f}±{block['std_no_calls']:.0f}) "
+            f"ok={block['n_converged_err_primary']}/{n_test} "
             f"({time.time()-t0:.0f}s)",
             flush=True,
         )
@@ -994,6 +1092,16 @@ def main():
     pt.add_argument("--n_val", type=int, default=128)
     pt.add_argument("--data_path", type=str, default=None,
                     help="cache path for the fixed router dataset (.pt)")
+    pt.add_argument("--stats_path", type=str, default=None,
+                    help="cache path for feature-stats warmup (.pt); auto-derived "
+                         "from --data_path when omitted")
+    pt.add_argument("--ckpt_dir", type=str, default=None,
+                    help="if set, save a router checkpoint after every --ckpt_every epochs")
+    pt.add_argument("--ckpt_prefix", type=str, default=None,
+                    help="prefix for epoch checkpoints (default: <ckpt_dir>/lite_router_<arch>_<feats>); "
+                         "writes {prefix}_epXXX.pth")
+    pt.add_argument("--ckpt_every", type=int, default=1,
+                    help="save epoch checkpoint every N epochs (default 1)")
     pt.set_defaults(seed=7)
 
     pb = sub.add_parser("bench")
@@ -1041,6 +1149,10 @@ def main():
             n_train=args.n_train,
             n_val=args.n_val,
             data_path=args.data_path,
+            stats_path=args.stats_path,
+            ckpt_dir=args.ckpt_dir,
+            ckpt_prefix=args.ckpt_prefix,
+            ckpt_every=args.ckpt_every,
             device=device,
         )
         os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
