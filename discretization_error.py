@@ -5,8 +5,8 @@ Writes results/discretization_error.json (relative errors per instance, equation
 import json, numpy as np
 from fast_pde import FastStencilPDE, GRF2D
 out = {}
-for eq in ["Poisson", "ConvDiff", "AnisoDiff"]:
-    for N in [128, 256]:
+for eq in ["Poisson", "ConvDiff", "AnisoDiff", "VarCoeff"]:
+    for N in ([128] if eq == "VarCoeff" else [128, 256]):
         n = 32
         f = GRF2D(N, rng=np.random.default_rng(72)).sample(n)     # the test forcing (seed 72)
         fh = np.fft.fft2(f); M = 4 * N

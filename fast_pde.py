@@ -42,6 +42,11 @@ try:
         _LIB.jacobi.argtypes = [_dp, _dp, _dp, _ct.c_int, _ct.c_int, _ct.c_double, _ct.c_double, _ct.c_double, _ct.c_double, _ct.c_double]
         _LIB.sor_sweep.argtypes = [_dp, _dp, _ct.c_int, _ct.c_int, _ct.c_double, _ct.c_double, _ct.c_double, _ct.c_double, _ct.c_double, _ct.c_int]
         _LIB.ssor_sweep.argtypes = [_dp, _dp, _ct.c_int, _ct.c_int, _ct.c_double, _ct.c_double, _ct.c_double, _ct.c_double, _ct.c_double]
+        _LIB.apply_A_var.argtypes = [_dp, _dp, _ct.c_int, _ct.c_int, _dp, _dp, _dp, _dp, _dp]
+        _LIB.residual_var.argtypes = [_dp, _dp, _dp, _ct.c_int, _ct.c_int, _dp, _dp, _dp, _dp, _dp]
+        _LIB.jacobi_var.argtypes = [_dp, _dp, _dp, _ct.c_int, _ct.c_int, _dp, _dp, _dp, _dp, _dp, _ct.c_double]
+        _LIB.sor_sweep_var.argtypes = [_dp, _dp, _ct.c_int, _ct.c_int, _dp, _dp, _dp, _dp, _dp, _ct.c_double, _ct.c_int]
+        _LIB.ssor_sweep_var.argtypes = [_dp, _dp, _ct.c_int, _ct.c_int, _dp, _dp, _dp, _dp, _dp, _ct.c_double]
         _LIB.restrict_fw.argtypes = [_dp, _dp, _ct.c_int, _ct.c_int]
         _LIB.prolong_bilinear.argtypes = [_dp, _dp, _ct.c_int, _ct.c_int]
 except OSError:
@@ -65,8 +70,8 @@ class FastStencilPDE:
     both diffusion and advection, grid x = linspace(0, 1, N+1)[:-1], h = 1/N.
     """
 
-    def __init__(self, N, equation="Poisson", a=1.0, b_vec=(20.0, 20.0), aniso_eps=0.01):
-        assert equation in ("Poisson", "ConvDiff", "AnisoDiff")
+    def __init__(self, N, equation="Poisson", a=1.0, b_vec=(20.0, 20.0), aniso_eps=0.01, coef=None, coef_seed=0, contrast=10.0):
+        assert equation in ("Poisson", "ConvDiff", "AnisoDiff", "VarCoeff")
         self.N = N
         self.equation = equation
         self.a = a
@@ -75,13 +80,57 @@ class FastStencilPDE:
         self.aniso_eps = aniso_eps
         self.b1, self.b2 = (0.0, 0.0) if equation != "ConvDiff" else b_vec
         self.h = 1.0 / N
-        self.diag = 2.0 * (self.ax + self.ay) / self.h ** 2
-        self._symbol = self._build_symbol()
         self._lu_cache = {}
+        self._direct_lu = None
+        if equation == "VarCoeff":
+            # -div(a grad u) = f with a smooth, fixed random coefficient field a(x) = exp(kappa z(x)),
+            # z a band-limited GRF (|k| <= 4) scaled to [-1, 1], kappa = ln(contrast)/2 (max a / min a = contrast)
+            self.coef = coef if coef is not None else self.random_coefficient(N, coef_seed, contrast)
+            self.coef_seed, self.contrast = coef_seed, contrast
+            self.ax = self.ay = None
+            self._build_var_stencil()
+            self._symbol = None
+        else:
+            self.coef = None
+            self.diag = 2.0 * (self.ax + self.ay) / self.h ** 2
+            self._symbol = self._build_symbol()
+
+    @staticmethod
+    def random_coefficient(N, seed=0, contrast=10.0, kmax=4):
+        """Smooth random coefficient field on the periodic grid (deterministic in seed and N,
+        independent of the grid size for a given seed: the same Fourier modes are sampled on every grid)."""
+        rng = np.random.default_rng(1000 + seed)
+        z = np.zeros((N, N))
+        x = np.arange(N) / N
+        X, Y = np.meshgrid(x, x, indexing="ij")
+        for kx in range(-kmax, kmax + 1):
+            for ky in range(-kmax, kmax + 1):
+                if kx == 0 and ky == 0:
+                    continue
+                amp = rng.standard_normal(2) / (1.0 + kx ** 2 + ky ** 2)
+                z += amp[0] * np.cos(2 * np.pi * (kx * X + ky * Y)) + amp[1] * np.sin(2 * np.pi * (kx * X + ky * Y))
+        z = z / np.abs(z).max()
+        return np.exp(0.5 * np.log(contrast) * z)
+
+    def _build_var_stencil(self):
+        """Face-averaged (arithmetic mean) coefficients of the conservative 5-point discretisation."""
+        a, h2 = self.coef, self.h ** 2
+        aw = 0.5 * (a + np.roll(a, 1, axis=0)); ae = 0.5 * (a + np.roll(a, -1, axis=0))
+        as_ = 0.5 * (a + np.roll(a, 1, axis=1)); an = 0.5 * (a + np.roll(a, -1, axis=1))
+        self.cw, self.ce, self.cs, self.cn = (-aw / h2, -ae / h2, -as_ / h2, -an / h2)
+        self.diag = (aw + ae + as_ + an) / h2
+        self._stencil = [np.ascontiguousarray(x) for x in (self.cw, self.ce, self.cs, self.cn, self.diag)]
 
     # -- operator ------------------------------------------------------------
     def apply_A(self, u):
         """u: (..., N, N). First grid axis is i (x), second is j (y)."""
+        if self.equation == "VarCoeff":
+            if COMPILED and u.dtype == np.float64 and u.ndim in (2, 3):
+                uc = _c64(u); out = np.empty_like(uc)
+                _LIB.apply_A_var(_ptr(uc), _ptr(out), 1 if uc.ndim == 2 else uc.shape[0], self.N, *[_ptr(s) for s in self._stencil])
+                return out
+            return (self.diag * u + self.cw * np.roll(u, 1, axis=-2) + self.ce * np.roll(u, -1, axis=-2)
+                    + self.cs * np.roll(u, 1, axis=-1) + self.cn * np.roll(u, -1, axis=-1))
         if COMPILED and u.dtype == np.float64 and u.ndim in (2, 3):
             uc = _c64(u)
             out = np.empty_like(uc)
@@ -102,6 +151,12 @@ class FastStencilPDE:
         return out
 
     def residual(self, u, f):
+        if self.equation == "VarCoeff":
+            if COMPILED and u.dtype == np.float64 and u.ndim in (2, 3) and f.shape == u.shape:
+                uc, fc = _c64(u), _c64(f); r = np.empty_like(uc)
+                _LIB.residual_var(_ptr(uc), _ptr(fc), _ptr(r), 1 if uc.ndim == 2 else uc.shape[0], self.N, *[_ptr(s) for s in self._stencil])
+                return r
+            return f - self.apply_A(u)
         if COMPILED and u.dtype == np.float64 and u.ndim in (2, 3) and f.shape == u.shape:
             uc, fc = _c64(u), _c64(f)
             r = np.empty_like(uc)
@@ -123,8 +178,17 @@ class FastStencilPDE:
         return sym
 
     def solve_direct(self, f):
-        """Exact solution of A u = f via FFT diagonalization (f mean-free;
-        the returned solution is mean-free)."""
+        """Exact solution of A u = f (f mean-free; the returned solution is mean-free): FFT
+        diagonalization for constant coefficients, a cached sparse LU with one pinned unknown otherwise."""
+        if self.equation == "VarCoeff":
+            if self._direct_lu is None:
+                A = self.sparse_A().tocsr()
+                self._direct_lu = spla.splu(A[1:, 1:].tocsc())
+            ff = np.asarray(f).reshape(-1, self.N * self.N)
+            u = np.zeros_like(ff)
+            u[:, 1:] = self._direct_lu.solve(np.ascontiguousarray(ff[:, 1:].T)).T
+            u = u - u.mean(axis=1, keepdims=True)
+            return u.reshape(np.asarray(f).shape)
         fhat = np.fft.fft2(f, axes=(-2, -1))
         sym = self._symbol.copy()
         sym[0, 0] = 1.0
@@ -142,8 +206,13 @@ class FastStencilPDE:
         def add(nbr_idx, val):
             rows.append(idx.ravel())
             cols.append(nbr_idx.ravel())
-            vals.append(np.full(N * N, val))
+            vals.append(np.full(N * N, val) if np.isscalar(val) else np.asarray(val).ravel())
 
+        if self.equation == "VarCoeff":
+            add(idx, self.diag)
+            add(np.roll(idx, 1, axis=0), self.cw); add(np.roll(idx, -1, axis=0), self.ce)
+            add(np.roll(idx, 1, axis=1), self.cs); add(np.roll(idx, -1, axis=1), self.cn)
+            return sp.coo_matrix((np.concatenate(vals), (np.concatenate(rows), np.concatenate(cols))), shape=(N * N, N * N)).tocsr()
         add(idx, self.diag)
         add(np.roll(idx, 1, axis=0), -ax / h ** 2 - self.b1 / (2 * h))    # (i-1, j)
         add(np.roll(idx, -1, axis=0), -ax / h ** 2 + self.b1 / (2 * h))   # (i+1, j)
@@ -190,7 +259,10 @@ class FastJacobi:
                 uc, fc = _c64(u), _c64(f)
                 out = np.empty_like(uc)
                 B = 1 if uc.ndim == 2 else uc.shape[0]
-                _LIB.jacobi(_ptr(uc), _ptr(fc), _ptr(out), B, self.pde.N, self.pde.ax, self.pde.ay, self.pde.b1, self.pde.b2, self.weight)
+                if self.pde.equation == "VarCoeff":
+                    _LIB.jacobi_var(_ptr(uc), _ptr(fc), _ptr(out), B, self.pde.N, *[_ptr(s) for s in self.pde._stencil], self.weight)
+                else:
+                    _LIB.jacobi(_ptr(uc), _ptr(fc), _ptr(out), B, self.pde.N, self.pde.ax, self.pde.ay, self.pde.b1, self.pde.b2, self.weight)
                 return out
             r = self.pde.residual(u, f)
         return u + (self.weight / self.pde.diag) * r
@@ -204,6 +276,13 @@ def _c_sweep(pde, u, f, r, omega, symmetric=False):
         f = pde.apply_A(u) + r
     fc = _c64(f)
     B = 1 if uc.ndim == 2 else uc.shape[0]
+    if pde.equation == "VarCoeff":
+        st = [_ptr(s) for s in pde._stencil]
+        if symmetric:
+            _LIB.ssor_sweep_var(_ptr(uc), _ptr(fc), B, pde.N, *st, omega)
+        else:
+            _LIB.sor_sweep_var(_ptr(uc), _ptr(fc), B, pde.N, *st, omega, 1)
+        return uc
     if symmetric:
         _LIB.ssor_sweep(_ptr(uc), _ptr(fc), B, pde.N, pde.ax, pde.ay, pde.b1, pde.b2, omega)
     else:
@@ -300,7 +379,7 @@ def make_solver(pde, spec):
 
 
 SOLVER_NAMES = {"jacobi": "Jacobi", "jacobi_0.67": "Jacobi (0.67)", "gs": "GS",
-                "ssor": "SymGS", "sor_1.5": "SOR (1.5)"}
+                "ssor": "SymGS", "sor_1.5": "SOR (1.5)", "mg": "Multigrid"}
 
 
 # ---------------------------------------------------------------------------
@@ -420,13 +499,20 @@ class FastMultigrid:
         self.nu1, self.nu2 = nu1, nu2
         self.levels = []
         N = pde.N
+        coef = pde.coef
+        def level_pde(n, c):
+            if pde.equation == "VarCoeff":
+                return FastStencilPDE(n, equation="VarCoeff", coef=c, coef_seed=pde.coef_seed, contrast=pde.contrast)
+            return FastStencilPDE(n, equation=pde.equation, a=pde.a, b_vec=(pde.b1, pde.b2), aniso_eps=pde.aniso_eps)
         while N > n_coarsest:
             assert N % 2 == 0
-            lp = FastStencilPDE(N, equation=pde.equation, a=pde.a, b_vec=(pde.b1, pde.b2), aniso_eps=pde.aniso_eps)
+            lp = level_pde(N, coef)
             sm = FastGaussSeidel(lp) if smoother == "gs" else FastJacobi(lp, 0.8)
             self.levels.append((lp, sm))
             N //= 2
-        self.coarse = FastStencilPDE(N, equation=pde.equation, a=pde.a, b_vec=(pde.b1, pde.b2), aniso_eps=pde.aniso_eps)
+            if coef is not None:   # rediscretised coarse operator: block-averaged coefficient
+                coef = coef.reshape(N, 2, N, 2).mean(axis=(1, 3))
+        self.coarse = level_pde(N, coef)
         self.name = "mg"
         self.n_levels = len(self.levels) + 1
 

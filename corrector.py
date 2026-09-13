@@ -469,7 +469,7 @@ def train(args):
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
-    p.add_argument("--equation", default="Poisson", choices=["Poisson", "ConvDiff", "AnisoDiff"])
+    p.add_argument("--equation", default="Poisson", choices=["Poisson", "ConvDiff", "AnisoDiff", "VarCoeff"])
     p.add_argument("--N", type=int, default=128)
     p.add_argument("--coarsen", type=int, default=4)
     p.add_argument("--coarsen_x", type=int, default=0, help="sensor-grid coarsening along x (0: --coarsen)")

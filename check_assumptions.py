@@ -53,7 +53,7 @@ rng = np.random.default_rng(0)
 N = args.N
 n = N * N
 pde = FastStencilPDE(N, equation=args.equation)
-pdeT = FastStencilPDE(N, equation=args.equation, b_vec=(-pde.b1, -pde.b2), aniso_eps=pde.aniso_eps)  # A^T (central convection)
+pdeT = pde if args.equation == "VarCoeff" else FastStencilPDE(N, equation=args.equation, b_vec=(-pde.b1, -pde.b2), aniso_eps=pde.aniso_eps)  # A^T (central convection; symmetric otherwise)
 corrector = DeepONetCorrector(f"{args.ckp_dir}/deeponet_{args.equation}_{N}_best.pth", threads=1)
 costs_all = json.load(open(f"{args.ckp_dir}/costs_{args.equation}_{N}.json"))
 solvers = args.solvers.split(",") if args.solvers else [k for k in costs_all if "+" not in k]
@@ -113,9 +113,9 @@ class MGmap:
         self.mg = mg
         self.lv = []
         for (lp, sm) in mg.levels:
-            lpT = FastStencilPDE(lp.N, equation=lp.equation, a=lp.a, b_vec=(-lp.b1, -lp.b2), aniso_eps=lp.aniso_eps)
+            lpT = lp if lp.equation == "VarCoeff" else FastStencilPDE(lp.N, equation=lp.equation, a=lp.a, b_vec=(-lp.b1, -lp.b2), aniso_eps=lp.aniso_eps)
             self.lv.append((lp, lpT, sm))
-        self.coarseT = FastStencilPDE(mg.coarse.N, equation=mg.coarse.equation, a=mg.coarse.a,
+        self.coarseT = mg.coarse if mg.coarse.equation == "VarCoeff" else FastStencilPDE(mg.coarse.N, equation=mg.coarse.equation, a=mg.coarse.a,
                                       b_vec=(-mg.coarse.b1, -mg.coarse.b2), aniso_eps=mg.coarse.aniso_eps)
         # calibrate R = c P^T on the finest level
         Nl = mg.levels[0][0].N
@@ -208,7 +208,10 @@ def make_G(kind, sv=None, m=1):
 
 _kx = np.fft.fftfreq(N) * N
 _KX, _KY = np.meshgrid(_kx, _kx[: N // 2 + 1], indexing="ij")
-_sym = pde.ax * (2 - 2 * np.cos(2 * np.pi * _KX / N)) + pde.ay * (2 - 2 * np.cos(2 * np.pi * _KY / N))  # symmetric part of A (x h^2)
+if args.equation == "VarCoeff":   # no Fourier symbol: the energy norm is not computed for this equation
+    _sym = np.ones_like(_KX, dtype=float)
+else:
+    _sym = pde.ax * (2 - 2 * np.cos(2 * np.pi * _KX / N)) + pde.ay * (2 - 2 * np.cos(2 * np.pi * _KY / N))  # symmetric part of A (x h^2)
 _sym[0, 0] = 1.0
 _sq = np.sqrt(_sym)
 
@@ -239,6 +242,8 @@ def norm2(G, GT, iters=300, tol=1e-6):
 def normA(G, GT, iters=300, tol=1e-6):
     """||A_s^{1/2} G A_s^{-1/2}||_2 on the mean-free subspace (energy norm of the
     symmetric part of A): power iteration on the similarity-transformed map."""
+    if args.equation == "VarCoeff":
+        return None
     Gs = lambda x: A_half(G(A_half(x, -1)), +1)
     GsT = lambda x: A_half(GT(A_half(x, +1)), -1)
     return norm2(Gs, GsT, iters, tol)
@@ -333,7 +338,7 @@ for spec in (solvers if solvers_norms is None else []):
     row["rho_spec"] = spectral_radius(G)
     # exact symbol for (damped) Jacobi: lambda(k) = 1 - w (1 - mu(k)),
     # mu = (ax cos tx + ay cos ty) / (ax + ay); also the Nyquist-free value
-    if spec.startswith("jacobi"):
+    if spec.startswith("jacobi") and args.equation != "VarCoeff":
         w = sv.weight
         kx = np.fft.fftfreq(N) * N
         KX, KY = np.meshgrid(kx, kx, indexing="ij")
@@ -357,8 +362,9 @@ for spec in (solvers if solvers_norms is None else []):
     # commutator with the corrector map (Proposition 4.3)
     row["comm"] = float(max(np.linalg.norm(G(G_no(x)) - G_no(G(x))) / np.linalg.norm(x) for x in rand_vecs))
     out["ops"][spec] = row
-    print(f"  {spec:12s} m={m:2d} rho2 {row['rho2']:.6f} rhoA {row['rhoA']:.6f} "
-          f"macro rho2 {row['rho2_macro']:.6f} rhoA {row['rhoA_macro']:.6f} rho_spec {row['rho_spec']:.6f} "
+    _f = lambda v: "--" if v is None else f"{v:.6f}"
+    print(f"  {spec:12s} m={m:2d} rho2 {_f(row['rho2'])} rhoA {_f(row['rhoA'])} "
+          f"macro rho2 {_f(row['rho2_macro'])} rhoA {_f(row['rhoA_macro'])} rho_spec {row['rho_spec']:.6f} "
           f"sigma_min {row['sigma_min']:.2e} zero {row['zero']:.1e} comm {row['comm']:.2e}"
           + (f" symbol {row['rho_symbol']:.6f}/{row['rho_symbol_nonyquist']:.6f}" if "rho_symbol" in row else "")
           + f" ({time.time()-t1:.0f}s)", flush=True)

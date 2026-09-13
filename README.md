@@ -59,7 +59,7 @@ the original code; nothing above this section is needed for it.
 
 Three linear PDEs on the periodic unit square with the paper's hierarchical
 GRF forcing, discretised by the same 5-point stencil as `pde.py`:
-Poisson, convection--diffusion (velocity (20, 20)) and anisotropic diffusion
+Poisson, convection--diffusion (velocity (20, 20)), anisotropic diffusion and variable-coefficient diffusion (a fixed smooth coefficient field of contrast 10, `FastStencilPDE(..., equation="VarCoeff")`, no Fourier diagonalisation; reference solutions by sparse LU)
 (`-0.01 u_xx - u_yy = f`). Grids 128x128 (all experiments), 256x256 and
 512x512 (scaling). For each classical solver (Jacobi, damped Jacobi 0.67, GS,
 SymGS, SOR 1.5, and geometric multigrid V(2,2)) the ensemble is
@@ -156,6 +156,7 @@ python bench_baselines.py --equation ConvDiff --N 128 --n_test 64
 ./run_ens_nested.sh      # ~6 h (training + benchmark; live times may be inflated if other jobs run)
 ./run_retime.sh          # ~3.5 h: re-time every nested cell on an idle machine (no retraining)
 ./run_assumptions.sh     # ~1 h
+./run_varcoeff.sh        # ~6 h (after run_final.sh): the variable-coefficient problem, same protocol
 ./run_final.sh           # ~20 h: the confirmatory study reported in the paper (compiled kernels, test seed 73,
                          #  frozen recipes, full fixed-schedule family, 3 timed replays); results_dev/ holds the
                          #  development runs (numpy kernels, seed 72) on which every configuration was chosen

@@ -131,3 +131,74 @@ void prolong_bilinear(const double *c, double *u, int B, int M) {
         }
     }
 }
+
+/* ---------------------------------------------------------------------------------------
+   Variable-coefficient 5-point stencil: A u = diag u + cw u_{i-1,j} + ce u_{i+1,j} + cs u_{i,j-1} + cn u_{i,j+1}
+   with per-cell coefficient arrays (N x N, shared by all B batch elements).               */
+#define VROW(i) \
+    int im = (i == 0) ? N - 1 : i - 1, ip = (i == N - 1) ? 0 : i + 1; \
+    const double *rm = U + (size_t)im * N, *rp = U + (size_t)ip * N; \
+    const double *DG = diag + (size_t)i * N, *CW = cw + (size_t)i * N, *CE = ce + (size_t)i * N, *CS = cs + (size_t)i * N, *CN = cn + (size_t)i * N;
+#define VAU(j, jm, jp) (DG[j] * r[j] + CW[j] * rm[j] + CE[j] * rp[j] + CS[j] * r[jm] + CN[j] * r[jp])
+
+void apply_A_var(const double *u, double *out, int B, int N, const double *cw, const double *ce, const double *cs, const double *cn, const double *diag) {
+    for (int b = 0; b < B; b++) {
+        const double *U = u + (size_t)b * N * N; double *O = out + (size_t)b * N * N;
+        for (int i = 0; i < N; i++) {
+            VROW(i) const double *r = U + (size_t)i * N; double *o = O + (size_t)i * N;
+            o[0] = VAU(0, N - 1, 1);
+            for (int j = 1; j < N - 1; j++) o[j] = VAU(j, j - 1, j + 1);
+            o[N - 1] = VAU(N - 1, N - 2, 0);
+        }
+    }
+}
+
+void residual_var(const double *u, const double *f, double *res, int B, int N, const double *cw, const double *ce, const double *cs, const double *cn, const double *diag) {
+    for (int b = 0; b < B; b++) {
+        const double *U = u + (size_t)b * N * N, *F = f + (size_t)b * N * N; double *R = res + (size_t)b * N * N;
+        for (int i = 0; i < N; i++) {
+            VROW(i) const double *r = U + (size_t)i * N, *fr = F + (size_t)i * N; double *o = R + (size_t)i * N;
+            o[0] = fr[0] - VAU(0, N - 1, 1);
+            for (int j = 1; j < N - 1; j++) o[j] = fr[j] - VAU(j, j - 1, j + 1);
+            o[N - 1] = fr[N - 1] - VAU(N - 1, N - 2, 0);
+        }
+    }
+}
+
+void jacobi_var(const double *u, const double *f, double *out, int B, int N, const double *cw, const double *ce, const double *cs, const double *cn, const double *diag, double w) {
+    for (int b = 0; b < B; b++) {
+        const double *U = u + (size_t)b * N * N, *F = f + (size_t)b * N * N; double *O = out + (size_t)b * N * N;
+        for (int i = 0; i < N; i++) {
+            VROW(i) const double *r = U + (size_t)i * N, *fr = F + (size_t)i * N; double *o = O + (size_t)i * N;
+            o[0] = r[0] + w * (fr[0] - VAU(0, N - 1, 1)) / DG[0];
+            for (int j = 1; j < N - 1; j++) o[j] = r[j] + w * (fr[j] - VAU(j, j - 1, j + 1)) / DG[j];
+            o[N - 1] = r[N - 1] + w * (fr[N - 1] - VAU(N - 1, N - 2, 0)) / DG[N - 1];
+        }
+    }
+}
+
+#define VOFF(j, jm, jp) (CW[j] * rm[j] + CE[j] * rp[j] + CS[j] * r[jm] + CN[j] * r[jp])
+void sor_sweep_var(double *u, const double *f, int B, int N, const double *cw, const double *ce, const double *cs, const double *cn, const double *diag, double omega, int forward) {
+    double om = 1.0 - omega;
+    for (int b = 0; b < B; b++) {
+        double *U = u + (size_t)b * N * N; const double *F = f + (size_t)b * N * N;
+        for (int ii = 0; ii < N; ii++) {
+            int i = forward ? ii : N - 1 - ii;
+            VROW(i) double *r = U + (size_t)i * N; const double *fr = F + (size_t)i * N;
+            if (forward) {
+                r[0] = om * r[0] + omega * (fr[0] - VOFF(0, N - 1, 1)) / DG[0];
+                for (int j = 1; j < N - 1; j++) r[j] = om * r[j] + omega * (fr[j] - VOFF(j, j - 1, j + 1)) / DG[j];
+                r[N - 1] = om * r[N - 1] + omega * (fr[N - 1] - VOFF(N - 1, N - 2, 0)) / DG[N - 1];
+            } else {
+                r[N - 1] = om * r[N - 1] + omega * (fr[N - 1] - VOFF(N - 1, N - 2, 0)) / DG[N - 1];
+                for (int j = N - 2; j >= 1; j--) r[j] = om * r[j] + omega * (fr[j] - VOFF(j, j - 1, j + 1)) / DG[j];
+                r[0] = om * r[0] + omega * (fr[0] - VOFF(0, N - 1, 1)) / DG[0];
+            }
+        }
+    }
+}
+
+void ssor_sweep_var(double *u, const double *f, int B, int N, const double *cw, const double *ce, const double *cs, const double *cn, const double *diag, double omega) {
+    sor_sweep_var(u, f, B, N, cw, ce, cs, cn, diag, omega, 1);
+    sor_sweep_var(u, f, B, N, cw, ce, cs, cn, diag, omega, 0);
+}

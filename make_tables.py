@@ -36,12 +36,13 @@ POL_NAMES = {"classical": "Solver only", "hints25": "HINTS ($\\tau{=}25$)", "bes
              "hints5": "HINTS ($\\tau{=}5$)", "hints10": "HINTS ($\\tau{=}10$)",
              "hints50": "HINTS ($\\tau{=}50$)", "greedy": "Greedy oracle (Alg.~1)",
              "oracle": "Cost-aware oracle", "router": "Learned router (ours)"}
-EQS = ["Poisson", "ConvDiff", "AnisoDiff"]
-EQ_SUF = {"Poisson": "poisson", "ConvDiff": "conv", "AnisoDiff": "aniso"}
-EQ_NAMES = {"Poisson": "Poisson", "ConvDiff": "Convection--diffusion", "AnisoDiff": "Anisotropic diffusion"}
+EQS = ["Poisson", "ConvDiff", "AnisoDiff", "VarCoeff"]
+EQ_SUF = {"Poisson": "poisson", "ConvDiff": "conv", "AnisoDiff": "aniso", "VarCoeff": "var"}
+EQ_NAMES = {"Poisson": "Poisson", "ConvDiff": "Convection--diffusion", "AnisoDiff": "Anisotropic diffusion", "VarCoeff": "Variable-coefficient diffusion"}
 BASE_NAMES = {"mg": "Multigrid V(2,2) alone", "cg": "CG", "pcg_ssor": "PCG (SymGS)", "pcg_mg": "PCG (multigrid)",
-              "bicgstab": "BiCGSTAB", "bicgstab_mg": "BiCGSTAB (multigrid)", "gmres": "GMRES(20)"}
-BASE_ORDER = ["mg", "cg", "bicgstab", "pcg_ssor", "pcg_mg", "bicgstab_mg", "gmres"]
+              "bicgstab": "BiCGSTAB", "bicgstab_mg": "BiCGSTAB (multigrid)", "gmres": "GMRES(20)",
+              "fft": "FFT direct solve (exact; constant coefficients only)", "lu": "Sparse LU direct solve (cached factorisation)"}
+BASE_ORDER = ["mg", "cg", "bicgstab", "pcg_ssor", "pcg_mg", "bicgstab_mg", "gmres", "fft", "lu"]
 NS = [128, 256, 512]
 GRID_SUF = {128: "", 256: "B", 512: "C"}
 
@@ -251,7 +252,7 @@ def main():
         return min(cands, key=lambda p: np.median(times(P[p], key)))
 
     def kry_name(eq):
-        return "pcg_mg" if eq in ("Poisson", "AnisoDiff") else "bicgstab_mg"
+        return "bicgstab_mg" if eq == "ConvDiff" else "pcg_mg"
 
     grids = {eq: [N for N in NS if any(cell(eq, N, s) for s in PAIRINGS)] for eq in EQS}
 
@@ -320,7 +321,7 @@ def main():
 
         # ---------------------------------------------------------- speedups with p-values
         has_base = any((eq, N) in Bf for N in Ns)
-        nc = 5 if has_base else 3
+        nc = 6 if has_base else 3
         # pass 1: collect every comparison (speedup text, speedup, p); pass 2: Holm-corrected bolding
         comps = []   # (row_index, col_index, text, sp, p)
         rows_spec = []
@@ -344,7 +345,7 @@ def main():
                              times_lb(P["oneshot"], key) if "oneshot" in P else None]
                     if has_base:
                         db = Bf.get((eq, N))
-                        for m_ in ["mg", kry_name(eq)]:
+                        for m_ in ["mg", kry_name(eq), "fft"]:
                             bases.append(base_times(db, m_, tol) if (db is not None and m_ in db["methods"] and db["methods"][m_]) else None)
                     for b_ in bases:
                         if b_ is None:
@@ -362,7 +363,7 @@ def main():
         out.append("\\begin{tabular}{ll" + "c" * nc * len(Ns) + "}\n\\toprule")
         out.append("& & " + " & ".join(f"\\multicolumn{{{nc}}}{{c}}{{${N}\\times{N}$}}" for N in Ns) + " \\\\ "
                    + "".join(f"\\cmidrule(lr){{{3+nc*i}-{2+nc*(i+1)}}}" for i in range(len(Ns))))
-        out.append("Pairing & $\\varepsilon$ & " + " & ".join("vs.\\ HINTS-25 & vs.\\ best schedule & vs.\\ one-shot" + (" & vs.\\ multigrid & vs.\\ MG-Krylov" if has_base else "") for _ in Ns) + " \\\\ \\midrule")
+        out.append("Pairing & $\\varepsilon$ & " + " & ".join("vs.\\ HINTS-25 & vs.\\ best schedule & vs.\\ one-shot" + (" & vs.\\ multigrid & vs.\\ MG-Krylov & vs.\\ FFT solve" if has_base else "") for _ in Ns) + " \\\\ \\midrule")
         for row in rows_spec:
             out.append(" & ".join(row) + " \\\\")
         out.append("\\bottomrule\n\\end{tabular}}")
@@ -503,7 +504,7 @@ def main():
             have = {N: cell(eq, N, spec) for N in NS}
             if not any(have.values()):
                 continue
-            row = [{"Poisson": "Poisson", "ConvDiff": "ConvDiff", "AnisoDiff": "AnisoDiff"}[eq] if first else "", SOLVER_NAMES[spec]]
+            row = [{"Poisson": "Poisson", "ConvDiff": "ConvDiff", "AnisoDiff": "AnisoDiff", "VarCoeff": "VarCoeff"}[eq] if first else "", SOLVER_NAMES[spec]]
             for N in NS:
                 dg = have[N]
                 if dg is None:
@@ -524,10 +525,10 @@ def main():
             first = False
             any_row = True
         # classical baselines: multigrid alone and the multigrid-preconditioned Krylov method
-        for m in ["mg", kry_name(eq)]:
+        for m in ["mg", kry_name(eq), "fft", "lu"]:
             if not any((eq, N) in Bf and m in Bf[(eq, N)]["methods"] and Bf[(eq, N)]["methods"][m] for N in NS):
                 continue
-            row = ["", {"mg": "Multigrid alone", "pcg_mg": "PCG (MG)", "bicgstab_mg": "BiCGSTAB (MG)"}.get(m, BASE_NAMES[m]) + " (no corrector)"]
+            row = ["", {"mg": "Multigrid alone (no corrector)", "pcg_mg": "PCG (MG) (no corrector)", "bicgstab_mg": "BiCGSTAB (MG) (no corrector)", "fft": "FFT direct solve (exact)", "lu": "Sparse LU direct solve"}.get(m, BASE_NAMES[m])]
             for N in NS:
                 d = Bf.get((eq, N))
                 if d is None or m not in d["methods"] or not d["methods"][m]:
@@ -588,6 +589,15 @@ def main():
                                             times(mgp[1]["policies"]["router"], tkey(mgp[0], dd["h2"])))[0])
     for name, vals in [("caVsMg", vs_mg), ("caVsKrylov", vs_kry), ("caVsMgEns", vs_mg_ens)]:
         rng_macro(out, name, vals)
+    fft_ratio = []
+    for (eq, N), d in Bf.items():
+        pw = {s_: cell(eq, N, s_) for s_ in PAIRINGS if cell(eq, N, s_)}
+        if not pw or "fft" not in d["methods"] or not d["methods"]["fft"]:
+            continue
+        best_s = min(pw, key=lambda s_: np.median(times(pw[s_][1]["policies"]["router"], tkey(pw[s_][0], d["h2"]))))
+        dd, g = pw[best_s]
+        fft_ratio.append(np.median(times(g["policies"]["router"], tkey(dd, dd["h2"]))) / np.median(base_times(d, "fft", dd["h2"])))
+    rng_macro(out, "caFftRatio", fft_ratio)
 
     # ================================================================ ensembles
     ens_keys = [k for k in R if k[3]]
@@ -1055,6 +1065,7 @@ def main():
     defined = set(re.findall(r"\\newcommand\{\\(\w+)\}", "\n".join(out)))
     for name, val in [("caT", "300"), ("caN", "128"), ("caLstmMs", "--"), ("caLstmOverJacobi", "--"), ("caVsMgMin", "--"), ("caVsMgMax", "--"),
                       ("caVsKrylovMin", "--"), ("caVsKrylovMax", "--"), ("caVsMgEnsMin", "--"), ("caVsMgEnsMax", "--"),
+                      ("caFftRatioMin", "--"), ("caFftRatioMax", "--"),
                       ("caRhoAMax", "--"), ("caRhoSpecMax", "--"), ("caRhoTwoGsMax", "--"), ("caBandMax", "--"), ("caAlphaHatMax", "--"),
                       ("caAlphaHatMed", "--"), ("caAlphaHatMaxH", "--"), ("caAlphaBoundMin", "--"), ("caAlphaBoundMax", "--")]:
         if name not in defined:

@@ -17,10 +17,10 @@ import numpy as np
 
 from fast_pde import FastStencilPDE, GRF2D, demean, l2, make_solver
 from hybrid import Env, run_untimed, run_timed, time_to_tol
-from baselines import run_krylov_untimed, time_krylov, KRYLOV
+from baselines import run_krylov_untimed, time_krylov, KRYLOV, SparseLUDirect
 
 p = argparse.ArgumentParser()
-p.add_argument("--equation", default="Poisson", choices=["Poisson", "ConvDiff", "AnisoDiff"])
+p.add_argument("--equation", default="Poisson", choices=["Poisson", "ConvDiff", "AnisoDiff", "VarCoeff"])
 p.add_argument("--N", type=int, default=128)
 p.add_argument("--n_test", type=int, default=64)
 p.add_argument("--seed", type=int, default=72)
@@ -35,6 +35,8 @@ h2 = 1.0 / args.N ** 2
 tols = [h2 if t == "h2" else float(t) for t in args.tols.split(",")]
 if args.methods:
     methods = args.methods.split(",")
+elif args.equation == "VarCoeff":
+    methods = ["lu", "mg", "cg", "pcg_ssor", "pcg_mg"]
 elif args.equation in ("Poisson", "AnisoDiff"):
     methods = ["fft", "mg", "cg", "pcg_ssor", "pcg_mg"]
 else:
@@ -61,6 +63,20 @@ for m in methods:
                 row["tol"][f"{tol:.6g}"] = {"iters": None if k is None else k * unit,
                                             "t_live": None if not np.isfinite(t) else float(t)}
             gc.enable()
+            res["methods"][m].append(row)
+    elif m == "lu":
+        # sparse direct solve with a cached LU factorisation (factorisation time recorded separately)
+        lu = SparseLUDirect(pde)
+        res["lu_factorization_s"] = lu.factor_s
+        for i in range(args.n_test):
+            f1, u1 = f_test[i:i + 1], u_truth[i:i + 1]
+            gc.collect(); gc.disable()
+            t0 = time.perf_counter_ns(); us = lu.solve(f1); t = (time.perf_counter_ns() - t0) * 1e-9
+            gc.enable()
+            err = float(l2(demean(us - u1))[0] / l2(u1)[0])
+            row = {"n_iters_total": 1, "final_rel_err": err, "tol": {}}
+            for tol in tols:
+                row["tol"][f"{tol:.6g}"] = {"iters": 1 if err <= tol else None, "t_live": float(t) if err <= tol else None}
             res["methods"][m].append(row)
     else:
         env = Env(pde, [m], None)

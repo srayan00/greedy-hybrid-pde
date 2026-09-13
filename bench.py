@@ -26,7 +26,7 @@ from hybrid import Env, FeatureState, measure_costs, run_untimed, run_timed, tim
 from router import Router, fit_router
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--equation", default="Poisson", choices=["Poisson", "ConvDiff", "AnisoDiff"])
+parser.add_argument("--equation", default="Poisson", choices=["Poisson", "ConvDiff", "AnisoDiff", "VarCoeff"])
 parser.add_argument("--N", type=int, default=128)
 parser.add_argument("--solvers", default="jacobi,jacobi_0.67,gs,ssor,sor_1.5")
 parser.add_argument("--ensemble", action="store_true")

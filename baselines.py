@@ -72,6 +72,27 @@ class SymmetricMultigrid(FastMultigrid):
 KRYLOV = {"cg", "pcg_ssor", "pcg_mg", "bicgstab", "bicgstab_mg", "gmres", "gmres_mg"}
 
 
+class SparseLUDirect:
+    """Sparse direct solve (SuperLU) of the periodic system with one pinned unknown; the
+    factorisation is computed once and its time recorded, each solve is timed separately."""
+
+    def __init__(self, pde):
+        import scipy.sparse as sp
+        self.pde = pde
+        t0 = time.perf_counter_ns()
+        A = pde.sparse_A().tocsr()
+        self.lu = spla.splu(A[1:, 1:].tocsc())
+        self.factor_s = (time.perf_counter_ns() - t0) * 1e-9
+
+    def solve(self, f):
+        N = self.pde.N
+        ff = f.reshape(-1, N * N)
+        u = np.zeros_like(ff)
+        u[:, 1:] = self.lu.solve(np.ascontiguousarray(ff[:, 1:].T)).T
+        u = u - u.mean(axis=1, keepdims=True)
+        return u.reshape(f.shape)
+
+
 def make_krylov(pde, method):
     """Returns (scipy solver function, preconditioner LinearOperator or None, kwargs)."""
     N = pde.N

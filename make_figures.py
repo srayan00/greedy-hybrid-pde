@@ -22,8 +22,8 @@ from corrector import DeepONetCorrector
 SOLVER_NAMES = {"jacobi": "Jacobi", "jacobi_0.67": "Jacobi (0.67)", "gs": "GS",
                 "ssor": "SymGS", "sor_1.5": "SOR (1.5)"}
 SOLVER_ORDER = ["jacobi", "jacobi_0.67", "gs", "ssor", "sor_1.5"]
-EQS = ["Poisson", "ConvDiff", "AnisoDiff"]
-EQ_NAMES = {"Poisson": "Poisson", "ConvDiff": "ConvDiff", "AnisoDiff": "AnisoDiff"}
+EQS = ["Poisson", "ConvDiff", "AnisoDiff", "VarCoeff"]
+EQ_NAMES = {"Poisson": "Poisson", "ConvDiff": "ConvDiff", "AnisoDiff": "AnisoDiff", "VarCoeff": "VarCoeff"}
 OUT = "paper/neurips_images"
 os.makedirs(OUT, exist_ok=True)
 plt.rcParams.update({"font.size": 9, "axes.titlesize": 9, "axes.labelsize": 9,
