@@ -1,0 +1,61 @@
+{
+ "args": {
+  "equation": "ConvDiff",
+  "N": 512,
+  "solvers": null,
+  "n_inst": 8,
+  "n_modes": 4000,
+  "seed": 72,
+  "ckp_dir": "./checkpoints",
+  "out_dir": "./results"
+ },
+ "h2": 3.814697265625e-06,
+ "corrector": {
+  "n_cx": 64,
+  "n_cy": 64,
+  "adjoint_check": 2.211089621274947e-07
+ },
+ "ops": {
+  "no": {
+   "rho2": 1.0,
+   "rhoA": 1.0,
+   "rho_spec": 1.0000000000000007,
+   "zero": 0.0,
+   "band_max": 9.304460764741839e-06,
+   "band_mean": 1.736393373040953e-06,
+   "outband_min": 0.9999999999999967,
+   "outband_max": 1.0000000000000018,
+   "leak_max": 4.081931900437987e-05,
+   "n_band_modes": 60,
+   "n_out_modes": 3940
+  },
+  "jacobi": {
+   "m": 3,
+   "zero": 0.0,
+   "rho2": 0.999186757315575,
+   "rhoA": 0.9992063430003864,
+   "rho2_macro": 0.9993162718219734,
+   "rhoA_macro": 0.9992034250969603,
+   "rho_spec": 1.0000000000000024,
+   "rho_symbol": 1.0,
+   "rho_symbol_nonyquist": 0.9999623509195723,
+   "sigma_min_symbol": 0.0,
+   "sigma_min": 6.287446186297634e-15,
+   "sigma_min_note": "min over Fourier modes",
+   "fourier_max": 0.9983070024985342,
+   "comm": 3.4280414187834475e-07
+  },
+  "gs": {
+   "m": 1,
+   "zero": 0.0,
+   "rho2": 1.023154298798439,
+   "rhoA": 0.99898310675845,
+   "rho2_macro": 1.023154298798439,
+   "rhoA_macro": 0.99898310675845,
+   "rho_spec": 0.9999216905539966,
+   "sigma_min": 0.0,
+   "sigma_min_note": "unit error at the first grid point",
+   "comm": 0.004575516744829148
+  }
+ }
+}

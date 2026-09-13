@@ -1,7 +1,8 @@
 """Figures for the cost-aware wall-clock study.
 
   paper/neurips_images/ca_deeponet_predictions.png   corrector one-shot predictions
-  paper/neurips_images/ca_router_usage.png           corrector-call frequency vs iteration
+  paper/neurips_images/ca_router_usage.png           corrector-call frequency vs iteration (128^2, all equations)
+  paper/neurips_images/ca_usage_<eq>.png             corrector-call frequency vs iteration, rows = grids
   paper/neurips_images/ca_router_decisions_<eq>.png  decision rasters across test instances
   paper/neurips_images/ca_convergence.png            error vs wall-clock time, representative instances
 """
@@ -131,6 +132,47 @@ def fig_usage(R, T=60):
     plt.close(fig)
 
 
+def fig_usage_grids(R, T=60):
+    """Per equation: corrector-call frequency vs iteration, rows = grids, cols = pairings
+    (router / cost-aware oracle / HINTS-25), from the untimed traces of all test instances."""
+    U = load_usage()
+    order = SOLVER_ORDER + ["mg"]
+    names = dict(SOLVER_NAMES, mg="Multigrid")
+    for eq in EQS:
+        Ns = sorted(set(k[1] for k in R if k[0] == eq and not k[3]))
+        specs = [s for s in order if any(k[0] == eq and k[2] == s and not k[3] for k in R)]
+        if not Ns or not specs:
+            continue
+        fig, axes = plt.subplots(len(Ns), len(specs), figsize=(2.2 * len(specs), 1.9 * len(Ns)), sharex=True, sharey=True, squeeze=False)
+        for ni, N in enumerate(Ns):
+            for si, spec in enumerate(specs):
+                ax = axes[ni, si]
+                k = [k for k in R if k[0] == eq and k[1] == N and k[2] == spec and not k[3]]
+                if not k:
+                    ax.axis("off")
+                    continue
+                g = R[k[0]][1]
+                for pol, lab, st in [("router", "learned router", "-"), ("oracle", "cost-aware oracle", "--"),
+                                     ("hints25", "HINTS ($\\tau{=}25$)", ":")]:
+                    if (eq, N, spec) in U and pol in U[(eq, N, spec)]["policies"]:
+                        seqs = [np.asarray(s_) for s_ in U[(eq, N, spec)]["policies"][pol]]
+                    else:
+                        seqs = [np.asarray(cv["op"]) for cv in g["curves"].get(pol, [])]
+                    K_no = len(g["ops"]) - 1
+                    if seqs:
+                        ax.plot(np.arange(1, T + 1), usage_curve(seqs, T, K_no), st, lw=1.3, label=lab)
+                ax.set_title(f"${N}^2$, {names[spec]}")
+                if ni == len(Ns) - 1:
+                    ax.set_xlabel("iteration")
+                if si == 0:
+                    ax.set_ylabel("fraction of runs\ncalling the corrector")
+        axes[0, 0].legend(loc="upper right")
+        fig.suptitle(f"{EQ_NAMES[eq]}: corrector usage of the learned router, the cost-aware oracle and HINTS", y=1.01)
+        fig.tight_layout()
+        fig.savefig(f"{OUT}/ca_usage_{eq.lower()}.png", bbox_inches="tight")
+        plt.close(fig)
+
+
 def fig_decisions(R, T=60):
     U = load_usage()
     specs = [s for s in SOLVER_ORDER if any(k[2] == s and not k[3] for k in R)]
@@ -206,6 +248,7 @@ if __name__ == "__main__":
         fig_predictions()
     if "usage" in which and R:
         fig_usage(R)
+        fig_usage_grids(R)
     if "dec" in which and R:
         fig_decisions(R)
     if "conv" in which and R:

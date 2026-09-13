@@ -1,13 +1,22 @@
 """Generate the LaTeX tables of the cost-aware wall-clock study from
-results/*.json (written by bench.py) into paper/costaware_tables.tex.
+results/*.json (written by bench.py, bench_baselines.py, bench_seeds.py,
+check_assumptions.py) into paper/costaware_tables.tex.
 
-Macros:
-  \\cawcmain          time to eps = h^2, all solvers x both PDEs (pairwise)
-  \\cawctol<eq>       tolerance sweep per solver (appendix)
-  \\caauc             AUC / final error over T iterations (paper-style)
-  \\causage           corrector-call counts and iteration counts
-  \\caens             ensemble results
-  \\cacosts           measured per-iteration costs and macro sizes
+Per equation <eq> in {poisson, conv, aniso} (all grids side by side):
+  \\catime<eq>     time to 1e-3 / h^2 / 1e-8 for every pairing and policy, plus the
+                   classical baselines (multigrid, Krylov) -- one consolidated table
+  \\caspeed<eq>    paired median speedup of the router with one-sided Wilcoxon p-values
+  \\causage<eq>    iterations and corrector calls to h^2
+  \\cacosts<eq>    measured per-iteration costs and macro-action sizes
+  \\caauc<eq>      iteration-based metrics (AUC / final error over T iterations), 128^2
+  \\caseeds<eq>    five-seed router retraining trials, 128^2
+Cross-equation:
+  \\camainall      main-text table: HINTS / best tau / router at h^2 on all grids
+  \\caensnest      nested ensembles {J} c {J, dJ} c {J, dJ, GS} (monotonicity / separation)
+  \\caens, \\caensusage, \\caensbig   earlier ensemble runs (128^2)
+  \\caoverheads, \\caamort           per-operation costs vs N, training amortisation
+  \\caassump, \\caassumpB            verification of the theory assumptions
+plus summary macros (\\caSp..., \\caNumCells..., \\caEns...) used in the text.
 """
 
 import glob
@@ -20,27 +29,34 @@ import numpy as np
 from scipy.stats import ttest_rel, wilcoxon
 
 SOLVER_NAMES = {"jacobi": "Jacobi", "jacobi_0.67": "Jacobi (0.67)", "gs": "GS",
-                "ssor": "SymGS", "sor_1.5": "SOR (1.5)"}
+                "ssor": "SymGS", "sor_1.5": "SOR (1.5)", "mg": "Multigrid"}
 SOLVER_ORDER = ["jacobi", "jacobi_0.67", "gs", "ssor", "sor_1.5"]
-POL_NAMES = {"classical": "Solver only", "hints25": "HINTS ($\\tau{=}25$)",
+PAIRINGS = SOLVER_ORDER + ["mg"]
+POL_NAMES = {"classical": "Solver only", "hints25": "HINTS ($\\tau{=}25$)", "best": "HINTS (best $\\tau$)",
              "hints5": "HINTS ($\\tau{=}5$)", "hints10": "HINTS ($\\tau{=}10$)",
              "hints50": "HINTS ($\\tau{=}50$)", "greedy": "Greedy oracle (Alg.~1)",
              "oracle": "Cost-aware oracle", "router": "Learned router (ours)"}
 EQS = ["Poisson", "ConvDiff", "AnisoDiff"]
-EQ_NAMES = {"Poisson": "Poisson", "ConvDiff": "ConvDiff", "AnisoDiff": "AnisoDiff"}
-
+EQ_SUF = {"Poisson": "poisson", "ConvDiff": "conv", "AnisoDiff": "aniso"}
+EQ_NAMES = {"Poisson": "Poisson", "ConvDiff": "Convection--diffusion", "AnisoDiff": "Anisotropic diffusion"}
+BASE_NAMES = {"mg": "Multigrid V(2,2) alone", "cg": "CG", "pcg_ssor": "PCG (SymGS)", "pcg_mg": "PCG (multigrid)",
+              "bicgstab": "BiCGSTAB", "bicgstab_mg": "BiCGSTAB (multigrid)", "gmres": "GMRES(20)"}
+BASE_ORDER = ["mg", "cg", "bicgstab", "pcg_ssor", "pcg_mg", "bicgstab_mg", "gmres"]
+NS = [128, 256, 512]
+GRID_SUF = {128: "", 256: "B", 512: "C"}
 
 RESULTS_DIR = os.environ.get("RESULTS_DIR", "results")
-MAIN_N = int(os.environ.get("MAIN_N", "128"))  # grid of the main / per-tolerance / significance tables
+MAIN_N = int(os.environ.get("MAIN_N", "128"))
 OUT_TEX = os.environ.get("OUT_TEX", "paper/costaware_tables.tex")
 
 
+# ----------------------------------------------------------------- loading
 def load(pattern=None):
     pattern = pattern or f"{RESULTS_DIR}/*.json"
     R = {}
     for path in sorted(glob.glob(pattern)):
         d = json.load(open(path))
-        if "args" not in d or "ensemble" not in d["args"]:  # usage/seeds/overheads files, not benchmark output
+        if "args" not in d or "ensemble" not in d["args"]:
             continue
         a = d["args"]
         for gkey, g in d["groups"].items():
@@ -64,9 +80,8 @@ def iters(rows, key):
 
 
 def times_lb(rows, key, field="t_live"):
-    """Like times(), but a censored run (tolerance not reached within the iteration cap)
-    enters at the time it spent up to the cap, a lower bound on its true time-to-tolerance.
-    Used for the *baseline* side of the paired tests, where it is conservative."""
+    """Censored runs enter at the time spent up to the iteration cap (a lower bound;
+    conservative on the baseline side of a paired test)."""
     tot = "t_total_live" if field == "t_live" else "t_total_wu"
     return np.array([r[tot] if r["tol"][key][field] is None else r["tol"][key][field] for r in rows])
 
@@ -92,369 +107,592 @@ def paired_speedup(base, ours):
     return float(np.median(r)), r
 
 
-def fmt_sp(sp, censored_frac=0.0):
+def fmt_sp(sp):
     if not np.isfinite(sp):
         return "$>10^{3}\\times$"
     if sp >= 100:
-        s = f"{sp:.0f}$\\times$"
-    elif sp >= 10:
-        s = f"{sp:.1f}$\\times$"
+        return f"{sp:.0f}$\\times$"
+    if sp >= 10:
+        return f"{sp:.1f}$\\times$"
+    return f"{sp:.2f}$\\times$"
+
+
+def wilcoxon_p(base, ours):
+    """One-sided paired Wilcoxon on log ratios (alternative: ours faster), censoring-aware."""
+    _, r = paired_speedup(base, ours)
+    ok = np.isfinite(r) & (r > 0)
+    if ok.sum() < 8 or np.allclose(r[ok], 1.0):
+        return 1.0
+    return float(wilcoxon(np.log(r[ok]), alternative="greater").pvalue)
+
+
+def ttest_p(base, ours):
+    ok = np.isfinite(base) & np.isfinite(ours)
+    if ok.sum() < 8 or np.allclose(base[ok], ours[ok]):
+        return 1.0
+    return float(ttest_rel(np.log(base[ok]), np.log(ours[ok]), alternative="greater").pvalue)
+
+
+def pstr(pv):
+    if pv < 1e-10:
+        return "$<10^{-10}$"
+    if pv < 1e-3:
+        return f"$10^{{{int(np.floor(np.log10(pv)))}}}$"
+    return f"{pv:.3f}"
+
+
+def time_cell(rows, key, bold=False, italic=False):
+    """Median time with censoring marks; majority-censored -> lower bound."""
+    ts = times(rows, key)
+    cens = int((~np.isfinite(ts)).sum())
+    if cens > len(ts) / 2:
+        cap = np.median([r.get("t_total_live", np.nan) for r in rows])
+        s = f"$>${fmt_time(cap)}$^{{\\dagger {cens}}}$" if np.isfinite(cap) else "--"
     else:
-        s = f"{sp:.2f}$\\times$"
+        s = fmt_time(np.median(ts)) + (f"$^{{\\dagger {cens}}}$" if cens else "")
+    if bold:
+        s = f"\\textbf{{{s}}}"
+    if italic:
+        s = f"\\textit{{{s}}}"
     return s
 
 
-def pval_str(p):
-    if p < 1e-3:
-        return "$<10^{-3}$"
-    return f"{p:.3f}"
+def sp_cell(base, ours, bold_thresh=1.10):
+    """'speedup (p)' with the one-sided p-value in the direction of the median."""
+    sp, _ = paired_speedup(base, ours)
+    if sp >= 1.0:
+        p = wilcoxon_p(base, ours)
+        s = f"{fmt_sp(sp)} ({pstr(p)})"
+        if sp >= bold_thresh and p < 0.01:
+            s = f"\\textbf{{{s}}}"
+    else:
+        p = wilcoxon_p(ours, base)
+        s = f"{fmt_sp(sp)} (slower, {pstr(p)})"
+    return s
 
 
-def cell_time(rows, base_rows, key, bold=False):
-    ts = times(rows, key)
-    tb = times(base_rows, key)
-    med = np.median(ts)
-    cens = int((~np.isfinite(ts)).sum())
-    if cens > len(ts) / 2:
-        # majority censored: report the (median) time spent up to the iteration cap as a lower bound
-        cap = np.median([r.get("t_total_live", np.nan) for r in rows])
-        return f"$>${fmt_time(cap)}$^{{\\dagger {cens}}}$" if np.isfinite(cap) else "--"
-    sp, _ = paired_speedup(tb, ts)
-    s = fmt_time(med)
-    if rows is not base_rows:
-        s += f" ({fmt_sp(sp)})"
-    if cens:
-        s += f"$^{{\\dagger {cens}}}$"
-    return f"\\textbf{{{s}}}" if bold else s
-
-
-def rng_macro(name, vals):
+def rng_macro(out, name, vals):
     vals = [v for v in vals if np.isfinite(v)]
     if not vals:
         return
-    lo, hi = min(vals), max(vals)
-    OUT.append(f"\\newcommand{{\\{name}Min}}{{{fmt_sp(lo)}}}")
-    OUT.append(f"\\newcommand{{\\{name}Max}}{{{fmt_sp(hi)}}}")
+    out.append(f"\\newcommand{{\\{name}Min}}{{{fmt_sp(min(vals))}}}")
+    out.append(f"\\newcommand{{\\{name}Max}}{{{fmt_sp(max(vals))}}}")
 
 
+def pending(out, name, msg="results pending"):
+    out.append(f"\\newcommand{{\\{name}}}{{\\begin{{tabular}}{{c}}({msg})\\end{{tabular}}}}")
+
+
+# ------------------------------------------------------------------- main
 def main():
-    global OUT
     R = load()
-    out = OUT = []
-    N = None
+    out = []
+    Bf = {}
+    for path in sorted(glob.glob(f"{RESULTS_DIR}/baselines_*.json")):
+        d = json.load(open(path))
+        Bf[(d["args"]["equation"], d["args"]["N"])] = d
+    Sf = {}
+    for path in sorted(glob.glob(f"{RESULTS_DIR}/seeds_*.json")):
+        d = json.load(open(path))
+        Sf[(d["args"]["equation"], d["args"]["N"])] = d
 
-    def grid_tables(N_, SUF):
-        """All per-grid tables (main, vs-HINTS, tolerance sweeps, AUC, usage, costs, summary macros)."""
-        # ------------------------------------------------------------ main table
-        out.append("\\newcommand{\\cawcmain" + SUF + "}{")
-        out.append("\\begin{tabular}{llcccccc}\n\\toprule")
-        out.append("Equation & Solver & Solver only & HINTS ($\\tau{=}25$) & HINTS (best $\\tau$) & "
-                   "Greedy oracle & Cost-aware oracle & Learned router (ours) \\\\ \\midrule")
-        for eq in EQS:
-            first = True
-            for spec in SOLVER_ORDER:
-                keys = [k for k in R if k[0] == eq and k[1] == N_ and k[2] == spec and not k[3]]
-                if not keys:
-                    continue
-                d, g = R[keys[0]]
-                N = keys[0][1]
-                key = tkey(d, d["h2"])
-                P = g["policies"]
-                base = P["classical"]
-                # best fixed tau by median time
-                taus = [p for p in P if p.startswith("hints")]
-                best_tau = min(taus, key=lambda p: np.median(times(P[p], key)))
-                # deployable comparison: router vs every HINTS and classical
-                t_r = times(P["router"], key)
-                best_dep = "router"
-                for p in taus + ["classical"]:
-                    if np.median(times(P[p], key)) < np.median(t_r):
-                        best_dep = p
-                row = [eq if first else "", SOLVER_NAMES[spec],
-                       cell_time(base, base, key),
-                       cell_time(P["hints25"], base, key, bold=(best_dep == "hints25")),
-                       cell_time(P[best_tau], base, key, bold=(best_dep == best_tau)).replace(
-                           ")", f"; $\\tau{{=}}{best_tau[5:]}$)", 1),
-                       cell_time(P["greedy"], base, key) if "greedy" in P else "--",
-                       "\\textit{" + cell_time(P["oracle"], base, key) + "}",
-                       cell_time(P["router"], base, key, bold=(best_dep == "router"))]
-                out.append(" & ".join(row) + " \\\\")
-                first = False
-            if eq != EQS[-1] and any(k[0] == EQS[EQS.index(eq)+1] for k in R):
-                out.append("\\midrule")
-        out.append("\\bottomrule\n\\end{tabular}}")
+    def cell(eq, N, spec):
+        k = [q for q in R if q[0] == eq and q[1] == N and q[2] == spec and not q[3]]
+        return R[k[0]] if k else None
 
-        # -------------------------------------------- router vs HINTS speedup table
-        out.append("\\newcommand{\\cavshints" + SUF + "}{")
-        out.append("\\begin{tabular}{llcccccc}\n\\toprule")
-        out.append("& & \\multicolumn{3}{c}{vs.\\ HINTS ($\\tau{=}25$)} & \\multicolumn{3}{c}{vs.\\ best fixed $\\tau$} \\\\")
-        out.append("\\cmidrule(lr){3-5}\\cmidrule(lr){6-8}")
-        out.append("Equation & Solver & $\\varepsilon{=}10^{-3}$ & $\\varepsilon{=}h^2$ & $\\varepsilon{=}10^{-8}$ & "
-                   "$\\varepsilon{=}10^{-3}$ & $\\varepsilon{=}h^2$ & $\\varepsilon{=}10^{-8}$ \\\\ \\midrule")
-        for eq in EQS:
-            first = True
-            for spec in SOLVER_ORDER:
-                keys = [k for k in R if k[0] == eq and k[1] == N_ and k[2] == spec and not k[3]]
-                if not keys:
-                    continue
-                d, g = R[keys[0]]
-                P = g["policies"]
-                taus = [p for p in P if p.startswith("hints")]
-                cells = []
-                for ref in ["hints25", "best"]:
+    def base_times(d, m, tol):
+        key = tkey(d, tol)
+        return np.array([np.inf if r["tol"][key]["t_live"] is None else r["tol"][key]["t_live"] for r in d["methods"][m]])
+
+    def base_rows_present(eq, N):
+        d = Bf.get((eq, N))
+        return [m for m in BASE_ORDER if d and m in d["methods"] and d["methods"][m]]
+
+    def best_tau(P, key):
+        taus = [p for p in P if p.startswith("hints")]
+        return min(taus, key=lambda p: np.median(times(P[p], key)))
+
+    def kry_name(eq):
+        return "pcg_mg" if eq in ("Poisson", "AnisoDiff") else "bicgstab_mg"
+
+    grids = {eq: [N for N in NS if any(cell(eq, N, s) for s in PAIRINGS)] for eq in EQS}
+
+    # ================================================================ per-equation tables
+    for eq in EQS:
+        suf = EQ_SUF[eq]
+        Ns = grids[eq]
+        if not Ns:
+            for name in ["catime", "caspeed", "causage", "cacosts", "caauc", "caseeds"]:
+                pending(out, name + suf)
+            continue
+        tols_lab = ["$10^{-3}$", "$h^2$", "$10^{-8}$"]
+
+        # ---------------------------------------------------------- consolidated times
+        out.append(f"\\newcommand{{\\catime{suf}}}{{")
+        out.append("\\begin{tabular}{ll" + "ccc" * len(Ns) + "}\n\\toprule")
+        out.append("& & " + " & ".join(f"\\multicolumn{{3}}{{c}}{{${N}\\times{N}$}}" for N in Ns) + " \\\\ "
+                   + "".join(f"\\cmidrule(lr){{{3+3*i}-{5+3*i}}}" for i in range(len(Ns))))
+        out.append("Pairing & Method & " + " & ".join(" & ".join(f"$\\varepsilon{{=}}{t[1:-1]}$" for t in tols_lab) for _ in Ns) + " \\\\ \\midrule")
+        n_col = 2 + 3 * len(Ns)
+        for spec in PAIRINGS:
+            have = {N: cell(eq, N, spec) for N in Ns}
+            if not any(have.values()):
+                continue
+            pols = ["classical", "hints25", "best", "greedy", "oracle", "router"]
+            for pi, pol in enumerate(pols):
+                row = [f"$\\{{\\mathrm{{NO}}, \\text{{{SOLVER_NAMES[spec]}}}\\}}$" if pi == 0 else "", POL_NAMES[pol]]
+                for N in Ns:
+                    dg = have[N]
+                    if dg is None:
+                        row += ["--"] * 3
+                        continue
+                    d, g = dg
+                    P = g["policies"]
                     for tol in [1e-3, d["h2"], 1e-8]:
                         key = tkey(d, tol)
-                        t_r = times(P["router"], key)
-                        if ref == "best":
-                            bt = min(taus, key=lambda p: np.median(times(P[p], key)))
-                            t_h = times(P[bt], key)
-                            lab = f" ($\\tau{{=}}{bt[5:]}$)"
+                        if pol == "best":
+                            bt = best_tau(P, key)
+                            row.append(time_cell(P[bt], key) + f"$_{{\\tau{{=}}{bt[5:]}}}$")
+                        elif pol in P:
+                            t_r = np.median(times(P["router"], key))
+                            comp = [np.median(times(P[p_], key)) for p_ in P if p_.startswith("hints") or p_ == "classical"]
+                            bold = pol == "router" and all(t_r <= c_ for c_ in comp)
+                            row.append(time_cell(P[pol], key, bold=bold, italic=(pol == "oracle")))
                         else:
-                            t_h = times(P["hints25"], key)
-                            lab = ""
-                        sp, r = paired_speedup(t_h, t_r)
-                        ok = np.isfinite(r) & (r > 0)
-                        p = wilcoxon(np.log(r[ok]), alternative="greater").pvalue if ok.sum() >= 8 and not np.allclose(r[ok], 1.0) else 1.0
-                        s = fmt_sp(sp) + lab
-                        if sp >= 1.10 and p < 0.01:
-                            s = f"\\textbf{{{s}}}"
-                        cells.append(s)
-                out.append(" & ".join([eq if first else "", SOLVER_NAMES[spec]] + cells) + " \\\\")
-                first = False
-            if eq != EQS[-1] and any(k[0] == EQS[EQS.index(eq)+1] for k in R):
-                out.append("\\midrule")
+                            row.append("--")
+                out.append(" & ".join(row) + " \\\\")
+            out.append("\\midrule")
+        bases = sorted(set(m for N in Ns for m in base_rows_present(eq, N)), key=BASE_ORDER.index)
+        if bases:
+            out.append(f"\\multicolumn{{{n_col}}}{{l}}{{\\emph{{Classical baselines without corrector (same stencil, same accounting)}}}} \\\\ \\midrule")
+            for m in bases:
+                row = ["", BASE_NAMES[m]]
+                for N in Ns:
+                    d = Bf.get((eq, N))
+                    if d is None or m not in d["methods"] or not d["methods"][m]:
+                        row += ["--"] * 3
+                        continue
+                    for tol in [1e-3, d["h2"], 1e-8]:
+                        ts = base_times(d, m, tol)
+                        cens = int((~np.isfinite(ts)).sum())
+                        row.append(fmt_time(np.median(ts)) + (f"$^{{\\dagger {cens}}}$" if cens else ""))
+                out.append(" & ".join(row) + " \\\\")
+            out.append("\\midrule")
+        out[-1] = "\\bottomrule\n\\end{tabular}}"
+
+        # ---------------------------------------------------------- speedups with p-values
+        out.append(f"\\newcommand{{\\caspeed{suf}}}{{")
+        out.append("\\begin{tabular}{ll" + "cccc" * len(Ns) + "}\n\\toprule")
+        out.append("& & " + " & ".join(f"\\multicolumn{{4}}{{c}}{{${N}\\times{N}$}}" for N in Ns) + " \\\\ "
+                   + "".join(f"\\cmidrule(lr){{{3+4*i}-{6+4*i}}}" for i in range(len(Ns))))
+        out.append("Pairing & $\\varepsilon$ & " + " & ".join("vs.\\ HINTS-25 & vs.\\ best $\\tau$ & vs.\\ multigrid & vs.\\ MG-Krylov" for _ in Ns) + " \\\\ \\midrule")
+        for spec in PAIRINGS:
+            have = {N: cell(eq, N, spec) for N in Ns}
+            if not any(have.values()):
+                continue
+            for ti, (tol_f, tlab) in enumerate([("h2", "$h^2$"), (1e-8, "$10^{-8}$")]):
+                row = [f"$\\{{\\mathrm{{NO}}, \\text{{{SOLVER_NAMES[spec]}}}\\}}$" if ti == 0 else "", tlab]
+                for N in Ns:
+                    dg = have[N]
+                    if dg is None:
+                        row += ["--"] * 4
+                        continue
+                    d, g = dg
+                    P = g["policies"]
+                    tol = d["h2"] if tol_f == "h2" else tol_f
+                    key = tkey(d, tol)
+                    t_r = times(P["router"], key)
+                    row.append(sp_cell(times_lb(P["hints25"], key), t_r))
+                    row.append(sp_cell(times_lb(P[best_tau(P, key)], key), t_r))
+                    db = Bf.get((eq, N))
+                    for m in ["mg", kry_name(eq)]:
+                        if db is not None and m in db["methods"] and db["methods"][m]:
+                            row.append(sp_cell(base_times(db, m, tol), t_r))
+                        else:
+                            row.append("--")
+                out.append(" & ".join(row) + " \\\\")
         out.append("\\bottomrule\n\\end{tabular}}")
 
-        # ----------------------------------------------------- tolerance sweeps
-        for eq in EQS:
-            out.append(f"\\newcommand{{\\cawctol{eq.lower().replace('diff','')}{SUF}}}{{")
-            out.append("\\begin{tabular}{llcccccc}\n\\toprule")
-            out.append("Solver & Method & $\\varepsilon{=}10^{-2}$ & $\\varepsilon{=}10^{-3}$ & $\\varepsilon{=}h^2$ & "
-                       "$\\varepsilon{=}10^{-5}$ & $\\varepsilon{=}10^{-6}$ & $\\varepsilon{=}10^{-8}$ \\\\ \\midrule")
-            for spec in SOLVER_ORDER:
-                keys = [k for k in R if k[0] == eq and k[1] == N_ and k[2] == spec and not k[3]]
-                if not keys:
-                    continue
-                d, g = R[keys[0]]
-                P = g["policies"]
-                base = P["classical"]
-                pols = ["classical", "hints25", "hints10", "hints5", "hints50", "greedy", "oracle", "router"]
-                for pi, pol in enumerate(pols):
-                    if pol not in P:
-                        continue
-                    row = [SOLVER_NAMES[spec] if pi == 0 else "", POL_NAMES[pol]]
-                    for tol in [1e-2, 1e-3, d["h2"], 1e-5, 1e-6, 1e-8]:
-                        key = tkey(d, tol)
-                        row.append(cell_time(P[pol], base, key))
-                    if pol == "oracle":
-                        row = [row[0]] + [f"\\textit{{{c}}}" for c in row[1:]]
-                    out.append(" & ".join(row) + " \\\\")
-                out.append("\\midrule" if spec != SOLVER_ORDER[-1] else "\\bottomrule")
-            out.append("\\end{tabular}}")
-
-        # ------------------------------------------- AUC / final error (paper style)
-        T = None
-        eqs_present = [eq for eq in EQS if any(k[0] == eq and not k[3] for k in R)]
-        out.append("\\newcommand{\\caauc" + SUF + "}{")
-        out.append("\\begin{tabular}{l" + "ccc" * len(eqs_present) + "}\n\\toprule")
-        out.append("& " + " & ".join(f"\\multicolumn{{3}}{{c}}{{{EQ_NAMES[eq]}}}" for eq in eqs_present) + " \\\\ "
-                   + "".join(f"\\cmidrule(lr){{{2+3*i}-{4+3*i}}}" for i in range(len(eqs_present))))
-        out.append("Method & " + " & ".join("$\\|e^{(T)}_h\\|/\\|u_h\\|$ & AUC & $p$" for _ in eqs_present) + " \\\\ \\midrule")
-        for spec in SOLVER_ORDER:
-            have = [(eq, R[[k for k in R if k[0] == eq and k[1] == N_ and k[2] == spec and not k[3]][0]])
-                    for eq in EQS if [k for k in R if k[0] == eq and k[1] == N_ and k[2] == spec and not k[3]]]
-            if not have:
+        # ---------------------------------------------------------- usage
+        out.append(f"\\newcommand{{\\causage{suf}}}{{")
+        out.append("\\begin{tabular}{l" + "ccc" * len(Ns) + "}\n\\toprule")
+        out.append("& " + " & ".join(f"\\multicolumn{{3}}{{c}}{{${N}\\times{N}$}}" for N in Ns) + " \\\\ "
+                   + "".join(f"\\cmidrule(lr){{{2+3*i}-{4+3*i}}}" for i in range(len(Ns))))
+        out.append("Pairing & " + " & ".join("HINTS-25 & oracle & router" for _ in Ns) + " \\\\ \\midrule")
+        for spec in PAIRINGS:
+            have = {N: cell(eq, N, spec) for N in Ns}
+            if not any(have.values()):
                 continue
-            T = have[0][1][0]["args"]["T"]
-            out.append(f"\\multicolumn{{{1+3*len(eqs_present)}}}{{c}}{{{SOLVER_NAMES[spec]}-related solvers}} \\\\ \\midrule")
-            for pol in ["classical", "hints25", "router", "oracle"]:
-                row = [POL_NAMES[pol]]
-                for eq in eqs_present:
-                    m = dict(have).get(eq)
-                    if m is None:
-                        row += ["--", "--", "--"]
-                        continue
-                    d, g = m
-                    P = g["policies"]
-                    if pol not in P:
-                        row += ["--", "--", "--"]
-                        continue
-                    err = np.array([r["err_T"] for r in P[pol]])
-                    auc = np.array([r["auc_T"] for r in P[pol]])
-                    auc_r = np.array([r["auc_T"] for r in P["router"]])
-                    def ms(x):
-                        med = np.mean(x)
-                        se = np.std(x, ddof=1) / math.sqrt(len(x))
-                        return f"{med:.2e} ({se:.1e})"
-                    bold = pol == "router" and all(np.mean(auc) <= np.mean(np.array([r["auc_T"] for r in P[q]]))
-                                                    for q in ["classical", "hints25"])
-                    cells = [ms(err), ms(auc)]
-                    if pol in ("classical", "hints25"):
-                        p = ttest_rel(auc, auc_r, alternative="greater").pvalue if not np.allclose(auc, auc_r) else 1.0
-                        cells.append(pval_str(p))
-                    else:
-                        cells.append("-")
-                    if bold:
-                        cells = [f"\\textbf{{{c}}}" for c in cells[:2]] + cells[2:]
-                    if pol == "oracle":
-                        cells = [f"\\textit{{{c}}}" for c in cells]
-                    row += cells
-                out.append(" & ".join(row) + " \\\\")
-            out.append("\\midrule" if spec != SOLVER_ORDER[-1] else "\\bottomrule")
-        out.append("\\end{tabular}}")
-        if SUF == "":
-            out.append(f"\\newcommand{{\\caT}}{{{T}}}")
-            out.append(f"\\newcommand{{\\caN}}{{{N}}}")
-
-        # ------------------------------------------------ usage / iteration counts
-        out.append("\\newcommand{\\causage" + SUF + "}{")
-        out.append("\\begin{tabular}{llcccccc}\n\\toprule")
-        out.append("& & \\multicolumn{2}{c}{HINTS ($\\tau{=}25$)} & \\multicolumn{2}{c}{Cost-aware oracle} & "
-                   "\\multicolumn{2}{c}{Learned router} \\\\")
-        out.append("\\cmidrule(lr){3-4}\\cmidrule(lr){5-6}\\cmidrule(lr){7-8}")
-        out.append("Equation & Solver & iters & NO calls & iters & NO calls & iters & NO calls \\\\ \\midrule")
-        for eq in EQS:
-            first = True
-            for spec in SOLVER_ORDER:
-                keys = [k for k in R if k[0] == eq and k[1] == N_ and k[2] == spec and not k[3]]
-                if not keys:
+            row = [f"$\\{{\\mathrm{{NO}}, \\text{{{SOLVER_NAMES[spec]}}}\\}}$"]
+            for N in Ns:
+                dg = have[N]
+                if dg is None:
+                    row += ["--"] * 3
                     continue
-                d, g = R[keys[0]]
+                d, g = dg
                 key = tkey(d, d["h2"])
                 P = g["policies"]
-                cells = []
                 for pol in ["hints25", "oracle", "router"]:
                     it = iters(P[pol], key)
                     nno = np.array([np.nan if r["tol"][key]["no_calls"] is None else r["tol"][key]["no_calls"] for r in P[pol]])
-                    cells += [f"{np.median(it):.0f}", f"{np.nanmedian(nno):.0f}"]
-                out.append(" & ".join([eq if first else "", SOLVER_NAMES[spec]] + cells) + " \\\\")
-                first = False
-            if eq != EQS[-1] and any(k[0] == EQS[EQS.index(eq)+1] for k in R):
-                out.append("\\midrule")
+                    row.append(f"{np.median(it):.0f} ({np.nanmedian(nno):.0f})" if np.isfinite(np.median(it)) else "--")
+            out.append(" & ".join(row) + " \\\\")
         out.append("\\bottomrule\n\\end{tabular}}")
 
-        # ------------------------------------------------------------- costs
-        out.append("\\newcommand{\\cacosts" + SUF + "}{")
-        out.append("\\begin{tabular}{llcccc}\n\\toprule")
-        out.append("Equation & Solver & classical iteration & corrector iteration & $m_{\\text{solver}}$ & $m_{\\text{NO}}$ \\\\ \\midrule")
-        for eq in EQS:
-            first = True
-            for spec in SOLVER_ORDER:
-                keys = [k for k in R if k[0] == eq and k[1] == N_ and k[2] == spec and not k[3]]
-                if not keys:
+        # ---------------------------------------------------------- costs
+        out.append(f"\\newcommand{{\\cacosts{suf}}}{{")
+        out.append("\\begin{tabular}{l" + "ccc" * len(Ns) + "}\n\\toprule")
+        out.append("& " + " & ".join(f"\\multicolumn{{3}}{{c}}{{${N}\\times{N}$}}" for N in Ns) + " \\\\ "
+                   + "".join(f"\\cmidrule(lr){{{2+3*i}-{4+3*i}}}" for i in range(len(Ns))))
+        out.append("Pairing & " + " & ".join("$c_{\\text{solver}}$ & $c_{\\mathrm{NO}}$ & $m_{\\text{solver}}$" for _ in Ns) + " \\\\ \\midrule")
+        for spec in PAIRINGS:
+            have = {N: cell(eq, N, spec) for N in Ns}
+            if not any(have.values()):
+                continue
+            row = [f"$\\{{\\mathrm{{NO}}, \\text{{{SOLVER_NAMES[spec]}}}\\}}$"]
+            for N in Ns:
+                dg = have[N]
+                if dg is None:
+                    row += ["--"] * 3
                     continue
-                d, g = R[keys[0]]
+                d, g = dg
                 c = g["costs"]
-                out.append(" & ".join([eq if first else "", SOLVER_NAMES[spec], f"{c[spec]*1e6:.0f}\\,$\\mu$s",
-                                       f"{c['no']*1e6:.0f}\\,$\\mu$s", str(g["m"][0]), str(g["m"][-1])]) + " \\\\")
-                first = False
-            if eq != EQS[-1] and any(k[0] == EQS[EQS.index(eq)+1] for k in R):
-                out.append("\\midrule")
+                row += [fmt_time(c[spec]), fmt_time(c["no"]), str(g["m"][0])]
+            out.append(" & ".join(row) + " \\\\")
         out.append("\\bottomrule\n\\end{tabular}}")
 
-        # ------------------------------------------ summary macros for the text
+        # ---------------------------------------------------------- iteration metrics (128^2)
+        out.append(f"\\newcommand{{\\caauc{suf}}}{{")
+        out.append("\\begin{tabular}{lccc}\n\\toprule")
+        out.append("Method & $\\|e^{(T)}_h\\|/\\|u_h\\|$ & AUC & $p$ \\\\ \\midrule")
+        T = None
+        for spec in SOLVER_ORDER:
+            dg = cell(eq, MAIN_N, spec)
+            if dg is None:
+                continue
+            d, g = dg
+            T = d["args"]["T"]
+            P = g["policies"]
+            out.append(f"\\multicolumn{{4}}{{c}}{{$\\{{\\mathrm{{NO}}, \\text{{{SOLVER_NAMES[spec]}}}\\}}$}} \\\\ \\midrule")
+            auc_r = np.array([r["auc_T"] for r in P["router"]])
+            for pol in ["classical", "hints25", "router", "oracle"]:
+                err = np.array([r["err_T"] for r in P[pol]])
+                auc = np.array([r["auc_T"] for r in P[pol]])
 
-        summ = {"Solver": [], "Hints": [], "Best": [], "SolverDeep": [], "HintsDeep": [], "BestDeep": [],
-                "OracleRatio": []}
+                def ms(x):
+                    return f"{np.mean(x):.2e} ({np.std(x, ddof=1) / math.sqrt(len(x)):.1e})"
+                cells = [ms(err), ms(auc)]
+                if pol in ("classical", "hints25"):
+                    p = ttest_p(auc, auc_r) if not np.allclose(auc, auc_r) else 1.0
+                    cells.append(pstr(p))
+                else:
+                    cells.append("-")
+                if pol == "router" and all(np.mean(auc) <= np.mean(np.array([r["auc_T"] for r in P[q]])) for q in ["classical", "hints25"]):
+                    cells = [f"\\textbf{{{c}}}" for c in cells[:2]] + cells[2:]
+                if pol == "oracle":
+                    cells = [f"\\textit{{{c}}}" for c in cells]
+                out.append(" & ".join([POL_NAMES[pol]] + cells) + " \\\\")
+            out.append("\\midrule")
+        out[-1] = "\\bottomrule\n\\end{tabular}}"
+        if eq == "Poisson" and T is not None:
+            out.append(f"\\newcommand{{\\caT}}{{{T}}}")
+            out.append(f"\\newcommand{{\\caN}}{{{MAIN_N}}}")
+
+        # ---------------------------------------------------------- seeds (128^2, work units)
+        sd = Sf.get((eq, MAIN_N))
+        if sd:
+            out.append(f"\\newcommand{{\\caseeds{suf}}}{{")
+            out.append("\\begin{tabular}{lcccc}\n\\toprule")
+            out.append("Pairing & time to $h^2$ over 5 seeds & identical decisions & speedup vs.\\ HINTS-25 & seeds with $p{<}0.01$ \\\\ \\midrule")
+            for spec in SOLVER_ORDER:
+                dg = cell(eq, MAIN_N, spec)
+                if dg is None or spec not in sd["groups"] or not sd["groups"][spec]:
+                    continue
+                d, g = dg
+                P = g["policies"]
+                key = tkey(d, d["h2"])
+                if not all("t_wu" in blk["rows"][0]["tol"][key] for blk in sd["groups"][spec].values()):
+                    continue
+                th = times(P["hints25"], key, field="t_wu")
+                tb = times(P[best_tau(P, key)], key, field="t_wu")
+                it_main = iters(P["router"], key)
+                meds, sps, nsig, agree = [], [], 0, []
+                for s_, blk in sd["groups"][spec].items():
+                    tr_ = np.array([np.inf if r["tol"][key]["t_wu"] is None else r["tol"][key]["t_wu"] for r in blk["rows"]])
+                    it_s = np.array([np.inf if r["tol"][key]["iters"] is None else r["tol"][key]["iters"] for r in blk["rows"]])
+                    meds.append(np.median(tr_))
+                    sps.append(paired_speedup(th, tr_)[0])
+                    agree.append(float(np.mean(it_s == it_main)))
+                    if wilcoxon_p(th, tr_) < 0.01 and wilcoxon_p(tb, tr_) < 0.01:
+                        nsig += 1
+                out.append(" & ".join([f"$\\{{\\mathrm{{NO}}, \\text{{{SOLVER_NAMES[spec]}}}\\}}$",
+                                       f"{np.mean(meds)*1e3:.2f} $\\pm$ {np.std(meds)*1e3:.2f}\\,ms",
+                                       f"{100*np.mean(agree):.0f}\\%", f"{min(sps):.2f}--{max(sps):.2f}$\\times$",
+                                       f"{nsig}/{len(meds)}"]) + " \\\\")
+            out.append("\\bottomrule\n\\end{tabular}}")
+        else:
+            pending(out, "caseeds" + suf)
+
+    # ================================================================ main-text table (all grids)
+    out.append("\\newcommand{\\camainall}{")
+    out.append("\\begin{tabular}{ll" + "ccc" * len(NS) + "}\n\\toprule")
+    out.append("& & " + " & ".join(f"\\multicolumn{{3}}{{c}}{{${N}\\times{N}$}}" for N in NS) + " \\\\ "
+               + "".join(f"\\cmidrule(lr){{{3+3*i}-{5+3*i}}}" for i in range(len(NS))))
+    out.append("Equation & Pairing & " + " & ".join("HINTS-25 & best $\\tau$ & router (ours)" for _ in NS) + " \\\\ \\midrule")
+    for eq in EQS:
+        first = True
+        any_row = False
+        for spec in PAIRINGS:
+            have = {N: cell(eq, N, spec) for N in NS}
+            if not any(have.values()):
+                continue
+            row = [{"Poisson": "Poisson", "ConvDiff": "ConvDiff", "AnisoDiff": "AnisoDiff"}[eq] if first else "", SOLVER_NAMES[spec]]
+            for N in NS:
+                dg = have[N]
+                if dg is None:
+                    row += ["--"] * 3
+                    continue
+                d, g = dg
+                P = g["policies"]
+                key = tkey(d, d["h2"])
+                t_r = times(P["router"], key)
+                bt = best_tau(P, key)
+                sp_h = paired_speedup(times(P["hints25"], key), t_r)[0]
+                sp_b = paired_speedup(times(P[bt], key), t_r)[0]
+                row.append(time_cell(P["hints25"], key))
+                row.append(time_cell(P[bt], key) + f"$_{{\\tau{{=}}{bt[5:]}}}$")
+                rc = time_cell(P["router"], key, bold=(sp_h >= 1 and sp_b >= 1))
+                row.append(rc + f" ({fmt_sp(sp_h)}\\,/\\,{fmt_sp(sp_b)})")
+            out.append(" & ".join(row) + " \\\\")
+            first = False
+            any_row = True
+        # classical baselines: multigrid alone and the multigrid-preconditioned Krylov method
+        for m in ["mg", kry_name(eq)]:
+            if not any((eq, N) in Bf and m in Bf[(eq, N)]["methods"] and Bf[(eq, N)]["methods"][m] for N in NS):
+                continue
+            row = ["", {"mg": "Multigrid alone", "pcg_mg": "PCG (MG)", "bicgstab_mg": "BiCGSTAB (MG)"}.get(m, BASE_NAMES[m]) + " (no corrector)"]
+            for N in NS:
+                d = Bf.get((eq, N))
+                if d is None or m not in d["methods"] or not d["methods"][m]:
+                    row += ["--"] * 3
+                    continue
+                ts = base_times(d, m, d["h2"])
+                cens = int((~np.isfinite(ts)).sum())
+                row += ["", "", fmt_time(np.median(ts)) + (f"$^{{\\dagger {cens}}}$" if cens else "")]
+            out.append(" & ".join(row) + " \\\\")
+        if any_row and eq != EQS[-1]:
+            out.append("\\midrule")
+    out.append("\\bottomrule\n\\end{tabular}}")
+
+    # ================================================================ summary macros per grid
+    for N_ in NS:
+        SUF = GRID_SUF[N_]
+        summ = {"Solver": [], "Hints": [], "Best": [], "SolverDeep": [], "HintsDeep": [], "BestDeep": [], "OracleRatio": []}
         for eq in EQS:
             for spec in SOLVER_ORDER:
-                keys = [k for k in R if k[0] == eq and k[1] == N_ and k[2] == spec and not k[3]]
-                if not keys:
+                dg = cell(eq, N_, spec)
+                if dg is None:
                     continue
-                d, g = R[keys[0]]
+                d, g = dg
                 P = g["policies"]
-                taus = [p for p in P if p.startswith("hints")]
-                for tol, suf in [(d["h2"], ""), (1e-8, "Deep")]:
+                for tol, suf_ in [(d["h2"], ""), (1e-8, "Deep")]:
                     key = tkey(d, tol)
                     t_r = times(P["router"], key)
-                    summ["Solver" + suf].append(paired_speedup(times(P["classical"], key), t_r)[0])
-                    summ["Hints" + suf].append(paired_speedup(times(P["hints25"], key), t_r)[0])
-                    bt = min(taus, key=lambda p: np.median(times(P[p], key)))
-                    summ["Best" + suf].append(paired_speedup(times(P[bt], key), t_r)[0])
+                    summ["Solver" + suf_].append(paired_speedup(times(P["classical"], key), t_r)[0])
+                    summ["Hints" + suf_].append(paired_speedup(times(P["hints25"], key), t_r)[0])
+                    summ["Best" + suf_].append(paired_speedup(times(P[best_tau(P, key)], key), t_r)[0])
                 key = tkey(d, d["h2"])
                 summ["OracleRatio"].append(np.median(times(P["router"], key)) / np.median(times(P["oracle"], key)))
+        if not summ["Solver"]:
+            continue
         for name, vals in summ.items():
-            rng_macro("caSp" + name + SUF, vals)
-        n_cells = len(summ["Solver"])
-        out.append(f"\\newcommand{{\\caNumCells{SUF}}}{{{n_cells}}}")
+            rng_macro(out, "caSp" + name + SUF, vals)
+        out.append(f"\\newcommand{{\\caNumCells{SUF}}}{{{len(summ['Solver'])}}}")
         out.append(f"\\newcommand{{\\caCellsRouterBeatsBest{SUF}}}{{{sum(v >= 1.0 for v in summ['Best'])}}}")
         out.append(f"\\newcommand{{\\caCellsRouterBeatsHints{SUF}}}{{{sum(v >= 1.0 for v in summ['Hints'])}}}")
+    # baselines at 128^2 for the text
+    vs_mg, vs_kry, vs_mg_ens = [], [], []
+    for (eq, N), d in Bf.items():
+        if N != MAIN_N:
+            continue
+        pw = {s_: cell(eq, N, s_) for s_ in SOLVER_ORDER if cell(eq, N, s_)}
+        if not pw:
+            continue
+        best_s = min(pw, key=lambda s_: np.median(times(pw[s_][1]["policies"]["router"], tkey(pw[s_][0], d["h2"]))))
+        dd, g = pw[best_s]
+        t_r = times(g["policies"]["router"], tkey(dd, dd["h2"]))
+        if "mg" in d["methods"] and d["methods"]["mg"]:
+            vs_mg.append(paired_speedup(base_times(d, "mg", dd["h2"]), t_r)[0])
+        if kry_name(eq) in d["methods"] and d["methods"][kry_name(eq)]:
+            vs_kry.append(paired_speedup(base_times(d, kry_name(eq), dd["h2"]), t_r)[0])
+        mgp = cell(eq, N, "mg")
+        if mgp:
+            vs_mg_ens.append(paired_speedup(times(mgp[1]["policies"]["classical"], tkey(mgp[0], dd["h2"])),
+                                            times(mgp[1]["policies"]["router"], tkey(mgp[0], dd["h2"])))[0])
+    for name, vals in [("caVsMg", vs_mg), ("caVsKrylov", vs_kry), ("caVsMgEns", vs_mg_ens)]:
+        rng_macro(out, name, vals)
 
-
-    for N_, SUF in [(128, ""), (256, "B"), (512, "C")]:
-        if any(k[1] == N_ and not k[3] for k in R):
-            grid_tables(N_, SUF)
-
-    # ------------------------------------------------------------- ensembles
+    # ================================================================ ensembles
     ens_keys = [k for k in R if k[3]]
     ens_ratios, ens_vs_solver = [], []
-    if not ens_keys:
-        out.append("\\newcommand{\\caens}{\\begin{tabular}{c}(ensemble results pending)\\end{tabular}}")
-        out.append("\\newcommand{\\caensusage}{\\begin{tabular}{c}(ensemble results pending)\\end{tabular}}")
-    if ens_keys:
+
+    def wname(members):
+        return "$\\{" + ", ".join(SOLVER_NAMES[s] for s in members) + "\\}$"
+
+    # ---- nested ensembles with same-session pairwise baselines (router@s / oracle@s)
+    nested = [k for k in ens_keys if any(p.startswith("router@") for p in R[k][1]["policies"])]
+    if nested:
+        out.append("\\newcommand{\\caensnest}{")
+        out.append("\\begin{tabular}{lll" + "ccc" * 3 + "cc}\n\\toprule")
+        out.append("& & & " + " & ".join(f"\\multicolumn{{3}}{{c}}{{$\\varepsilon = {t}$}}" for t in ["h^2", "10^{-6}", "10^{-8}"])
+                   + " & \\multicolumn{2}{c}{$\\varepsilon = 10^{-8}$: vs.\\ best single solver} \\\\")
+        out.append("\\cmidrule(lr){4-6}\\cmidrule(lr){7-9}\\cmidrule(lr){10-12}\\cmidrule(lr){13-14}")
+        out.append("Equation & $N$ & $\\mathcal{W}$ & " + " & ".join("router & router (WU) & oracle (WU)" for _ in range(3))
+                   + " & router & oracle \\\\ \\midrule")
+        nest_stats = []
+        for eq in EQS:
+            for N in NS:
+                ks = sorted([k for k in nested if k[0] == eq and k[1] == N], key=lambda k: len(k[2].split("+")))
+                if not ks:
+                    continue
+                # singles: every member's own pairwise router / oracle, from the largest ensemble's run
+                d, g = R[ks[-1]]
+                P = g["policies"]
+                members_all = ks[-1][2].split("+")
+                rows_ = []
+                for s_ in members_all:
+                    if f"router@{s_}" in P:
+                        rows_.append(([s_], P[f"router@{s_}"], P[f"oracle@{s_}"], d))
+                for k in ks:
+                    dk, gk = R[k]
+                    rows_.append((k[2].split("+"), gk["policies"]["router"], gk["policies"]["oracle"], dk))
+                # best single (by median WU at 1e-8) among the singles
+                singles = [r_ for r_ in rows_ if len(r_[0]) == 1]
+                key8 = tkey(d, 1e-8)
+                best_single = min(singles, key=lambda r_: np.median(times(r_[1], tkey(r_[3], 1e-8), field="t_wu")))
+                first = True
+                for members, Rr, Ro, dd in rows_:
+                    row = [EQ_NAMES[eq] if first else "", f"${N}^2$" if first else "", wname(members)]
+                    for tol in [dd["h2"], 1e-6, 1e-8]:
+                        key = tkey(dd, tol)
+                        row.append(time_cell(Rr, key))
+                        tw = times(Rr, key, field="t_wu")
+                        cens = int((~np.isfinite(tw)).sum())
+                        row.append(fmt_time(np.median(tw)) + (f"$^{{\\dagger {cens}}}$" if cens else ""))
+                        two = times(Ro, key, field="t_wu")
+                        row.append("\\textit{" + fmt_time(np.median(two)) + "}")
+                    tb = times(best_single[1], tkey(best_single[3], 1e-8), field="t_wu")
+                    tbo = times(best_single[2], tkey(best_single[3], 1e-8), field="t_wu")
+                    if len(members) > 1:
+                        row.append(sp_cell(tb, times(Rr, key8, field="t_wu")))
+                        row.append(sp_cell(tbo, times(Ro, key8, field="t_wu")))
+                        nest_stats.append((eq, N, members, paired_speedup(tb, times(Rr, key8, field="t_wu"))[0],
+                                           wilcoxon_p(tb, times(Rr, key8, field="t_wu"))))
+                    else:
+                        row += ["(best single)" if members == best_single[0] else "--", "--"]
+                    out.append(" & ".join(row) + " \\\\")
+                    first = False
+                out.append("\\midrule")
+        out[-1] = "\\bottomrule\n\\end{tabular}}"
+        if nest_stats:
+            wins = [s for s in nest_stats if s[3] >= 1.05 and s[4] < 0.01]
+            out.append(f"\\newcommand{{\\caNestNum}}{{{len(nest_stats)}}}")
+            out.append(f"\\newcommand{{\\caNestWins}}{{{len(wins)}}}")
+            out.append(f"\\newcommand{{\\caNestLosses}}{{{sum(1 for s in nest_stats if s[3] < 0.95)}}}")
+            rng_macro(out, "caNestSp", [s[3] for s in (wins or nest_stats)])
+            out.append(f"\\newcommand{{\\caNestMinRatio}}{{{fmt_sp(min(s[3] for s in nest_stats))}}}")
+            out.append(f"\\newcommand{{\\caNestMaxRatio}}{{{fmt_sp(max(s[3] for s in nest_stats))}}}")
+    else:
+        pending(out, "caensnest")
+        for name, val in [("caNestNum", "--"), ("caNestWins", "--"), ("caNestLosses", "--"), ("caNestSpMin", "--"), ("caNestSpMax", "--"), ("caNestMinRatio", "--"), ("caNestMaxRatio", "--")]:
+            out.append(f"\\newcommand{{\\{name}}}{{{val}}}")
+
+    # ---- oracle-level screening of all subsets (screen_ensembles.py)
+    Scr = {}
+    for path in sorted(glob.glob(f"{RESULTS_DIR}/screen_*.json")):
+        d = json.load(open(path))
+        Scr[(d["args"]["equation"], d["args"]["N"])] = d
+    if Scr:
+        out.append("\\newcommand{\\caensscreen}{")
+        out.append("\\begin{tabular}{llcccccccc}\n\\toprule")
+        out.append("& & \\multicolumn{3}{c}{$\\varepsilon = h^2$} & \\multicolumn{4}{c}{$\\varepsilon = 10^{-8}$} \\\\ \\cmidrule(lr){3-5}\\cmidrule(lr){6-9}")
+        out.append("Equation & $N$ & best single & best ensemble & ratio & best single & best ensemble & ratio & $\\{\\text{Jacobi}, \\text{Jacobi (0.67)}\\}$ \\\\ \\midrule")
+        for eq in EQS:
+            first = True
+            for N in NS:
+                d = Scr.get((eq, N))
+                if d is None:
+                    continue
+                cells = []
+                for tol in [d["h2"], 1e-8]:
+                    tk = f"{tol:.6g}"
+                    med = {k: np.median([r[tk]["t_wu"] or np.inf for r in S["rows"]]) for k, S in d["sets"].items()}
+                    singles = {k: v for k, v in med.items() if "+" not in k}
+                    bs = min(singles, key=singles.get)
+                    multi = {k: v for k, v in med.items() if "+" in k}
+                    bm = min(multi, key=multi.get)
+                    ratio = singles[bs] / multi[bm]
+                    cells += [f"{SOLVER_NAMES[bs]} ({fmt_time(singles[bs])})", wname(bm.split("+")) + f" ({fmt_time(multi[bm])})",
+                              (f"\\textbf{{{fmt_sp(ratio)}}}" if ratio >= 1.05 else fmt_sp(ratio))]
+                    if tol == 1e-8:
+                        jj = med.get("jacobi+jacobi_0.67")
+                        cells.append(fmt_sp(singles[bs] / jj) if jj is not None else "--")
+                out.append(" & ".join([EQ_NAMES[eq] if first else "", f"${N}^2$"] + cells) + " \\\\")
+                first = False
+            if not first and eq != EQS[-1]:
+                out.append("\\midrule")
+        out[-1] = "\\bottomrule\n\\end{tabular}}"
+    else:
+        pending(out, "caensscreen")
+
+    # ---- earlier 128^2 ensembles (pairwise baselines from the separate pairwise runs)
+    old_ens = [k for k in ens_keys if k not in nested]
+    if old_ens:
         out.append("\\newcommand{\\caens}{")
         out.append("\\begin{tabular}{llcccc}\n\\toprule")
         out.append("Equation & $\\mathcal{W}$ & Best solver only & Best pairwise router & "
                    "Router$(\\mathrm{NO}\\cup\\mathcal{W})$ & Oracle$(\\mathrm{NO}\\cup\\mathcal{W})$ \\\\ \\midrule")
         for eq in EQS:
             first = True
-            for k in sorted([k for k in ens_keys if k[0] == eq], key=lambda k: len(k[2].split("+"))):
+            for k in sorted([k for k in old_ens if k[0] == eq], key=lambda k: len(k[2].split("+"))):
                 d, g = R[k]
+                N = k[1]
                 key = tkey(d, d["h2"])
                 P = g["policies"]
                 members = k[2].split("+")
-                # best member solver alone, from the pairwise runs (same instances)
-                cls, lbs = {}, {}
+                cls, lbs, pw = {}, {}, {}
                 for s_ in members:
-                    kk = [q for q in R if q[0] == eq and q[1] == MAIN_N and q[2] == s_ and not q[3]]
-                    if kk:
-                        cls[s_] = np.median(times(R[kk[0]][1]["policies"]["classical"],
-                                                  tkey(R[kk[0]][0], d["h2"])))
-                        lbs[s_] = np.median(times_lb(R[kk[0]][1]["policies"]["classical"],
-                                                     tkey(R[kk[0]][0], d["h2"])))
+                    dg = cell(eq, N, s_)
+                    if dg:
+                        kk = tkey(dg[0], d["h2"])
+                        cls[s_] = np.median(times(dg[1]["policies"]["classical"], kk))
+                        lbs[s_] = np.median(times_lb(dg[1]["policies"]["classical"], kk))
+                        pw[s_] = times(dg[1]["policies"]["router"], kk)
+                if not pw:
+                    continue
                 bc = min(cls, key=cls.get)
-                bc_name = SOLVER_NAMES[bc]
-                if np.isfinite(cls[bc]):
-                    bc_cell = f"{fmt_time(cls[bc])} ({bc_name})"
-                else:  # no member reaches the tolerance within the cap: lower bound
-                    bc_cell = f"$>${fmt_time(min(lbs.values()))}$^{{\\dagger}}$ (none)"
-                base = R[[q for q in R if q[0] == eq and q[1] == MAIN_N and q[2] == bc and not q[3]][0]][1]["policies"]["classical"]
-                # best pairwise router (from pairwise runs)
-                pw = {}
-                for s in members:
-                    kk = [q for q in R if q[0] == eq and q[2] == s and not q[3]]
-                    if kk:
-                        pw[s] = R[kk[0]][1]["policies"]["router"]
-                bp = min(pw, key=lambda s: np.median(times(pw[s], tkey(R[[q for q in R if q[0]==eq and q[1]==MAIN_N and q[2]==s and not q[3]][0]][0], d["h2"]))))
-                pw_rows = pw[bp]
-                pw_key = tkey(R[[q for q in R if q[0] == eq and q[1] == MAIN_N and q[2] == bp and not q[3]][0]][0], d["h2"])
-                t_pw = times(pw_rows, pw_key)
+                bc_cell = f"{fmt_time(cls[bc])} ({SOLVER_NAMES[bc]})" if np.isfinite(cls[bc]) else f"$>${fmt_time(min(lbs.values()))}$^{{\\dagger}}$ (none)"
+                bp = min(pw, key=lambda s_: np.median(pw[s_]))
                 t_ens = times(P["router"], key)
-                sp_pw, _ = paired_speedup(t_pw, t_ens)
-                ens_ratios.append(np.median(t_pw) / np.median(t_ens))
+                sp_pw, _ = paired_speedup(pw[bp], t_ens)
+                ens_ratios.append(np.median(pw[bp]) / np.median(t_ens))
                 ens_vs_solver.append(cls[bc] / np.median(t_ens))
-                wname = "\\{" + ", ".join(SOLVER_NAMES[s] for s in members) + "\\}"
-                row = [eq if first else "", f"${wname}$",
-                       bc_cell,
-                       f"{fmt_time(np.median(t_pw))} ({SOLVER_NAMES[bp]})",
-                       f"{fmt_time(np.median(t_ens))} ({fmt_sp(sp_pw)} vs pairwise)",
-                       "\\textit{" + fmt_time(np.median(times(P['oracle'], key))) + "}"]
-                out.append(" & ".join(row) + " \\\\")
+                out.append(" & ".join([eq if first else "", wname(members), bc_cell,
+                                       f"{fmt_time(np.median(pw[bp]))} ({SOLVER_NAMES[bp]})",
+                                       f"{fmt_time(np.median(t_ens))} ({fmt_sp(sp_pw)} vs pairwise)",
+                                       "\\textit{" + fmt_time(np.median(times(P['oracle'], key))) + "}"]) + " \\\\")
                 first = False
-            if eq != EQS[-1] and any(k[0] == EQS[EQS.index(eq)+1] for k in ens_keys):
+            if eq != EQS[-1] and any(k[0] == EQS[EQS.index(eq)+1] for k in old_ens):
                 out.append("\\midrule")
         out.append("\\bottomrule\n\\end{tabular}}")
-        # ensemble usage
         out.append("\\newcommand{\\caensusage}{")
         out.append("\\begin{tabular}{llcccccc}\n\\toprule")
         out.append("Equation & $\\mathcal{W}$ & Jacobi & GS & SymGS & Jacobi (0.67) & SOR (1.5) & DeepONet \\\\ \\midrule")
         for eq in EQS:
             first = True
-            for k in sorted([k for k in ens_keys if k[0] == eq], key=lambda k: len(k[2].split("+"))):
+            for k in sorted([k for k in old_ens if k[0] == eq], key=lambda k: len(k[2].split("+"))):
                 d, g = R[k]
                 members = k[2].split("+")
-                # per-instance fraction of iterations spent in each operation
-                # up to the h^2 crossing (stored by bench.py)
                 fracs = np.array([r.get("op_frac", [np.nan] * (len(members) + 1)) for r in g["policies"]["router"]])
                 cells = []
                 for s in ["jacobi", "gs", "ssor", "jacobi_0.67", "sor_1.5"]:
@@ -464,119 +702,104 @@ def main():
                     else:
                         cells.append("-")
                 cells.append(f"{np.nanmean(fracs[:, -1]):.3f} ({np.nanstd(fracs[:, -1]):.3f})")
-                wname = "\\{" + ", ".join(SOLVER_NAMES[s] for s in members) + "\\}"
-                out.append(" & ".join([eq if first else "", f"${wname}$"] + cells) + " \\\\")
+                out.append(" & ".join([eq if first else "", wname(members)] + cells) + " \\\\")
                 first = False
-            if eq != EQS[-1] and any(k[0] == EQS[EQS.index(eq)+1] for k in ens_keys):
+            if eq != EQS[-1] and any(k[0] == EQS[EQS.index(eq)+1] for k in old_ens):
                 out.append("\\midrule")
         out.append("\\bottomrule\n\\end{tabular}}")
-
-    # ------------------------------------------------ strong classical baselines
-    BASE_NAMES = {"fft": "FFT direct solve", "mg": "Multigrid V(2,2) alone", "cg": "CG",
-                  "pcg_ssor": "PCG (SymGS)", "pcg_mg": "PCG (multigrid)", "bicgstab": "BiCGSTAB",
-                  "bicgstab_mg": "BiCGSTAB (multigrid)", "gmres": "GMRES(20)"}
-    Bf = {}
-    for path in sorted(glob.glob(f"{RESULTS_DIR}/baselines_*.json")):
-        d = json.load(open(path))
-        Bf[(d["args"]["equation"], d["args"]["N"])] = d
-
-    def base_times(d, m, tol):
-        key = tkey(d, tol)
-        return np.array([np.inf if r["tol"][key]["t_live"] is None else r["tol"][key]["t_live"] for r in d["methods"][m]])
-
-    def base_iters(d, m, tol):
-        key = tkey(d, tol)
-        return np.array([np.inf if r["tol"][key]["iters"] is None else r["tol"][key]["iters"] for r in d["methods"][m]])
-
-    def med_str(ts, ref=None):
-        m = np.median(ts)
-        s_ = fmt_time(m)
-        if ref is not None and np.isfinite(m):
-            sp, _ = paired_speedup(ts, ref)
-            s_ += f" ({fmt_sp(sp)})"
-        cens = int((~np.isfinite(ts)).sum())
-        if cens:
-            s_ += f"$^{{\\dagger {cens}}}$"
-        return s_
-
-    for N in sorted(set(k[1] for k in Bf)):
-        out.append(f"\\newcommand{{\\cabaselines{ {128: '', 256: 'B', 512: 'C'}.get(N, 'X') }}}{{")
-        out.append("\\begin{tabular}{llccccc}\n\\toprule")
-        out.append("Equation & Method & $\\varepsilon{=}10^{-3}$ & $\\varepsilon{=}h^2$ & $\\varepsilon{=}10^{-6}$ & $\\varepsilon{=}10^{-8}$ & iters to $h^2$ \\\\ \\midrule")
+        # p-values
+        out.append("\\newcommand{\\castatsens}{")
+        out.append("\\begin{tabular}{llcccc}\n\\toprule")
+        out.append("Equation & $\\mathcal{W}$ & vs.\\ best solver only & vs.\\ best pairwise router (faster) & vs.\\ best pairwise router (slower) & vs.\\ oracle$(\\mathrm{NO}\\cup\\mathcal{W})$ (slower) \\\\ \\midrule")
         for eq in EQS:
-            if (eq, N) not in Bf:
-                continue
-            d = Bf[(eq, N)]
-            tl = [1e-3, d["h2"], 1e-6, 1e-8]
-            # router reference: best pairwise router at h^2 among stationary solvers, plus the MG pairing
-            pw = {s_: R[k] for k in R for s_ in [k[2]] if k[0] == eq and k[1] == N and not k[3] and k[2] in SOLVER_ORDER}
-            mgp = [R[k] for k in R if k[0] == eq and k[1] == N and not k[3] and k[2] == "mg"]
-            best_s = min(pw, key=lambda s_: np.median(times(pw[s_][1]["policies"]["router"], tkey(pw[s_][0], d["h2"])))) if pw else None
-            ref = times(pw[best_s][1]["policies"]["router"], tkey(pw[best_s][0], d["h2"])) if best_s else None
             first = True
-            for m in d["methods"]:
-                if not d["methods"][m]:
+            for k in sorted([k for k in old_ens if k[0] == eq], key=lambda k: len(k[2].split("+"))):
+                d, g = R[k]
+                N = k[1]
+                key = tkey(d, d["h2"])
+                members = k[2].split("+")
+                t_e = times(g["policies"]["router"], key)
+                t_o = times(g["policies"]["oracle"], key)
+                cls, pw = {}, {}
+                for s_ in members:
+                    dg = cell(eq, N, s_)
+                    if dg:
+                        cls[s_] = times_lb(dg[1]["policies"]["classical"], tkey(dg[0], d["h2"]))
+                        pw[s_] = times(dg[1]["policies"]["router"], tkey(dg[0], d["h2"]))
+                if not pw:
                     continue
-                cells = [med_str(base_times(d, m, t), ref) for t in tl]
-                its = base_iters(d, m, d["h2"])
-                cells.append(f"{np.median(its):.0f}" if np.isfinite(np.median(its)) else "--")
-                out.append(" & ".join([eq if first else "", BASE_NAMES.get(m, m)] + cells) + " \\\\")
+                bc = min(cls, key=lambda s_: np.median(cls[s_]))
+                bp = min(pw, key=lambda s_: np.median(pw[s_]))
+                out.append(" & ".join([eq if first else "", wname(members), pstr(wilcoxon_p(cls[bc], t_e)),
+                                       pstr(wilcoxon_p(pw[bp], t_e)), pstr(wilcoxon_p(t_e, pw[bp])),
+                                       pstr(wilcoxon_p(t_e, t_o))]) + " \\\\")
                 first = False
-            if best_s:
-                dd, g = pw[best_s]
-                P = g["policies"]
-                for pol, lab in [("hints25", f"HINTS ($\\tau{{=}}25$), {SOLVER_NAMES[best_s]}"),
-                                 ("router", f"Learned router, $\\{{\\mathrm{{NO}}, \\text{{{SOLVER_NAMES[best_s]}}}\\}}$")]:
-                    cells = [med_str(times(P[pol], tkey(dd, t)), ref if pol != "router" else None) for t in tl]
-                    cells.append(f"{np.median(iters(P[pol], tkey(dd, dd['h2']))):.0f}")
-                    row = " & ".join(["", lab] + cells) + " \\\\"
-                    out.append(f"\\textbf{{{row}}}" if False else row)
-            if mgp:
-                dd, g = mgp[0]
-                P = g["policies"]
-                for pol, lab in [("router", "Learned router, $\\{\\mathrm{NO}, \\text{Multigrid}\\}$"),
-                                 ("oracle", "Cost-aware oracle, $\\{\\mathrm{NO}, \\text{Multigrid}\\}$")]:
-                    cells = [med_str(times(P[pol], tkey(dd, t))) for t in tl]
-                    cells.append(f"{np.median(iters(P[pol], tkey(dd, dd['h2']))):.0f}")
-                    out.append(" & ".join(["", lab] + cells) + " \\\\")
-            if eq == "Poisson":
+            if eq != EQS[-1] and any(k[0] == EQS[EQS.index(eq)+1] for k in old_ens):
                 out.append("\\midrule")
         out.append("\\bottomrule\n\\end{tabular}}")
+    else:
+        for name in ["caens", "caensusage", "castatsens"]:
+            pending(out, name)
 
-    # ------------------------------------------------------------- scaling
-    Ns = sorted(set(k[1] for k in R if not k[3]))
-    out.append("\\newcommand{\\cascaling}{")
-    out.append("\\begin{tabular}{llcccccccc}\n\\toprule")
-    out.append("Equation & $N$ & Solver only & HINTS ($\\tau{=}25$) & HINTS ($\\tau{=}5$) & Learned router & Cost-aware oracle & Multigrid & PCG/BiCGSTAB (MG) & FFT direct \\\\ \\midrule")
-    for eq in EQS:
-        for spec in ["jacobi", "gs"]:
+    # ---- larger ensemble routers (capacity control)
+    big_paths = sorted(glob.glob("results_ens_big/*_ens_*.json"))
+    if big_paths and old_ens:
+        def _agree(path):
+            if not os.path.exists(path):
+                return None
+            m = re.findall(r"agreement with oracle ([0-9.]+)%", open(path).read())
+            return float(m[-1]) if m else None
+        rows_big = []
+        for path in big_paths:
+            base_path = os.path.join(RESULTS_DIR, os.path.basename(path))
+            if not os.path.exists(base_path):
+                continue
+            db, dr = json.load(open(path)), json.load(open(base_path))
+            eq, N_ = db["args"]["equation"], db["args"]["N"]
+            for grp in db["groups"]:
+                key = tkey(db, db["h2"])
+                Rb, Rr, Ro = (db["groups"][grp]["policies"]["router"], dr["groups"][grp]["policies"]["router"],
+                              dr["groups"][grp]["policies"]["oracle"])
+                t_b = times(Rb, key, field="t_wu") - iters(Rb, key) * db["groups"][grp]["router_decision_cost"]
+                t_r = times(Rr, key, field="t_wu") - iters(Rr, key) * dr["groups"][grp]["router_decision_cost"]
+                t_o = times(Ro, key, field="t_wu")
+                same = np.mean([(a["tol"][key]["iters"], a["tol"][key]["no_calls"]) == (b["tol"][key]["iters"], b["tol"][key]["no_calls"])
+                                for a, b in zip(Rr, Rb)])
+                members = grp.split("+")
+                rows_big.append((eq, len(members), members, t_r, t_b, t_o,
+                                 _agree(f"logs/routers_ens_{eq}_{N_}_{grp}.log"), _agree(f"logs/routers_ensbig_{eq}_{N_}_{grp}.log"), same))
+        out.append("\\newcommand{\\caensbig}{")
+        out.append("\\begin{tabular}{llccccccc}\n\\toprule")
+        out.append("Equation & $\\mathcal{W}$ & default router & larger router & oracle & larger\\,/\\,default (medians) & same decisions & $p$ (larger faster\\,/\\,slower) & agreement (default\\,/\\,larger) \\\\ \\midrule")
+        for eq in EQS:
             first = True
-            for N in Ns:
-                k = [q for q in R if q[0] == eq and q[1] == N and q[2] == spec and not q[3]]
-                if not k:
-                    continue
-                d, g = R[k[0]]
-                P = g["policies"]
-                key = tkey(d, d["h2"])
-                tr_ = times(P["router"], key)
-                cells = [cell_time(P["classical"], P["classical"], key),
-                         med_str(times(P["hints25"], key), tr_), med_str(times(P["hints5"], key), tr_),
-                         med_str(tr_), "\\textit{" + med_str(times(P["oracle"], key)) + "}"]
-                if (eq, N) in Bf:
-                    db = Bf[(eq, N)]
-                    kry = "pcg_mg" if eq == "Poisson" else "bicgstab_mg"
-                    cells += [med_str(base_times(db, "mg", d["h2"]), tr_),
-                              med_str(base_times(db, kry, d["h2"]), tr_) if kry in db["methods"] else "--",
-                              med_str(base_times(db, "fft", d["h2"]), tr_)]
-                else:
-                    cells += ["--", "--", "--"]
-                lab = f"{eq}, {SOLVER_NAMES[spec]}" if first else ""
-                out.append(" & ".join([lab, f"${N}^2$"] + cells) + " \\\\")
+            sel = sorted([r for r in rows_big if r[0] == eq], key=lambda r: r[1])
+            for (_, _, members, t_r, t_b, t_o, ag_r, ag_b, same) in sel:
+                sp = np.median(t_b) / np.median(t_r)
+                ag = ("--" if ag_r is None else f"{ag_r:.0f}\\%") + " / " + ("--" if ag_b is None else f"{ag_b:.0f}\\%")
+                out.append(" & ".join([eq if first else "", wname(members), fmt_time(np.median(t_r)), fmt_time(np.median(t_b)),
+                                       "\\textit{" + fmt_time(np.median(t_o)) + "}", f"{sp:.3f}$\\times$", f"{100*same:.0f}\\%",
+                                       f"{pstr(wilcoxon_p(t_r, t_b))} / {pstr(wilcoxon_p(t_b, t_r))}", ag]) + " \\\\")
                 first = False
-            out.append("\\midrule")
-    out[-1] = "\\bottomrule\n\\end{tabular}}"
+            if sel and eq != EQS[-1] and any(r[0] == EQS[EQS.index(eq)+1] for r in rows_big):
+                out.append("\\midrule")
+        out.append("\\bottomrule\n\\end{tabular}}")
+        sps = [np.median(r[4]) / np.median(r[3]) for r in rows_big]
+        gaps = [np.median(r[4]) / np.median(r[5]) for r in rows_big]
+        gaps0 = [np.median(r[3]) / np.median(r[5]) for r in rows_big]
+        out.append(f"\\newcommand{{\\caEnsBigRatioMin}}{{{min(sps):.2f}$\\times$}}")
+        out.append(f"\\newcommand{{\\caEnsBigRatioMax}}{{{max(sps):.2f}$\\times$}}")
+        out.append(f"\\newcommand{{\\caEnsBigGapMax}}{{{100*(max(gaps)-1):.0f}\\%}}")
+        out.append(f"\\newcommand{{\\caEnsGapWuMax}}{{{100*(max(gaps0)-1):.0f}\\%}}")
+        out.append(f"\\newcommand{{\\caNumEnsBig}}{{{len(rows_big)}}}")
+        out.append(f"\\newcommand{{\\caEnsBigSameMin}}{{{100*min(r[8] for r in rows_big):.0f}\\%}}")
+        out.append(f"\\newcommand{{\\caEnsBigSameMax}}{{{100*max(r[8] for r in rows_big):.0f}\\%}}")
+        out.append(f"\\newcommand{{\\caEnsBigNFaster}}{{{sum(wilcoxon_p(r[3], r[4]) < 0.05 for r in rows_big)}}}")
+        out.append(f"\\newcommand{{\\caEnsBigNSlower}}{{{sum(wilcoxon_p(r[4], r[3]) < 0.05 for r in rows_big)}}}")
+    else:
+        pending(out, "caensbig")
 
-    # ------------------------------------------------------------- overheads
+    # ================================================================ overheads / amortisation
     op = f"{RESULTS_DIR}/overheads.json"
     if os.path.exists(op):
         O = json.load(open(op))
@@ -585,9 +808,10 @@ def main():
         Ns_o = sorted(int(k) for k in O["per_op"])
         out.append("Operation & " + " & ".join(f"$N={n}$" for n in Ns_o) + " \\\\ \\midrule")
         rows = [("Jacobi iteration", "jacobi"), ("GS iteration", "gs"), ("SymGS iteration", "ssor"),
-                ("Multigrid V(2,2) cycle", "mg"), ("FFT direct solve", "fft"),
+                ("Multigrid V(2,2) cycle", "mg"),
                 ("DeepONet corrector call", "corrector"), ("Router decision (ours)", "router_decision"),
                 ("LSTM router decision (\\Cref{sec:experiments})", "lstm_router_decision")]
+
         def fmt_us(v):
             if v is None or not isinstance(v, (int, float)):
                 return "--"
@@ -601,289 +825,147 @@ def main():
                 cells.append(fmt_us(v))
             out.append(lab + " & " + " & ".join(cells) + " \\\\")
         out.append("\\bottomrule\n\\end{tabular}}")
-        # amortisation: corrector training and router training times
         tr = O["training"]
-        def get(k):
-            return tr.get(k)
         out.append("\\newcommand{\\caamort}{")
         out.append("\\begin{tabular}{llccccc}\n\\toprule")
         out.append("Equation & $N$ & Corrector data + fit & Router training (GS pairing) & Saving per solve vs HINTS ($\\tau{=}25$) & Break-even solves (router) & Saving per solve vs solver only \\\\ \\midrule")
         for eq in EQS:
             first = True
-            for N in Ns:
-                c = get(f"corrector_{eq}_{N}")
-                rt = get(f"router_{eq}_{N}_gs")
-                k = [q for q in R if q[0] == eq and q[1] == N and q[2] == "gs" and not q[3]]
-                if not k or c is None:
+            for N in NS:
+                c = tr.get(f"corrector_{eq}_{N}")
+                rt = tr.get(f"router_{eq}_{N}_gs")
+                dg = cell(eq, N, "gs")
+                if dg is None or c is None:
                     continue
-                d, g = R[k[0]]
+                d, g = dg
                 P = g["policies"]
                 key = tkey(d, d["h2"])
                 t_r = np.median(times(P["router"], key)); t_h = np.median(times(P["hints25"], key)); t_c = np.median(times(P["classical"], key))
                 sav_h = t_h - t_r; sav_c = t_c - t_r
                 be = (rt["train_s"] / sav_h) if (rt and sav_h > 0) else np.inf
-                out.append(" & ".join([eq if first else "", f"${N}^2$",
-                                       f"{c['data_s'] + c['fit_s']:.0f}\\,s",
-                                       f"{rt['train_s']:.0f}\\,s" if rt else "--",
-                                       fmt_time(sav_h) if sav_h > 0 else "--",
-                                       f"{be:.0f}" if np.isfinite(be) else "--",
-                                       fmt_time(sav_c)]) + " \\\\")
+                out.append(" & ".join([EQ_NAMES[eq] if first else "", f"${N}^2$", f"{c['data_s'] + c['fit_s']:.0f}\\,s",
+                                       f"{rt['train_s']:.0f}\\,s" if rt else "--", fmt_time(sav_h) if sav_h > 0 else "--",
+                                       f"{be:.0f}" if np.isfinite(be) else "--", fmt_time(sav_c)]) + " \\\\")
                 first = False
-            if eq == "Poisson":
+            if not first and eq != EQS[-1]:
                 out.append("\\midrule")
-        out.append("\\bottomrule\n\\end{tabular}}")
-        lst = O["per_op"]
-        n128 = lst.get("128", {})
+        out[-1] = "\\bottomrule\n\\end{tabular}}"
+        n128 = O["per_op"].get("128", {})
         if n128.get("lstm_router_decision") and n128.get("jacobi"):
             out.append(f"\\newcommand{{\\caLstmOverJacobi}}{{{n128['lstm_router_decision']/n128['jacobi']:.0f}}}")
             out.append(f"\\newcommand{{\\caLstmMs}}{{{n128['lstm_router_decision']*1e3:.1f}}}")
-
-    # ------------------------------------------- significance + seed robustness
-    def wilcoxon_p(base, ours):
-        """one-sided paired Wilcoxon (alternative: ours faster), censoring-aware"""
-        _, r = paired_speedup(base, ours)
-        ok = np.isfinite(r) & (r > 0)
-        if ok.sum() < 8 or np.allclose(r[ok], 1.0):
-            return 1.0
-        return float(wilcoxon(np.log(r[ok]), alternative="greater").pvalue)
-
-    def ttest_p(base, ours):
-        ok = np.isfinite(base) & np.isfinite(ours)
-        if ok.sum() < 8 or np.allclose(base[ok], ours[ok]):
-            return 1.0
-        return float(ttest_rel(np.log(base[ok]), np.log(ours[ok]), alternative="greater").pvalue)
-
-    def pstr(pv):
-        if pv < 1e-10:
-            return "$<10^{-10}$"
-        if pv < 1e-3:
-            return f"$10^{{{int(np.floor(np.log10(pv)))}}}$"
-        return f"{pv:.3f}"
-
-    Sf = {}
-    for path in sorted(glob.glob(f"{RESULTS_DIR}/seeds_*.json")):
-        d = json.load(open(path))
-        Sf[(d["args"]["equation"], d["args"]["N"])] = d
-
-    out.append("\\newcommand{\\castats}{")
-    out.append("\\begin{tabular}{llcccccccc}\n\\toprule")
-    out.append("& & \\multicolumn{3}{c}{$\\varepsilon = h^2$: $p$ (Wilcoxon / $t$)} & \\multicolumn{2}{c}{$\\varepsilon = 10^{-8}$: $p$} & \\multicolumn{3}{c}{Router over 5 training seeds} \\\\")
-    out.append("\\cmidrule(lr){3-5}\\cmidrule(lr){6-7}\\cmidrule(lr){8-10}")
-    out.append("Equation & Solver & vs.\\ solver only & vs.\\ HINTS-25 & vs.\\ best $\\tau$ & vs.\\ HINTS-25 & vs.\\ best $\\tau$ & time to $h^2$ (decisions as main router) & speedup vs.\\ HINTS-25 & seeds with $p{<}0.01$ \\\\ \\midrule")
-    for eq in EQS:
-        first = True
-        for spec in SOLVER_ORDER:
-            keys = [k for k in R if k[0] == eq and k[1] == MAIN_N and k[2] == spec and not k[3]]
-            if not keys:
-                continue
-            d, g = R[keys[0]]
-            P = g["policies"]
-            taus = [p_ for p_ in P if p_.startswith("hints")]
-            cells = []
-            for tol, with_solver in [(d["h2"], True), (1e-8, False)]:
-                key = tkey(d, tol)
-                t_r = times(P["router"], key)
-                bt = min(taus, key=lambda p_: np.median(times(P[p_], key)))
-                if with_solver:
-                    t_c = times_lb(P["classical"], key)
-                    cells.append(f"{pstr(wilcoxon_p(t_c, t_r))} / {pstr(ttest_p(t_c, t_r))}")
-                cells.append(f"{pstr(wilcoxon_p(times_lb(P['hints25'], key), t_r))} / {pstr(ttest_p(times_lb(P['hints25'], key), t_r))}")
-                cells.append(f"{pstr(wilcoxon_p(times_lb(P[bt], key), t_r))} / {pstr(ttest_p(times_lb(P[bt], key), t_r))}")
-            # seeds
-            sd = Sf.get((eq, keys[0][1]))
-            if sd and spec in sd["groups"] and sd["groups"][spec] and all("t_wu" in blk["rows"][0]["tol"][tkey(d, d["h2"])] for blk in sd["groups"][spec].values()):
-                # timer-free (work-unit) comparison: seed trials run in separate sessions, so
-                # live times are not comparable; decisions and work units are
-                key = tkey(d, d["h2"])
-                th = times(P["hints25"], key, field="t_wu")
-                tb = times(P[min(taus, key=lambda p_: np.median(times(P[p_], key)))], key, field="t_wu")
-                it_main = iters(P["router"], key)
-                meds, sps, nsig, agree = [], [], 0, []
-                for s_, blk in sd["groups"][spec].items():
-                    tr_ = np.array([np.inf if r["tol"][key]["t_wu"] is None else r["tol"][key]["t_wu"] for r in blk["rows"]])
-                    it_s = np.array([np.inf if r["tol"][key]["iters"] is None else r["tol"][key]["iters"] for r in blk["rows"]])
-                    meds.append(np.median(tr_))
-                    sps.append(paired_speedup(th, tr_)[0])
-                    agree.append(float(np.mean(it_s == it_main)))
-                    if wilcoxon_p(th, tr_) < 0.01 and wilcoxon_p(tb, tr_) < 0.01:
-                        nsig += 1
-                cells += [f"{np.mean(meds)*1e3:.2f} $\\pm$ {np.std(meds)*1e3:.2f}\\,ms ({100*np.mean(agree):.0f}\\%)",
-                          f"{min(sps):.2f}--{max(sps):.2f}$\\times$", f"{nsig}/{len(meds)}"]
-            else:
-                cells += ["--", "--", "--"]
-            out.append(" & ".join([eq if first else "", SOLVER_NAMES[spec]] + cells) + " \\\\")
-            first = False
-        if eq != EQS[-1] and any(k[0] == EQS[EQS.index(eq)+1] for k in R):
-            out.append("\\midrule")
-    out.append("\\bottomrule\n\\end{tabular}}")
-
-    # ensembles: p-values
-    out.append("\\newcommand{\\castatsens}{")
-    out.append("\\begin{tabular}{llcccc}\n\\toprule")
-    out.append("Equation & $\\mathcal{W}$ & vs.\\ best solver only & vs.\\ best pairwise router (faster) & vs.\\ best pairwise router (slower) & vs.\\ oracle$(\\mathrm{NO}\\cup\\mathcal{W})$ (slower) \\\\ \\midrule")
-    for eq in EQS:
-        first = True
-        for k in sorted([k for k in ens_keys if k[0] == eq], key=lambda k: len(k[2].split("+"))):
-            d, g = R[k]
-            key = tkey(d, d["h2"])
-            members = k[2].split("+")
-            t_e = times(g["policies"]["router"], key)
-            t_o = times(g["policies"]["oracle"], key)
-            cls = {}
-            for s_ in members:
-                kk = [q for q in R if q[0] == eq and q[1] == MAIN_N and q[2] == s_ and not q[3]]
-                if kk:
-                    cls[s_] = times_lb(R[kk[0]][1]["policies"]["classical"], tkey(R[kk[0]][0], d["h2"]))
-            bc = min(cls, key=lambda s_: np.median(cls[s_]))
-            pw = {s_: times(R[[q for q in R if q[0] == eq and q[1] == MAIN_N and q[2] == s_ and not q[3]][0]][1]["policies"]["router"], key) for s_ in members if [q for q in R if q[0] == eq and q[1] == MAIN_N and q[2] == s_ and not q[3]]}
-            bp = min(pw, key=lambda s_: np.median(pw[s_]))
-            wname = "\\{" + ", ".join(SOLVER_NAMES[s_] for s_ in members) + "\\}"
-            out.append(" & ".join([eq if first else "", f"${wname}$", pstr(wilcoxon_p(cls[bc], t_e)),
-                                   pstr(wilcoxon_p(pw[bp], t_e)), pstr(wilcoxon_p(t_e, pw[bp])),
-                                   pstr(wilcoxon_p(t_e, t_o))]) + " \\\\")
-            first = False
-        if eq != EQS[-1] and any(k[0] == EQS[EQS.index(eq)+1] for k in R):
-            out.append("\\midrule")
-    out.append("\\bottomrule\n\\end{tabular}}")
-
-    # ------------------------------------------------ larger ensemble routers (phase 6 control)
-    big_paths = sorted(glob.glob("results_ens_big/*_ens_*.json"))
-    if big_paths and ens_keys:
-        import re as _re
-
-        def _agree(path):
-            if not os.path.exists(path):
-                return None
-            m = _re.findall(r"agreement with oracle ([0-9.]+)%", open(path).read())
-            return float(m[-1]) if m else None
-        rows_big = []
-        for path in big_paths:
-            base_path = os.path.join(RESULTS_DIR, os.path.basename(path))
-            if not os.path.exists(base_path):
-                continue
-            db, dr = json.load(open(path)), json.load(open(base_path))
-            eq, N_ = db["args"]["equation"], db["args"]["N"]
-            for grp in db["groups"]:
-                key = tkey(db, db["h2"])
-                Rb, Rr, Ro = (db["groups"][grp]["policies"]["router"], dr["groups"][grp]["policies"]["router"],
-                              dr["groups"][grp]["policies"]["oracle"])
-                # work-unit times net of the per-decision cost (the wider network costs ~0.5us more per
-                # decision, which would otherwise dominate a paired test on otherwise identical op sequences)
-                t_b = times(Rb, key, field="t_wu") - iters(Rb, key) * db["groups"][grp]["router_decision_cost"]
-                t_r = times(Rr, key, field="t_wu") - iters(Rr, key) * dr["groups"][grp]["router_decision_cost"]
-                t_o = times(Ro, key, field="t_wu")
-                same = np.mean([(a["tol"][key]["iters"], a["tol"][key]["no_calls"]) == (b["tol"][key]["iters"], b["tol"][key]["no_calls"])
-                                for a, b in zip(Rr, Rb)])
-                members = grp.split("+")
-                ag_r = _agree(f"logs/routers_ens_{eq}_{N_}_{grp}.log")
-                ag_b = _agree(f"logs/routers_ensbig_{eq}_{N_}_{grp}.log")
-                rows_big.append((eq, len(members), members, t_r, t_b, t_o, ag_r, ag_b, same))
-        out.append("\\newcommand{\\caensbig}{")
-        out.append("\\begin{tabular}{llccccccc}\n\\toprule")
-        out.append("Equation & $\\mathcal{W}$ & default router & larger router & oracle & larger\\,/\\,default (medians) & same decisions & $p$ (larger faster\\,/\\,slower) & agreement (default\\,/\\,larger) \\\\ \\midrule")
-        for eq in EQS:
-            first = True
-            sel = sorted([r for r in rows_big if r[0] == eq], key=lambda r: r[1])
-            for (_, _, members, t_r, t_b, t_o, ag_r, ag_b, same) in sel:
-                wname = "\\{" + ", ".join(SOLVER_NAMES[s] for s in members) + "\\}"
-                sp = np.median(t_b) / np.median(t_r)
-                ag = ("--" if ag_r is None else f"{ag_r:.0f}\\%") + " / " + ("--" if ag_b is None else f"{ag_b:.0f}\\%")
-                out.append(" & ".join([eq if first else "", f"${wname}$", fmt_time(np.median(t_r)), fmt_time(np.median(t_b)),
-                                       "\\textit{" + fmt_time(np.median(t_o)) + "}", f"{sp:.3f}$\\times$", f"{100*same:.0f}\\%",
-                                       f"{pstr(wilcoxon_p(t_r, t_b))} / {pstr(wilcoxon_p(t_b, t_r))}", ag]) + " \\\\")
-                first = False
-            if sel and eq != EQS[-1] and any(r[0] == EQS[EQS.index(eq)+1] for r in rows_big):
-                out.append("\\midrule")
-        out.append("\\bottomrule\n\\end{tabular}}")
-        sps = [np.median(r[4]) / np.median(r[3]) for r in rows_big]
-        gaps = [np.median(r[4]) / np.median(r[5]) for r in rows_big]
-        gaps0 = [np.median(r[3]) / np.median(r[5]) for r in rows_big]
-        n_fast = sum(wilcoxon_p(r[3], r[4]) < 0.05 for r in rows_big)
-        n_slow = sum(wilcoxon_p(r[4], r[3]) < 0.05 for r in rows_big)
-        out.append(f"\\newcommand{{\\caEnsBigRatioMin}}{{{min(sps):.2f}$\\times$}}")
-        out.append(f"\\newcommand{{\\caEnsBigRatioMax}}{{{max(sps):.2f}$\\times$}}")
-        out.append(f"\\newcommand{{\\caEnsBigGapMax}}{{{100*(max(gaps)-1):.0f}\\%}}")
-        out.append(f"\\newcommand{{\\caEnsGapWuMax}}{{{100*(max(gaps0)-1):.0f}\\%}}")
-        out.append(f"\\newcommand{{\\caNumEnsBig}}{{{len(rows_big)}}}")
-        out.append(f"\\newcommand{{\\caEnsBigSameMin}}{{{100*min(r[8] for r in rows_big):.0f}\\%}}")
-        out.append(f"\\newcommand{{\\caEnsBigSameMax}}{{{100*max(r[8] for r in rows_big):.0f}\\%}}")
-        out.append(f"\\newcommand{{\\caEnsBigNFaster}}{{{n_fast}}}")
-        out.append(f"\\newcommand{{\\caEnsBigNSlower}}{{{n_slow}}}")
     else:
-        out.append("\\newcommand{\\caensbig}{\\begin{tabular}{c}(results pending)\\end{tabular}}")
+        pending(out, "caoverheads")
+        pending(out, "caamort")
 
-    # strong baselines: p-values (router with best stationary pairing vs each baseline)
-    out.append("\\newcommand{\\castatsbase}{")
-    out.append("\\begin{tabular}{llcccc}\n\\toprule")
-    out.append("Equation & Method & $\\varepsilon{=}10^{-3}$ & $\\varepsilon{=}h^2$ & $\\varepsilon{=}10^{-6}$ & $\\varepsilon{=}10^{-8}$ \\\\ \\midrule")
-    for (eq, N) in sorted(Bf):
-        d = Bf[(eq, N)]
-        pw = {k[2]: R[k] for k in R if k[0] == eq and k[1] == N and not k[3] and k[2] in SOLVER_ORDER}
-        if not pw:
-            continue
-        best_s = min(pw, key=lambda s_: np.median(times(pw[s_][1]["policies"]["router"], tkey(pw[s_][0], d["h2"]))))
-        dd, g = pw[best_s]
-        first = True
-        for m in d["methods"]:
-            if not d["methods"][m]:
-                continue
-            cells = []
-            for tol in [1e-3, d["h2"], 1e-6, 1e-8]:
-                t_r = times(g["policies"]["router"], tkey(dd, tol))
-                tb = base_times(d, m, tol)
-                pv_f = wilcoxon_p(tb, t_r)   # router faster
-                pv_s = wilcoxon_p(t_r, tb)   # router slower
-                cells.append(pstr(pv_f) if np.median(tb) >= np.median(t_r) else f"slower: {pstr(pv_s)}")
-            out.append(" & ".join([f"{eq} ${N}^2$" if first else "", BASE_NAMES.get(m, m)] + cells) + " \\\\")
-            first = False
-        out.append("\\midrule")
-    out[-1] = "\\bottomrule\n\\end{tabular}}"
+    # ================================================================ theory assumptions
+    Af = {}
+    for path in sorted(glob.glob(f"{RESULTS_DIR}/assumptions_*.json")):
+        d = json.load(open(path))
+        Af[(d["args"]["equation"], d["args"]["N"])] = d
+    if Af:
+        def f6(x, nd=4):
+            if x is None:
+                return "--"
+            if x == 0:
+                return "0"
+            return f"{x:.{nd}f}" if 1e-3 <= abs(x) < 1e3 else f"{x:.1e}"
 
-    # ---------------------------------------- macros for the main-text sentence
-    vs_mg, vs_kry, fft_ratio, vs_mg_ens = [], [], [], []
-    for (eq, N), d in Bf.items():
-        if N != 128:
-            continue
-        pw = {k[2]: R[k] for k in R if k[0] == eq and k[1] == N and not k[3] and k[2] in SOLVER_ORDER}
-        if not pw:
-            continue
-        best_s = min(pw, key=lambda s_: np.median(times(pw[s_][1]["policies"]["router"], tkey(pw[s_][0], d["h2"]))))
-        dd, g = pw[best_s]
-        key = tkey(dd, dd["h2"])
-        t_r = times(g["policies"]["router"], key)
-        if "mg" in d["methods"]:
-            vs_mg.append(paired_speedup(base_times(d, "mg", dd["h2"]), t_r)[0])
-        kry = "pcg_mg" if eq == "Poisson" else "bicgstab_mg"
-        if kry in d["methods"]:
-            vs_kry.append(paired_speedup(base_times(d, kry, dd["h2"]), t_r)[0])
-        if "fft" in d["methods"]:
-            fft_ratio.append(np.median(t_r) / np.median(base_times(d, "fft", dd["h2"])))
-        mgp = [R[k] for k in R if k[0] == eq and k[1] == N and not k[3] and k[2] == "mg"]
-        if mgp:
-            vs_mg_ens.append(paired_speedup(times(mgp[0][1]["policies"]["classical"], tkey(mgp[0][0], dd["h2"])),
-                                            times(mgp[0][1]["policies"]["router"], tkey(mgp[0][0], dd["h2"])))[0])
-    for name, vals in [("caVsMg", vs_mg), ("caVsKrylov", vs_kry), ("caFftRatio", fft_ratio), ("caVsMgEns", vs_mg_ens)]:
-        rng_macro(name, vals)
+        def sci(x):
+            return "--" if x is None else (f"{x:.1e}" if x != 0 else "0")
+        out.append("\\newcommand{\\caassump}{")
+        out.append("\\begin{tabular}{llcccccccc}\n\\toprule")
+        out.append("Equation & Operation & $m_j$ & $\\|I - C_j\\mathcal{L}_h\\|_2$ & $\\|I - C_j\\mathcal{L}_h\\|_{A}$ & $\\|(I - C_j\\mathcal{L}_h)^{m_j}\\|_{A}$ & $\\rho(I - C_j\\mathcal{L}_h)$ & $\\sigma_{\\min}$ & $\\|C_j(0)\\|$ & $\\|[G_j, G_{\\mathrm{NO}}]\\|$ \\\\ \\midrule")
+        for eq in EQS:
+            for N in NS:
+                d = Af.get((eq, N))
+                if d is None:
+                    continue
+                first = True
+                no = d["ops"]["no"]
+                out.append(" & ".join([f"{EQ_NAMES[eq]}, ${N}^2$", "DeepONet corrector", "1", f6(no["rho2"], 6), f6(no.get("rhoA"), 6), f6(no.get("rhoA"), 6),
+                                       f6(no["rho_spec"], 6), f"{sci(no['band_max'])} (band)", sci(no["zero"]), "--"]) + " \\\\")
+                for spec in PAIRINGS:
+                    r_ = d["ops"].get(spec)
+                    if r_ is None:
+                        continue
+                    if "rho_symbol_nonyquist" in r_:   # Fourier-diagonal: exact values on the Nyquist-free subspace
+                        rho2 = rhoA = rho_spec = r_["rho_symbol_nonyquist"]
+                        rhoA_m = rho2 ** r_["m"]
+                        sig = r_["sigma_min_symbol"]
+                    else:
+                        rho2, rhoA, rhoA_m, rho_spec, sig = r_["rho2"], r_.get("rhoA"), r_.get("rhoA_macro"), r_["rho_spec"], r_["sigma_min"]
+                    out.append(" & ".join(["", SOLVER_NAMES[spec], str(r_["m"]), f6(rho2, 6), f6(rhoA, 6), f6(rhoA_m, 6),
+                                           f6(rho_spec, 6), sci(sig), sci(r_["zero"]), sci(r_["comm"])]) + " \\\\")
+                out.append("\\midrule")
+        out[-1] = "\\bottomrule\n\\end{tabular}}"
+        out.append("\\newcommand{\\caassumpB}{")
+        out.append("\\begin{tabular}{llccccccc}\n\\toprule")
+        out.append("Equation & Ensemble & $T$ & $\\sum_i \\rho_{O_i}^2$ & $\\alpha(O)$ (Prop.~\\ref{th:weaklyalphasupermodular}) & $\\hat\\alpha$ max & $\\hat\\alpha$ median & $\\bar E / \\|e\\|^2$ & $E_{\\min} / \\|e\\|^2$ \\\\ \\midrule")
+        for eq in EQS:
+            for N in NS:
+                d = Af.get((eq, N))
+                if d is None or not d.get("paths"):
+                    continue
+                first = True
+                for key, pth in d["paths"].items():
+                    rows = pth["rows"]
+                    members = key.split("+")
+                    Ts = [r["T"] for r in rows]
+                    ab = [r["alpha_bound"] for r in rows]
+                    ab_s = "$\\infty$" if any(not np.isfinite(a) for a in ab) else f"{np.median(ab):.1f}"
+                    out.append(" & ".join([f"{EQ_NAMES[eq]}, ${N}^2$" if first else "", wname(members),
+                                           f"{np.median(Ts):.0f}", f"{np.median([r['sum_rho2'] for r in rows]):.3f}", ab_s,
+                                           f"{max(r['alpha_hat_max'] or 0 for r in rows):.3f}",
+                                           f"{np.median([r['alpha_hat_median'] or 0 for r in rows]):.3f}",
+                                           f"{max(r['Ebar_rel'] for r in rows):.3f}", f"{min(r['Emin_rel'] for r in rows):.1e}"]) + " \\\\")
+                    first = False
+                out.append("\\midrule")
+        out[-1] = "\\bottomrule\n\\end{tabular}}"
+        # text macros: ranges over all settings
+        def _rhoA(v):
+            return v["rho_symbol_nonyquist"] ** v["m"] if "rho_symbol_nonyquist" in v else (v.get("rhoA_macro") or 0)
 
-    # placeholders for macros whose data may not exist yet
+        def _spec(v):
+            return v["rho_symbol_nonyquist"] if "rho_symbol_nonyquist" in v else v["rho_spec"]
+        rhoA_max = max(_rhoA(v) for d in Af.values() for k, v in d["ops"].items() if k != "no")
+        spec_max = max(_spec(v) for d in Af.values() for k, v in d["ops"].items() if k != "no")
+        rho2_gs = max(v["rho2"] for d in Af.values() for k, v in d["ops"].items() if k in ("gs", "ssor", "sor_1.5"))
+        band_max = max(d["ops"]["no"]["band_max"] for d in Af.values())
+        ah_max = max((r["alpha_hat_max"] or 0) for d in Af.values() for p in d.get("paths", {}).values() for r in p["rows"])
+        out.append(f"\\newcommand{{\\caRhoAMax}}{{{rhoA_max:.6f}}}")
+        out.append(f"\\newcommand{{\\caRhoSpecMax}}{{{spec_max:.6f}}}")
+        out.append(f"\\newcommand{{\\caRhoTwoGsMax}}{{{rho2_gs:.2f}}}")
+        out.append(f"\\newcommand{{\\caBandMax}}{{{band_max:.1e}}}".replace("e-0", "\\times 10^{-").replace("e-", "\\times 10^{-") + ("}" if "10^{" in f"{band_max:.1e}".replace("e-0", "\\times 10^{-") else ""))
+        out.append(f"\\newcommand{{\\caAlphaHatMax}}{{{ah_max:.3f}}}")
+    else:
+        pending(out, "caassump")
+        pending(out, "caassumpB")
+
+    # ================================================================ placeholders / summary macros
     defined = set(re.findall(r"\\newcommand\{\\(\w+)\}", "\n".join(out)))
-    for name in ["cabaselines", "cabaselinesB", "cabaselinesC", "caoverheads", "caamort",
-                 "castats", "castatsens", "castatsbase", "cascaling"]:
+    for name, val in [("caLstmMs", "--"), ("caLstmOverJacobi", "--"), ("caVsMgMin", "--"), ("caVsMgMax", "--"),
+                      ("caVsKrylovMin", "--"), ("caVsKrylovMax", "--"), ("caVsMgEnsMin", "--"), ("caVsMgEnsMax", "--"),
+                      ("caRhoAMax", "--"), ("caRhoSpecMax", "--"), ("caRhoTwoGsMax", "--"), ("caBandMax", "--"), ("caAlphaHatMax", "--")]:
         if name not in defined:
-            out.append(f"\\newcommand{{\\{name}}}{{\\begin{{tabular}}{{c}}(results pending)\\end{{tabular}}}}")
-    for name, val in [("caLstmMs", "--"), ("caLstmOverJacobi", "--"), ("caEnsVsPairMin", "--"),
-                      ("caVsMgMin", "--"), ("caVsMgMax", "--"), ("caVsKrylovMin", "--"), ("caVsKrylovMax", "--"),
-                      ("caFftRatioMin", "--"), ("caFftRatioMax", "--"), ("caVsMgEnsMin", "--"), ("caVsMgEnsMax", "--"),
-                      ("caEnsVsPairMax", "--"), ("caEnsVsSolverMin", "--"), ("caEnsVsSolverMax", "--"), ("caNumEns", "--")]:
-        if name not in defined and not (ens_ratios and name.startswith("caEns")) and not (ens_ratios and name == "caNumEns"):
             out.append(f"\\newcommand{{\\{name}}}{{{val}}}")
-
     if ens_ratios:
         out.append(f"\\newcommand{{\\caEnsVsPairMin}}{{{fmt_sp(min(ens_ratios))}}}")
         out.append(f"\\newcommand{{\\caEnsVsPairMax}}{{{fmt_sp(max(ens_ratios))}}}")
         out.append(f"\\newcommand{{\\caEnsVsSolverMin}}{{{fmt_sp(min(ens_vs_solver))}}}")
         out.append(f"\\newcommand{{\\caEnsVsSolverMax}}{{{fmt_sp(max(ens_vs_solver))}}}")
         out.append(f"\\newcommand{{\\caNumEns}}{{{len(ens_ratios)}}}")
+    else:
+        for name in ["caEnsVsPairMin", "caEnsVsPairMax", "caEnsVsSolverMin", "caEnsVsSolverMax", "caNumEns"]:
+            out.append(f"\\newcommand{{\\{name}}}{{--}}")
+    for SUF in ["", "B", "C"]:
+        for name in ["caSpSolver", "caSpHints", "caSpBest", "caSpSolverDeep", "caSpHintsDeep", "caSpBestDeep", "caSpOracleRatio"]:
+            for mm in ["Min", "Max"]:
+                if name + SUF + mm not in defined:
+                    out.append(f"\\newcommand{{\\{name}{SUF}{mm}}}{{--}}")
+        for name in ["caNumCells", "caCellsRouterBeatsBest", "caCellsRouterBeatsHints"]:
+            if name + SUF not in defined:
+                out.append(f"\\newcommand{{\\{name}{SUF}}}{{--}}")
 
     os.makedirs("paper", exist_ok=True)
     with open(OUT_TEX, "w") as fh:

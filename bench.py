@@ -56,6 +56,8 @@ parser.add_argument("--tag", default="")
 parser.add_argument("--remeasure_costs", action="store_true")
 parser.add_argument("--train_only", action="store_true", help="measure costs, train routers, exit")
 parser.add_argument("--measure_only", action="store_true", help="measure and cache costs only")
+parser.add_argument("--with_pairwise", action="store_true",
+                    help="ensemble mode: also evaluate every member's pairwise router/oracle (same instances, same session)")
 parser.add_argument("--rate", action="store_true",
                     help="per-iteration form of the cost-aware rule (policies rate / router_rate)")
 args = parser.parse_args()
@@ -90,6 +92,15 @@ for group in groups:
     if gkey in cached and not args.remeasure_costs:
         costs = cached[gkey]
         print(f"  using cached costs from {cost_path}")
+    elif args.ensemble and all(s_ in cached for s_ in group) and not args.remeasure_costs:
+        # assemble the ensemble's costs from the cached pairwise measurements so that the
+        # macro-action sizes of every member are identical to those of its pairwise run
+        costs = {s_: cached[s_][s_] for s_ in group}
+        costs["no"] = float(np.mean([cached[s_]["no"] for s_ in group]))
+        costs["_residual"] = float(np.mean([cached[s_]["_residual"] for s_ in group]))
+        cached[gkey] = costs
+        json.dump(cached, open(cost_path, "w"), indent=1)
+        print(f"  ensemble costs assembled from the pairwise cache {cost_path}")
     else:
         gc.collect()
         gc.disable()
@@ -145,27 +156,56 @@ for group in groups:
         continue
     gres = {"costs": costs, "m": env.m, "ops": env.ops, "router_decision_cost": t_dec,
             "policies": {p: [] for p in pol_list}, "curves": {p: [] for p in pol_list}}
+    # same-session pairwise baselines for ensembles: every member's own router and oracle
+    # (pairwise costs / routers from the pairwise runs), evaluated on the same instances
+    runs = {p: (env, router, p, t_dec) for p in pol_list}   # name -> (env, router, base policy, decision cost)
+    if args.ensemble and args.with_pairwise:
+        for s_ in group:
+            rp_ = f"{args.ckp_dir}/router_{args.equation}_{args.N}_{s_}.pth"
+            if s_ not in cached or not os.path.exists(rp_):
+                print(f"  (no pairwise router/costs for {s_}; skipped)", flush=True)
+                continue
+            env_s = Env(pde, [s_], corrector, costs=cached[s_])
+            _ = env_s.solvers[0].step(np.zeros_like(f_test[:1]), f_test[:1])
+            r_s = Router.load(rp_)
+            fs_ = FeatureState(env_s.K, env_s.no_index)
+            reps_ = []
+            for k in range(300):
+                t0 = time.perf_counter_ns()
+                d = r_s.decide(fs_.features(1e-3))
+                fs_.update(d, env_s.m[d])
+                reps_.append(time.perf_counter_ns() - t0)
+            runs[f"router@{s_}"] = (env_s, r_s, "router", float(np.median(reps_)) * 1e-9)
+            runs[f"oracle@{s_}"] = (env_s, None, "oracle", 0.0)
+            gres["policies"][f"router@{s_}"] = []; gres["policies"][f"oracle@{s_}"] = []
+            gres["curves"][f"router@{s_}"] = []; gres["curves"][f"oracle@{s_}"] = []
+            gres.setdefault("pairwise", {})[s_] = {"costs": cached[s_], "m": env_s.m, "ops": env_s.ops,
+                                                    "router_decision_cost": runs[f"router@{s_}"][3]}
+    names = list(runs.keys())
     t_start = time.time()
     for i in range(args.n_test):
         f1, u1 = f_test[i:i + 1], u_truth[i:i + 1]
         traces = {}
-        for p in pol_list:
-            traces[p] = run_untimed(env, f1, u1, p, max_ops=args.max_ops, err_stop=args.err_stop,
-                                    router=router)
+        for p in names:
+            env_, router_, base_, _ = runs[p]
+            traces[p] = run_untimed(env_, f1, u1, base_, max_ops=args.max_ops, err_stop=args.err_stop,
+                                    router=router_)
         # timed replays, order rotated per instance
         gc.collect()
         gc.disable()
-        times = {p: [] for p in pol_list}
+        times = {p: [] for p in names}
         for rep in range(args.timed_reps):
-            order = pol_list[(i + rep) % len(pol_list):] + pol_list[:(i + rep) % len(pol_list)]
+            order = names[(i + rep) % len(names):] + names[:(i + rep) % len(names)]
             for p in order:
-                t, u_end = run_timed(env, f1, traces[p], p, router=router)
+                env_, router_, base_, _ = runs[p]
+                t, u_end = run_timed(env_, f1, traces[p], base_, router=router_)
                 times[p].append(t)
         gc.enable()
-        for p in pol_list:
+        for p in names:
+            env, router, base_, t_dec_ = runs[p]
             tr = traces[p]
             t_live = np.median(np.stack(times[p]), axis=0)
-            t_wu = work_units(env, tr, p, router_cost=t_dec)
+            t_wu = work_units(env, tr, base_, router_cost=t_dec_)
             tt_live = time_to_tol(tr, t_live, tols)
             tt_wu = time_to_tol(tr, t_wu, tols)
             e = tr["rel_err"]
@@ -201,10 +241,11 @@ for group in groups:
                 gres["curves"][p].append({"rel_err": e[:min(len(e), 5000)].tolist(),
                                           "op": tr["op"][:5000].tolist(),
                                           "t_live": t_live[:5001].tolist()})
+        env, router = runs[pol_list[0]][0], runs[pol_list[0]][1]
         if (i + 1) % 8 == 0 or i == args.n_test - 1:
             msg = " | ".join(
                 f"{p}: {np.median([r['tol'][f'{h2:.6g}']['t_live'] or np.inf for r in gres['policies'][p]])*1e3:.1f}ms"
-                for p in pol_list)
+                for p in names)
             print(f"  [{i+1:3d}/{args.n_test}] median time-to-h2  {msg}   ({time.time()-t_start:.0f}s)", flush=True)
     results["groups"][gkey] = gres
     out = f"{args.out_dir}/{args.equation}_{args.N}_{'ens_' if args.ensemble else ''}{gkey}{args.tag}.json"
