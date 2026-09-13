@@ -904,7 +904,7 @@ def main():
         out[-1] = "\\bottomrule\n\\end{tabular}}"
         out.append("\\newcommand{\\caassumpB}{")
         out.append("\\begin{tabular}{llccccccc}\n\\toprule")
-        out.append("Equation & Ensemble & $T$ & $\\sum_i \\rho_{O_i}^2$ & $\\alpha(O)$ (Prop.~\\ref{th:weaklyalphasupermodular}) & $\\hat\\alpha$ max & $\\hat\\alpha$ median & $\\bar E / \\|e\\|^2$ & $E_{\\min} / \\|e\\|^2$ \\\\ \\midrule")
+        out.append("Equation & Ensemble & $T$ & $\\sum_i \\rho_{O_i}^2$ & $\\alpha(O)$ (Prop.~\\ref{th:weaklyalphasupermodular}) & $\\hat\\alpha$ max & $\\hat\\alpha$ median & $\\max_t\\max_j \\tilde c_j/\\|e^{(t)}\\|^2$ & $\\min_t\\max_j \\tilde c_j/\\|e^{(t)}\\|^2$ \\\\ \\midrule")
         for eq in EQS:
             for N in NS:
                 d = Af.get((eq, N))
@@ -915,8 +915,24 @@ def main():
                     rows = pth["rows"]
                     members = key.split("+")
                     Ts = [r["T"] for r in rows]
+                    # alpha(O) with the energy-norm constants of the chosen macro-actions (rho_NO = 1)
+                    rhoA = {}
+                    for j, o in enumerate(pth["ops"]):
+                        v = d["ops"][o]
+                        if o == "no":
+                            rhoA[o] = 1.0
+                        elif "rho_symbol_nonyquist" in v:
+                            rhoA[o] = v["rho_symbol_nonyquist"] ** pth["m"][j]
+                        else:
+                            rhoA[o] = v.get("rhoA_macro") if pth["m"][j] == v["m"] else (v.get("rhoA") or v["rho2"]) ** pth["m"][j]
+                    for r in rows:
+                        s2 = sum(rhoA[pth["ops"][j]] ** 2 for j in r["steps"])
+                        r["sum_rho2"] = s2
+                        r["alpha_bound"] = max(4.0 / (r["T"] - s2), 1.0) if r["T"] - s2 > 0 else float("inf")
                     ab = [r["alpha_bound"] for r in rows]
-                    ab_s = "$\\infty$" if any(not np.isfinite(a) for a in ab) else f"{np.median(ab):.1f}"
+                    n_inf = sum(1 for a in ab if not np.isfinite(a))
+                    fin = [a for a in ab if np.isfinite(a)]
+                    ab_s = ("$\\infty$" if not fin else f"{np.median(fin):.0f}") + (f" ($\\infty$ on {n_inf}/{len(ab)})" if 0 < n_inf < len(ab) else "")
                     out.append(" & ".join([f"{EQ_NAMES[eq]}, ${N}^2$" if first else "", wname(members),
                                            f"{np.median(Ts):.0f}", f"{np.median([r['sum_rho2'] for r in rows]):.3f}", ab_s,
                                            f"{max(r['alpha_hat_max'] or 0 for r in rows):.3f}",
@@ -936,6 +952,13 @@ def main():
         rho2_gs = max(v["rho2"] for d in Af.values() for k, v in d["ops"].items() if k in ("gs", "ssor", "sor_1.5"))
         band_max = max(d["ops"]["no"]["band_max"] for d in Af.values())
         ah_max = max((r["alpha_hat_max"] or 0) for d in Af.values() for p in d.get("paths", {}).values() for r in p["rows"])
+        ah_med = float(np.median([(r["alpha_hat_median"] or 0) for d in Af.values() for p in d.get("paths", {}).values() for r in p["rows"]]))
+        ah_h2 = [(r["alpha_hat_max"] or 0) for d in Af.values() for p in d.get("paths_h2", {}).values() for r in p["rows"]]
+        ab_fin = [r["alpha_bound"] for d in Af.values() for p in d.get("paths", {}).values() for r in p["rows"] if np.isfinite(r["alpha_bound"])]  # recomputed above with energy-norm constants
+        out.append(f"\\newcommand{{\\caAlphaHatMed}}{{{ah_med:.2f}}}")
+        out.append(f"\\newcommand{{\\caAlphaHatMaxH}}{{{(max(ah_h2) if ah_h2 else float('nan')):.3f}}}")
+        out.append(f"\\newcommand{{\\caAlphaBoundMin}}{{{(min(ab_fin) if ab_fin else float('nan')):.0f}}}")
+        out.append(f"\\newcommand{{\\caAlphaBoundMax}}{{{(max(ab_fin) if ab_fin else float('nan')):.0f}}}")
         out.append(f"\\newcommand{{\\caRhoAMax}}{{{rhoA_max:.6f}}}")
         out.append(f"\\newcommand{{\\caRhoSpecMax}}{{{spec_max:.6f}}}")
         out.append(f"\\newcommand{{\\caRhoTwoGsMax}}{{{rho2_gs:.2f}}}")
@@ -949,7 +972,8 @@ def main():
     defined = set(re.findall(r"\\newcommand\{\\(\w+)\}", "\n".join(out)))
     for name, val in [("caLstmMs", "--"), ("caLstmOverJacobi", "--"), ("caVsMgMin", "--"), ("caVsMgMax", "--"),
                       ("caVsKrylovMin", "--"), ("caVsKrylovMax", "--"), ("caVsMgEnsMin", "--"), ("caVsMgEnsMax", "--"),
-                      ("caRhoAMax", "--"), ("caRhoSpecMax", "--"), ("caRhoTwoGsMax", "--"), ("caBandMax", "--"), ("caAlphaHatMax", "--")]:
+                      ("caRhoAMax", "--"), ("caRhoSpecMax", "--"), ("caRhoTwoGsMax", "--"), ("caBandMax", "--"), ("caAlphaHatMax", "--"),
+                      ("caAlphaHatMed", "--"), ("caAlphaHatMaxH", "--"), ("caAlphaBoundMin", "--"), ("caAlphaBoundMax", "--")]:
         if name not in defined:
             out.append(f"\\newcommand{{\\{name}}}{{{val}}}")
     if ens_ratios:

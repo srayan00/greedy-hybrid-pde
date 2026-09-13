@@ -44,6 +44,8 @@ p.add_argument("--n_modes", type=int, default=4000)
 p.add_argument("--seed", type=int, default=72)
 p.add_argument("--ckp_dir", default="./checkpoints")
 p.add_argument("--out_dir", default="./results")
+p.add_argument("--path_tol", type=float, default=1e-8, help="horizon of the oracle path (relative error)")
+p.add_argument("--paths_only", action="store_true", help="reuse the stored norms and recompute only the oracle-path quantities")
 args = p.parse_args()
 torch.set_num_threads(1)
 rng = np.random.default_rng(0)
@@ -280,28 +282,36 @@ def in_band(k):
 
 out = {"args": vars(args), "h2": h2, "corrector": {"n_cx": corrector.n_cx, "n_cy": corrector.n_cy, "adjoint_check": adj_err}, "ops": {}}
 t0 = time.time()
+_out_path = f"{args.out_dir}/assumptions_{args.equation}_{N}.json"
+if args.paths_only and os.path.exists(_out_path):
+    out = json.load(open(_out_path))
+    out["args"]["path_tol"] = args.path_tol
+    solvers_norms = []
+else:
+    solvers_norms = None
 
 # ------------------------------------------------------------ the corrector
 G_no, GT_no = make_G("no")
 band_c, out_c, leak = [], [], []
-for k, phi in fourier_modes(args.n_modes):
+for k, phi in (fourier_modes(args.n_modes) if solvers_norms is None else []):
     y = G_no(phi)
     coef = float((y * phi).sum())
     (band_c if in_band(k) else out_c).append(abs(coef))
     leak.append(float(np.linalg.norm(y - coef * phi)))
-out["ops"]["no"] = {
+if solvers_norms is None:
+  out["ops"]["no"] = {
     "rho2": norm2(G_no, GT_no), "rhoA": normA(G_no, GT_no), "rho_spec": spectral_radius(G_no),
     "zero": float(np.linalg.norm(no_map.apply(zeros))),
     "band_max": float(max(band_c)), "band_mean": float(np.mean(band_c)),
     "outband_min": float(min(out_c)), "outband_max": float(max(out_c)), "leak_max": float(max(leak)),
     "n_band_modes": len(band_c), "n_out_modes": len(out_c)}
-print(f"[{args.equation} N={N}] corrector: rho2 {out['ops']['no']['rho2']:.6f} rho_spec {out['ops']['no']['rho_spec']:.6f} "
+  print(f"[{args.equation} N={N}] corrector: rho2 {out['ops']['no']['rho2']:.6f} rho_spec {out['ops']['no']['rho_spec']:.6f} "
       f"band max {max(band_c):.2e} out-of-band [{min(out_c):.6f}, {max(out_c):.6f}] leak {max(leak):.2e} adjoint err {adj_err:.1e} ({time.time()-t0:.0f}s)", flush=True)
 
 # ------------------------------------------------------------ classical solvers
 X, Y = np.meshgrid(np.arange(N), np.arange(N), indexing="ij")
 rand_vecs = [demean(rng.standard_normal((1, N, N))) for _ in range(6)]
-for spec in solvers:
+for spec in (solvers if solvers_norms is None else []):
     t1 = time.time()
     sv = make_solver(pde, spec) if spec != "mg" else FastMultigrid(pde)
     m = max(1, int(round(costs_all[spec]["no"] / costs_all[spec][spec])))
@@ -364,13 +374,13 @@ def oracle_path(env, fi, ui):
     Prop. 4.2 / Thm 5.1 along the path."""
     u = np.zeros_like(fi)
     un = np.linalg.norm(ui)
-    e = ui - u
+    e = demean(ui - u)          # the constant mode is the null space of the periodic operator (as in hybrid.run_untimed)
     g = [float(np.linalg.norm(e) ** 2)]
     steps, ctil = [], []
     K = env.K
     for t in range(400):
         rel = np.linalg.norm(e) / un
-        if rel <= h2:
+        if rel <= args.path_tol:
             break
         r = pde.residual(u, fi)
         cand, errs = [], []
@@ -380,12 +390,12 @@ def oracle_path(env, fi, ui):
                 rj = pde.residual(uj, fi)
                 uj = uj + (env.corrector.correct(rj) if j == env.no_index else C_apply(env.solvers[j], rj))
             cand.append(uj)
-            errs.append(float(np.linalg.norm(ui - uj)))
+            errs.append(float(np.linalg.norm(demean(ui - uj))))
         ctil.append([x ** 2 for x in errs])
         j = int(np.argmin(env.macro_score(np.linalg.norm(e), np.array(errs))))
         steps.append(j)
         u = cand[j]
-        e = ui - u
+        e = demean(ui - u)
         g.append(float(np.linalg.norm(e) ** 2))
     T = len(steps)
     # empirical supermodularity ratio: S = prefix t, S' = suffix
@@ -401,8 +411,12 @@ def oracle_path(env, fi, ui):
             "alpha_hat_median": float(np.median(ratios)) if ratios else None, "Ebar_rel": ebar, "Emin_rel": emin}
 
 
-out["paths"] = {}
+_pkey = "paths" if args.path_tol < h2 else "paths_h2"
+out[_pkey] = {}
+solvers = [s for s in solvers if s in out["ops"]]   # operations whose norms were computed
 groups = [[s] for s in solvers]
+if "jacobi" in solvers and "jacobi_0.67" in solvers:
+    groups.append(["jacobi", "jacobi_0.67"])
 if N == 128:
     groups.append([s for s in solvers if s != "mg"])
 for grp in groups:
@@ -427,7 +441,7 @@ for grp in groups:
         r_["sum_rho2"] = s2
         r_["alpha_bound"] = max(4.0 / (r_["T"] - s2), 1.0) if r_["T"] - s2 > 0 else float("inf")
         alphas.append(r_["alpha_bound"])
-    out["paths"][key] = {"ops": env.ops, "m": env.m, "rho_macro": rho, "rows": rows}
+    out[_pkey][key] = {"ops": env.ops, "m": env.m, "rho_macro": rho, "rows": rows}
     print(f"  path {key:40s} T med {np.median([r_['T'] for r_ in rows]):.0f} alpha(O) med {np.median(alphas):.2f} "
           f"alpha_hat max {max(r_['alpha_hat_max'] or 0 for r_ in rows):.3f} med {np.median([r_['alpha_hat_median'] or 0 for r_ in rows]):.3f} "
           f"Ebar {max(r_['Ebar_rel'] for r_ in rows):.3f} Emin {min(r_['Emin_rel'] for r_ in rows):.2e}", flush=True)
