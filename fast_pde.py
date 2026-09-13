@@ -26,6 +26,38 @@ import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 
 
+# ---------------------------------------------------------------------------
+# Compiled kernels (stencil.c -> libstencil.so); numpy/scipy fallback if absent
+# ---------------------------------------------------------------------------
+import ctypes as _ct
+import os as _os
+_LIB = None
+try:
+    _p = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "libstencil.so")
+    if _os.path.exists(_p) and _os.environ.get("STENCIL_NUMPY", "0") != "1":
+        _LIB = _ct.CDLL(_p)
+        _dp = _ct.POINTER(_ct.c_double)
+        _LIB.apply_A.argtypes = [_dp, _dp, _ct.c_int, _ct.c_int, _ct.c_double, _ct.c_double, _ct.c_double, _ct.c_double]
+        _LIB.residual.argtypes = [_dp, _dp, _dp, _ct.c_int, _ct.c_int, _ct.c_double, _ct.c_double, _ct.c_double, _ct.c_double]
+        _LIB.jacobi.argtypes = [_dp, _dp, _dp, _ct.c_int, _ct.c_int, _ct.c_double, _ct.c_double, _ct.c_double, _ct.c_double, _ct.c_double]
+        _LIB.sor_sweep.argtypes = [_dp, _dp, _ct.c_int, _ct.c_int, _ct.c_double, _ct.c_double, _ct.c_double, _ct.c_double, _ct.c_double, _ct.c_int]
+        _LIB.ssor_sweep.argtypes = [_dp, _dp, _ct.c_int, _ct.c_int, _ct.c_double, _ct.c_double, _ct.c_double, _ct.c_double, _ct.c_double]
+        _LIB.restrict_fw.argtypes = [_dp, _dp, _ct.c_int, _ct.c_int]
+        _LIB.prolong_bilinear.argtypes = [_dp, _dp, _ct.c_int, _ct.c_int]
+except OSError:
+    _LIB = None
+COMPILED = _LIB is not None
+
+
+def _ptr(a):
+    return a.ctypes.data_as(_ct.POINTER(_ct.c_double))
+
+
+def _c64(a):
+    a = np.asarray(a, dtype=np.float64)
+    return a if a.flags["C_CONTIGUOUS"] else np.ascontiguousarray(a)
+
+
 class FastStencilPDE:
     """-a * Lap(u) + b . grad(u) = f on [0,1]^2, periodic, uniform N x N grid.
 
@@ -50,6 +82,12 @@ class FastStencilPDE:
     # -- operator ------------------------------------------------------------
     def apply_A(self, u):
         """u: (..., N, N). First grid axis is i (x), second is j (y)."""
+        if COMPILED and u.dtype == np.float64 and u.ndim in (2, 3):
+            uc = _c64(u)
+            out = np.empty_like(uc)
+            B = 1 if uc.ndim == 2 else uc.shape[0]
+            _LIB.apply_A(_ptr(uc), _ptr(out), B, self.N, self.ax, self.ay, self.b1, self.b2)
+            return out
         h = self.h
         up_i = np.roll(u, -1, axis=-2)   # u_{i+1,j}
         dn_i = np.roll(u, 1, axis=-2)    # u_{i-1,j}
@@ -64,6 +102,12 @@ class FastStencilPDE:
         return out
 
     def residual(self, u, f):
+        if COMPILED and u.dtype == np.float64 and u.ndim in (2, 3) and f.shape == u.shape:
+            uc, fc = _c64(u), _c64(f)
+            r = np.empty_like(uc)
+            B = 1 if uc.ndim == 2 else uc.shape[0]
+            _LIB.residual(_ptr(uc), _ptr(fc), _ptr(r), B, self.N, self.ax, self.ay, self.b1, self.b2)
+            return r
         return f - self.apply_A(u)
 
     # -- FFT direct solve (exact solution of the discrete system) -------------
@@ -142,8 +186,29 @@ class FastJacobi:
 
     def step(self, u, f, r=None):
         if r is None:
+            if COMPILED and u.dtype == np.float64 and u.ndim in (2, 3) and f is not None:
+                uc, fc = _c64(u), _c64(f)
+                out = np.empty_like(uc)
+                B = 1 if uc.ndim == 2 else uc.shape[0]
+                _LIB.jacobi(_ptr(uc), _ptr(fc), _ptr(out), B, self.pde.N, self.pde.ax, self.pde.ay, self.pde.b1, self.pde.b2, self.weight)
+                return out
             r = self.pde.residual(u, f)
         return u + (self.weight / self.pde.diag) * r
+
+
+def _c_sweep(pde, u, f, r, omega, symmetric=False):
+    """In-place SOR / symmetric-SOR sweep in C on a copy of u (needs f; if only r is
+    available, f is reconstructed as A u + r)."""
+    uc = _c64(u).copy()
+    if f is None:
+        f = pde.apply_A(u) + r
+    fc = _c64(f)
+    B = 1 if uc.ndim == 2 else uc.shape[0]
+    if symmetric:
+        _LIB.ssor_sweep(_ptr(uc), _ptr(fc), B, pde.N, pde.ax, pde.ay, pde.b1, pde.b2, omega)
+    else:
+        _LIB.sor_sweep(_ptr(uc), _ptr(fc), B, pde.N, pde.ax, pde.ay, pde.b1, pde.b2, omega, 1)
+    return uc
 
 
 class FastGaussSeidel:
@@ -151,10 +216,12 @@ class FastGaussSeidel:
 
     def __init__(self, pde: FastStencilPDE):
         self.pde = pde
-        self.lu = pde._get_lower_solver("gs")
+        self.lu = None if COMPILED else pde._get_lower_solver("gs")
         self.name = "gs"
 
     def step(self, u, f, r=None):
+        if COMPILED and u.dtype == np.float64 and u.ndim in (2, 3):
+            return _c_sweep(self.pde, u, f, r, 1.0)
         if r is None:
             r = self.pde.residual(u, f)
         B = r.shape[0] if r.ndim == 3 else 1
@@ -170,10 +237,12 @@ class FastSOR:
     def __init__(self, pde: FastStencilPDE, omega=1.5):
         self.pde = pde
         self.omega = omega
-        self.lu = pde._get_lower_solver("sor", omega)
+        self.lu = None if COMPILED else pde._get_lower_solver("sor", omega)
         self.name = f"sor_{omega:g}"
 
     def step(self, u, f, r=None):
+        if COMPILED and u.dtype == np.float64 and u.ndim in (2, 3):
+            return _c_sweep(self.pde, u, f, r, self.omega)
         if r is None:
             r = self.pde.residual(u, f)
         B = r.shape[0] if r.ndim == 3 else 1
@@ -191,16 +260,19 @@ class FastSSOR:
     def __init__(self, pde: FastStencilPDE, omega=1.0):
         self.pde = pde
         self.omega = omega
-        A = pde.sparse_A()
-        D = A.diagonal()
-        Dm = sp.diags(D / omega)
-        self._diag = D
-        self._lu_low = spla.splu((Dm + sp.tril(A, k=-1)).tocsc(), permc_spec="NATURAL")
-        self._lu_up = spla.splu((Dm + sp.triu(A, k=1)).tocsc(), permc_spec="NATURAL")
+        if not COMPILED:
+            A = pde.sparse_A()
+            D = A.diagonal()
+            Dm = sp.diags(D / omega)
+            self._diag = D
+            self._lu_low = spla.splu((Dm + sp.tril(A, k=-1)).tocsc(), permc_spec="NATURAL")
+            self._lu_up = spla.splu((Dm + sp.triu(A, k=1)).tocsc(), permc_spec="NATURAL")
         self._scale = (2.0 - omega) / omega
         self.name = "ssor" if omega == 1.0 else f"ssor_{omega:g}"
 
     def step(self, u, f, r=None):
+        if COMPILED and u.dtype == np.float64 and u.ndim in (2, 3):
+            return _c_sweep(self.pde, u, f, r, self.omega, symmetric=True)
         if r is None:
             r = self.pde.residual(u, f)
         B = r.shape[0] if r.ndim == 3 else 1
@@ -302,6 +374,12 @@ def l2(u):
 def restrict_fw(r):
     """Full-weighting restriction (..., N, N) -> (..., N/2, N/2), periodic."""
     N = r.shape[-1]
+    if COMPILED and r.dtype == np.float64 and r.ndim in (2, 3):
+        rc = _c64(r)
+        B = 1 if rc.ndim == 2 else rc.shape[0]
+        out = np.empty(rc.shape[:-2] + (N // 2, N // 2))
+        _LIB.restrict_fw(_ptr(rc), _ptr(out), B, N)
+        return out
     up = np.roll(r, -1, axis=-2); dn = np.roll(r, 1, axis=-2)
     lf = np.roll(r, 1, axis=-1); rt = np.roll(r, -1, axis=-1)
     s = (4.0 * r + 2.0 * (up + dn + lf + rt)
@@ -313,6 +391,12 @@ def restrict_fw(r):
 def prolong_bilinear(c):
     """Bilinear prolongation (..., n, n) -> (..., 2n, 2n), periodic."""
     n = c.shape[-1]
+    if COMPILED and c.dtype == np.float64 and c.ndim in (2, 3):
+        cc_ = _c64(c)
+        B = 1 if cc_.ndim == 2 else cc_.shape[0]
+        out = np.empty(cc_.shape[:-2] + (2 * n, 2 * n))
+        _LIB.prolong_bilinear(_ptr(cc_), _ptr(out), B, n)
+        return out
     out = np.empty(c.shape[:-2] + (2 * n, 2 * n))
     cr = np.roll(c, -1, axis=-2)          # c[i+1, j]
     cc = np.roll(c, -1, axis=-1)          # c[i, j+1]

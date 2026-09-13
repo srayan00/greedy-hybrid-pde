@@ -120,9 +120,9 @@ Wilcoxon / paired t-tests on log times, and the paper's iteration-based AUC.
 ### Step-by-step replication
 
 ```
-# 0. (once) sanity-check the fast solvers against the dense reference at N=31 (asserts; relative tolerance 1e-6,
-#    the reference assembling its matrices in single precision)
-python validate_fast_pde.py
+# 0. build the compiled stencil kernels (all classical sweeps, residual, multigrid transfers) and check them
+cc -O3 -shared -fPIC -o libstencil.so stencil.c     # STENCIL_NUMPY=1 forces the numpy/scipy fallback
+python validate_fast_pde.py                        # asserts against the dense reference at N=31 (rel. tol. 1e-6)
 
 # 1. correctors: one per (equation, grid). Sensor grid = N/coarsen per axis;
 #    64x64 for the isotropic equations, full x-resolution for AnisoDiff.
@@ -156,7 +156,9 @@ python bench_baselines.py --equation ConvDiff --N 128 --n_test 64
 ./run_ens_nested.sh      # ~6 h (training + benchmark; live times may be inflated if other jobs run)
 ./run_retime.sh          # ~3.5 h: re-time every nested cell on an idle machine (no retraining)
 ./run_assumptions.sh     # ~1 h
-./run_review.sh          # ~17 h: one-shot baseline, 256^2 seed trials, held-out (seed 73) confirmation runs
+./run_final.sh           # ~20 h: the confirmatory study reported in the paper (compiled kernels, test seed 73,
+                         #  frozen recipes, full fixed-schedule family, 3 timed replays); results_dev/ holds the
+                         #  development runs (numpy kernels, seed 72) on which every configuration was chosen
 # 7. tables, figures, paper
 python make_tables.py   # -> paper/costaware_tables.tex
 python make_figures.py  # -> paper/neurips_images/ca_*.png
