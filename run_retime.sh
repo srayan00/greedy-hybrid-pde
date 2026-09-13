@@ -1,7 +1,7 @@
 #!/bin/zsh
 # Re-time all nested-ensemble cells on an idle machine (routers already trained; no retraining).
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 MKL_NUM_THREADS=1
-PY=/Users/yash/miniconda3/envs/ansatz/bin/python
+PY=${PY:-/Users/yash/miniconda3/envs/ansatz/bin/python}
 until [ -f logs/nest.done ]; do sleep 30; done
 sleep 60
 for EQ in Poisson ConvDiff AnisoDiff; do

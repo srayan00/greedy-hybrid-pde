@@ -3,7 +3,7 @@
 # members' pairwise routers evaluated in the same session (--with_pairwise). Costs of the
 # ensemble are assembled from the pairwise cache (identical macro-action sizes).
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 MKL_NUM_THREADS=1
-PY=/Users/yash/miniconda3/envs/ansatz/bin/python
+PY=${PY:-/Users/yash/miniconda3/envs/ansatz/bin/python}
 # ensemble routers use a larger imitation budget than the pairwise ones (256 oracle rollouts, 6 DAgger
 # rounds, hidden width 128, 300 epochs): with the pairwise recipe the two-member router imitated its
 # oracle imperfectly at tight tolerances (ConvDiff 128^2, 1e-8: 3.34 vs 2.67 work-unit ms)

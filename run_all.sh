@@ -1,7 +1,7 @@
 #!/bin/zsh
 # Master chain (unified cost rule: unit = corrector call; m_j = round(u/c_j); per-unit-cost exponent).
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 MKL_NUM_THREADS=1
-PY=/Users/yash/miniconda3/envs/ansatz/bin/python
+PY=${PY:-/Users/yash/miniconda3/envs/ansatz/bin/python}
 S128=jacobi,jacobi_0.67,gs,ssor,sor_1.5,mg
 S256=jacobi,jacobi_0.67,gs,ssor,sor_1.5,mg
 S512=jacobi,gs,sor_1.5,mg

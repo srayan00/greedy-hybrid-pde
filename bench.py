@@ -78,7 +78,22 @@ u_truth = pde.solve_direct(f_test)
 _ = corrector.correct(f_test[:1])  # warm-up
 
 groups = [specs] if args.ensemble else [[s] for s in specs]
-results = {"args": vars(args), "tols": tols, "h2": h2, "groups": {},
+def provenance(ckp_path):
+    """git commit / dirty state, package versions, checkpoint hash, time and run id."""
+    import hashlib, platform, subprocess, uuid, datetime, scipy
+    def sh(cmd):
+        try:
+            return subprocess.run(cmd, capture_output=True, text=True, check=True).stdout.strip()
+        except Exception:
+            return None
+    ck = hashlib.sha256(open(ckp_path, "rb").read()).hexdigest()[:16] if os.path.exists(ckp_path) else None
+    return {"git_commit": sh(["git", "rev-parse", "HEAD"]), "git_dirty": bool(sh(["git", "status", "--porcelain"])),
+            "numpy": np.__version__, "scipy": scipy.__version__, "torch": torch.__version__, "python": platform.python_version(),
+            "platform": platform.platform(), "corrector_sha256": ck, "started": datetime.datetime.now().isoformat(timespec="seconds"),
+            "run_id": uuid.uuid4().hex}
+
+
+results = {"args": vars(args), "tols": tols, "h2": h2, "groups": {}, "provenance": provenance(ckp),
            "test_params": {k: v.tolist() for k, v in params.items()}}
 
 for group in groups:

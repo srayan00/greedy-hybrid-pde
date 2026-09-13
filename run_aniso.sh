@@ -2,7 +2,7 @@
 # Anisotropic diffusion (-eps u_xx - u_yy = f, eps = 0.01): same pipeline; the corrector's sensor grid keeps
 # full resolution along x (the direction the point smoothers cannot damp) and 1/4 along y.
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 MKL_NUM_THREADS=1
-PY=/Users/yash/miniconda3/envs/ansatz/bin/python
+PY=${PY:-/Users/yash/miniconda3/envs/ansatz/bin/python}
 until [ -f logs/all.done ]; do sleep 30; done
 EQ=AnisoDiff
 export OMP_NUM_THREADS=8 OPENBLAS_NUM_THREADS=8 VECLIB_MAXIMUM_THREADS=8

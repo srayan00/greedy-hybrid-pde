@@ -2,7 +2,7 @@
 # Ensemble study for one equation: routers over NO + W for the paper's four ensembles.
 # Usage: ./run_ensembles.sh Poisson
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 MKL_NUM_THREADS=1
-PY=/Users/yash/miniconda3/envs/ansatz/bin/python
+PY=${PY:-/Users/yash/miniconda3/envs/ansatz/bin/python}
 EQ=$1
 N=${2:-128}
 NTEST=${3:-64}

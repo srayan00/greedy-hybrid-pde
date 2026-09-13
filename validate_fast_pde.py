@@ -54,9 +54,14 @@ for eq_name in ["Poisson", "ConvDiff"]:
         pairs.append((FastSSOR(fast, 1.0), SymmetricSuccessiveOverRelaxationSolver(ref, omega=1.0), "ssor"))
     except Exception as e:  # signature differences
         print("  (ssor reference unavailable:", e, ")")
+    tol = 1e-6   # the dense reference assembles its matrix in single precision
+    rel_A = np.abs(Au_fast - Au_dense).max() / np.abs(Au_dense).max()
+    assert rel_A < tol, f"{eq_name}: apply_A relative error {rel_A:.2e} exceeds {tol:.0e}"
     for fast_solver, dense_solver, tag in pairs:
         u1_fast = fast_solver.step(u0_np, f_np)
         u1_dense = dense_solver.iteration(u0.clone()).numpy().reshape(2, N, N)
-        print(f"  {tag} one-step max err: {np.abs(u1_fast - u1_dense).max():.3e}")
+        rel = np.abs(u1_fast - u1_dense).max() / max(np.abs(u1_dense - u0_np).max(), 1e-300)
+        print(f"  {tag} one-step max err: {np.abs(u1_fast - u1_dense).max():.3e} (relative to the update: {rel:.3e})")
+        assert rel < tol, f"{eq_name}/{tag}: one-step relative error {rel:.2e} exceeds {tol:.0e}"
 
-print("done")
+print("all checks passed")

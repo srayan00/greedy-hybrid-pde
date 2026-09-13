@@ -1,7 +1,7 @@
 #!/bin/zsh
 # Reviewer-response experiments: strong baselines, MG pairing, scaling to 256^2/512^2, overheads.
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 MKL_NUM_THREADS=1
-PY=/Users/yash/miniconda3/envs/ansatz/bin/python
+PY=${PY:-/Users/yash/miniconda3/envs/ansatz/bin/python}
 until [ -f logs/correctors_large.done ]; do sleep 20; done
 # --- 128^2: strong baselines + multigrid pairing
 for EQ in Poisson ConvDiff; do

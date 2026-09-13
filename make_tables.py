@@ -32,7 +32,7 @@ SOLVER_NAMES = {"jacobi": "Jacobi", "jacobi_0.67": "Jacobi (0.67)", "gs": "GS",
                 "ssor": "SymGS", "sor_1.5": "SOR (1.5)", "mg": "Multigrid"}
 SOLVER_ORDER = ["jacobi", "jacobi_0.67", "gs", "ssor", "sor_1.5"]
 PAIRINGS = SOLVER_ORDER + ["mg"]
-POL_NAMES = {"classical": "Solver only", "hints25": "HINTS ($\\tau{=}25$)", "best": "HINTS (best $\\tau$)",
+POL_NAMES = {"classical": "Solver only", "hints25": "HINTS ($\\tau{=}25$)", "best": "HINTS (best $\\tau$)", "oneshot": "One-shot schedule",
              "hints5": "HINTS ($\\tau{=}5$)", "hints10": "HINTS ($\\tau{=}10$)",
              "hints50": "HINTS ($\\tau{=}50$)", "greedy": "Greedy oracle (Alg.~1)",
              "oracle": "Cost-aware oracle", "router": "Learned router (ours)"}
@@ -51,17 +51,40 @@ OUT_TEX = os.environ.get("OUT_TEX", "paper/costaware_tables.tex")
 
 
 # ----------------------------------------------------------------- loading
-def load(pattern=None):
+USED_FILES = []
+
+
+def load(pattern=None, tag=""):
+    """Benchmark outputs with the given file tag ('' = main runs; '_oneshot', '_seed73' = auxiliary runs)."""
     pattern = pattern or f"{RESULTS_DIR}/*.json"
     R = {}
     for path in sorted(glob.glob(pattern)):
         d = json.load(open(path))
         if "args" not in d or "ensemble" not in d["args"]:
             continue
+        if (d["args"].get("tag") or "") != tag:
+            continue
+        USED_FILES.append(path)
         a = d["args"]
         for gkey, g in d["groups"].items():
             R[(a["equation"], a["N"], gkey, bool(a["ensemble"]))] = (d, g)
     return R
+
+
+def holm_mask(pvals, alpha=0.05):
+    """Boolean mask of the p-values that are significant after a Holm correction."""
+    p = np.asarray(pvals, dtype=float)
+    n = len(p)
+    if n == 0:
+        return np.zeros(0, dtype=bool)
+    order = np.argsort(p)
+    ok = np.zeros(n, dtype=bool)
+    for rank, idx in enumerate(order):
+        if p[idx] <= alpha / (n - rank):
+            ok[idx] = True
+        else:
+            break
+    return ok
 
 
 def tkey(d, tol):
@@ -157,18 +180,22 @@ def time_cell(rows, key, bold=False, italic=False):
     return s
 
 
-def sp_cell(base, ours, bold_thresh=1.10):
-    """'speedup (p)' with the one-sided p-value in the direction of the median."""
+def sp_cell(base, ours, bold_thresh=1.10, bold=None):
+    """'speedup (p)' with the one-sided p-value in the direction of the median.
+    bold=None: bold if speedup >= bold_thresh and p < 0.01; bold=True/False: forced (Holm pass)."""
+    s, sp, p = sp_parts(base, ours)
+    if bold is None:
+        bold = sp >= bold_thresh and p < 0.01
+    return f"\\textbf{{{s}}}" if (bold and sp >= 1.0) else s
+
+
+def sp_parts(base, ours):
     sp, _ = paired_speedup(base, ours)
     if sp >= 1.0:
         p = wilcoxon_p(base, ours)
-        s = f"{fmt_sp(sp)} ({pstr(p)})"
-        if sp >= bold_thresh and p < 0.01:
-            s = f"\\textbf{{{s}}}"
-    else:
-        p = wilcoxon_p(ours, base)
-        s = f"{fmt_sp(sp)} (slower, {pstr(p)})"
-    return s
+        return f"{fmt_sp(sp)} ({pstr(p)})", sp, p
+    p = wilcoxon_p(ours, base)
+    return f"{fmt_sp(sp)} (slower, {pstr(p)})", sp, p
 
 
 def rng_macro(out, name, vals):
@@ -186,6 +213,8 @@ def pending(out, name, msg="results pending"):
 # ------------------------------------------------------------------- main
 def main():
     R = load()
+    Ro = load(tag="_oneshot")     # static one-shot schedule (corrector once, then the solver)
+    Rh = load(tag="_seed73")      # held-out confirmation runs (fresh test seed, 3 timed replays)
     out = []
     Bf = {}
     for path in sorted(glob.glob(f"{RESULTS_DIR}/baselines_*.json")):
@@ -238,9 +267,9 @@ def main():
             have = {N: cell(eq, N, spec) for N in Ns}
             if not any(have.values()):
                 continue
-            pols = ["classical", "hints25", "best", "greedy", "oracle", "router"]
+            pols = ["classical", "hints25", "best", "oneshot", "greedy", "oracle", "router"]
             for pi, pol in enumerate(pols):
-                row = [f"$\\{{\\mathrm{{NO}}, \\text{{{SOLVER_NAMES[spec]}}}\\}}$" if pi == 0 else "", POL_NAMES[pol]]
+                row = [f"$\\{{\\mathrm{{NO}}, \\text{{{SOLVER_NAMES[spec]}}}\\}}$" if pi == 0 else "", POL_NAMES.get(pol, pol)]
                 for N in Ns:
                     dg = have[N]
                     if dg is None:
@@ -250,7 +279,10 @@ def main():
                     P = g["policies"]
                     for tol in [1e-3, d["h2"], 1e-8]:
                         key = tkey(d, tol)
-                        if pol == "best":
+                        if pol == "oneshot":
+                            ko = [q for q in Ro if q[0] == eq and q[1] == N and q[2] == spec and not q[3]]
+                            row.append(time_cell(Ro[ko[0]][1]["policies"]["oneshot"], tkey(Ro[ko[0]][0], tol)) if ko else "--")
+                        elif pol == "best":
                             bt = best_tau(P, key)
                             row.append(time_cell(P[bt], key) + f"$_{{\\tau{{=}}{bt[5:]}}}$")
                         elif pol in P:
@@ -282,12 +314,10 @@ def main():
 
         # ---------------------------------------------------------- speedups with p-values
         has_base = any((eq, N) in Bf for N in Ns)
-        nc = 4 if has_base else 2
-        out.append(f"\\newcommand{{\\caspeed{suf}}}{{")
-        out.append("\\begin{tabular}{ll" + "c" * nc * len(Ns) + "}\n\\toprule")
-        out.append("& & " + " & ".join(f"\\multicolumn{{{nc}}}{{c}}{{${N}\\times{N}$}}" for N in Ns) + " \\\\ "
-                   + "".join(f"\\cmidrule(lr){{{3+nc*i}-{2+nc*(i+1)}}}" for i in range(len(Ns))))
-        out.append("Pairing & $\\varepsilon$ & " + " & ".join("vs.\\ HINTS-25 & vs.\\ best $\\tau$" + (" & vs.\\ multigrid & vs.\\ MG-Krylov" if has_base else "") for _ in Ns) + " \\\\ \\midrule")
+        nc = 5 if has_base else 3
+        # pass 1: collect every comparison (speedup text, speedup, p); pass 2: Holm-corrected bolding
+        comps = []   # (row_index, col_index, text, sp, p)
+        rows_spec = []
         for spec in PAIRINGS:
             have = {N: cell(eq, N, spec) for N in Ns}
             if not any(have.values()):
@@ -304,16 +334,32 @@ def main():
                     tol = d["h2"] if tol_f == "h2" else tol_f
                     key = tkey(d, tol)
                     t_r = times(P["router"], key)
-                    row.append(sp_cell(times_lb(P["hints25"], key), t_r))
-                    row.append(sp_cell(times_lb(P[best_tau(P, key)], key), t_r))
+                    bases = [times_lb(P["hints25"], key), times_lb(P[best_tau(P, key)], key)]
+                    ko = [q for q in Ro if q[0] == eq and q[1] == N and q[2] == spec and not q[3]]
+                    bases.append(times_lb(Ro[ko[0]][1]["policies"]["oneshot"], tkey(Ro[ko[0]][0], tol)) if ko else None)
                     if has_base:
                         db = Bf.get((eq, N))
-                        for m in ["mg", kry_name(eq)]:
-                            if db is not None and m in db["methods"] and db["methods"][m]:
-                                row.append(sp_cell(base_times(db, m, tol), t_r))
-                            else:
-                                row.append("--")
-                out.append(" & ".join(row) + " \\\\")
+                        for m_ in ["mg", kry_name(eq)]:
+                            bases.append(base_times(db, m_, tol) if (db is not None and m_ in db["methods"] and db["methods"][m_]) else None)
+                    for b_ in bases:
+                        if b_ is None:
+                            row.append("--")
+                        else:
+                            s, sp, p = sp_parts(b_, t_r)
+                            comps.append((len(rows_spec), len(row), s, sp, p))
+                            row.append(s)
+                rows_spec.append(row)
+        sig = holm_mask([c[4] for c in comps]) if comps else []
+        for (ri, ci, s, sp, p), ok in zip(comps, sig):
+            if ok and sp >= 1.10:
+                rows_spec[ri][ci] = f"\\textbf{{{s}}}"
+        out.append(f"\\newcommand{{\\caspeed{suf}}}{{")
+        out.append("\\begin{tabular}{ll" + "c" * nc * len(Ns) + "}\n\\toprule")
+        out.append("& & " + " & ".join(f"\\multicolumn{{{nc}}}{{c}}{{${N}\\times{N}$}}" for N in Ns) + " \\\\ "
+                   + "".join(f"\\cmidrule(lr){{{3+nc*i}-{2+nc*(i+1)}}}" for i in range(len(Ns))))
+        out.append("Pairing & $\\varepsilon$ & " + " & ".join("vs.\\ HINTS-25 & vs.\\ best $\\tau$ & vs.\\ one-shot" + (" & vs.\\ multigrid & vs.\\ MG-Krylov" if has_base else "") for _ in Ns) + " \\\\ \\midrule")
+        for row in rows_spec:
+            out.append(" & ".join(row) + " \\\\")
         out.append("\\bottomrule\n\\end{tabular}}")
 
         # ---------------------------------------------------------- usage
@@ -973,6 +1019,60 @@ def main():
     else:
         pending(out, "caassump")
         pending(out, "caassumpB")
+
+    # ================================================================ held-out confirmation (fresh seed, 3 timed replays)
+    if Rh:
+        out.append("\\newcommand{\\caheldout}{")
+        out.append("\\begin{tabular}{lllcccc}\n\\toprule")
+        out.append("& & & \\multicolumn{2}{c}{main test set (seed 72)} & \\multicolumn{2}{c}{held-out test set (seed 73)} \\\\ \\cmidrule(lr){4-5}\\cmidrule(lr){6-7}")
+        out.append("Equation & $N$ & Pairing / ensemble & vs.\\ HINTS-25 or best single & vs.\\ best $\\tau$ or oracle & vs.\\ HINTS-25 or best single & vs.\\ best $\\tau$ or oracle \\\\ \\midrule")
+        for eq in EQS:
+            first = True
+            for N in NS:
+                keys = sorted([k for k in Rh if k[0] == eq and k[1] == N], key=lambda k: (k[3], PAIRINGS.index(k[2]) if k[2] in PAIRINGS else 99, len(k[2])))
+                for k in keys:
+                    dh, gh = Rh[k]
+                    if k not in R:
+                        continue
+                    dm, gm = R[k]
+                    cells = []
+                    for d_, g_ in [(dm, gm), (dh, gh)]:
+                        P = g_["policies"]
+                        if not k[3]:
+                            key = tkey(d_, d_["h2"])
+                            t_r = times(P["router"], key)
+                            cells.append(sp_cell(times_lb(P["hints25"], key), t_r))
+                            cells.append(sp_cell(times_lb(P[best_tau(P, key)], key), t_r))
+                        else:
+                            key = tkey(d_, 1e-8)
+                            t_r = times(P["router"], key, field="t_wu")
+                            singles = {p_: times(P[p_], key, field="t_wu") for p_ in P if p_.startswith("router@")}
+                            if singles:
+                                bs = min(singles, key=lambda p_: np.median(singles[p_]))
+                                cells.append(sp_cell(singles[bs], t_r))
+                            else:
+                                cells.append("--")
+                            cells.append(sp_cell(times(P["oracle"], key, field="t_wu"), t_r) if "oracle" in P else "--")
+                    lab = (f"$\\{{\\mathrm{{NO}}, \\text{{{SOLVER_NAMES[k[2]]}}}\\}}$" if not k[3] else wname(k[2].split("+")) + " ($10^{-8}$, work units)")
+                    out.append(" & ".join([EQ_NAMES[eq] if first else "", f"${N}^2$", lab] + cells) + " \\\\")
+                    first = False
+            if not first and eq != EQS[-1]:
+                out.append("\\midrule")
+        out[-1] = "\\bottomrule\n\\end{tabular}}" if out[-1] == "\\midrule" else out[-1]
+        if not out[-1].endswith("\\end{tabular}}"):
+            out.append("\\bottomrule\n\\end{tabular}}")
+    else:
+        pending(out, "caheldout")
+
+    # ================================================================ manifest of every artifact used
+    import hashlib
+    man = {}
+    for path in sorted(set(USED_FILES + glob.glob(f"{RESULTS_DIR}/baselines_*.json") + glob.glob(f"{RESULTS_DIR}/seeds_*.json")
+                          + glob.glob(f"{RESULTS_DIR}/assumptions_*.json") + glob.glob(f"{RESULTS_DIR}/screen_*.json")
+                          + glob.glob("results_ens_big/*.json") + [f"{RESULTS_DIR}/overheads.json", f"{RESULTS_DIR}/discretization_error.json"])):
+        if os.path.exists(path):
+            man[path] = hashlib.sha256(open(path, "rb").read()).hexdigest()
+    json.dump(man, open(os.path.join(os.path.dirname(OUT_TEX) or ".", "manifest.json"), "w"), indent=1)
 
     # ================================================================ placeholders / summary macros
     defined = set(re.findall(r"\\newcommand\{\\(\w+)\}", "\n".join(out)))

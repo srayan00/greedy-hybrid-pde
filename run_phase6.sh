@@ -1,7 +1,7 @@
 #!/bin/zsh
 # Ensemble routers with larger capacity / more imitation data (hyperparameters only), after the master chain.
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 MKL_NUM_THREADS=1
-PY=/Users/yash/miniconda3/envs/ansatz/bin/python
+PY=${PY:-/Users/yash/miniconda3/envs/ansatz/bin/python}
 until [ -f logs/aniso.done ]; do sleep 30; done
 mkdir -p results_ens_big
 for EQ in Poisson ConvDiff; do

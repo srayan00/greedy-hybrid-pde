@@ -192,7 +192,7 @@ class SymmetricSuccessiveOverRelaxationSolver(NumericalSolver):
             U = torch.triu(A, diagonal = 1)
             L = torch.tril(A, diagonal = -1)
             first_term = D/self.omega + L
-            second_term = self.omega/(2 - self.omega) + torch.linalg.inv(D)
+            second_term = (self.omega / (2 - self.omega)) * torch.linalg.inv(D)   # M = (D/w + L) [(2-w)/w D^-1]^{-1}... standard SSOR: C = (2-w)/w (D/w+U)^-1 D (D/w+L)^-1
             third_term = D/self.omega + U
             if self.equation.is_batch and self.equation.in_channels > 1:
                 self.preconditioner = torch.bmm(torch.bmm(first_term, second_term), third_term)

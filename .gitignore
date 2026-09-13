@@ -3,7 +3,6 @@ __pycache__/
 slurm_logs/
 playground_sahana/
 plots/
-results/
 playground/
 checkpoints/*json
 checkpoints/*pth

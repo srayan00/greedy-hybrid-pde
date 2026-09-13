@@ -246,6 +246,8 @@ def run_untimed(env: Env, f, u_truth, policy, max_ops=100000, err_stop=1e-9,
         elif hints_tau is not None:
             j = env.no_index if (it + 1) % hints_tau == 0 else 0
             m = 1
+        elif policy == "oneshot":
+            j = env.no_index if it == 0 else 0
         elif policy == "greedy":
             errs = [float(l2(demean(env.apply_op(k, u, f, r) - u_truth))[0]) for k in range(env.K)]
             j, m = int(np.argmin(errs)), 1
