@@ -332,20 +332,20 @@ $\{\mathrm{NO}, \text{SOR (1.5)}\}$ & Solver only & $>$13.80\,s$^{\dagger 64}$ &
 \bottomrule
 \end{tabular}}
 \newcommand{\caspeedaniso}{
-\begin{tabular}{llcccccccc}
+\begin{tabular}{llcccc}
 \toprule
-& & \multicolumn{4}{c}{$128\times128$} & \multicolumn{4}{c}{$256\times256$} \\ \cmidrule(lr){3-6}\cmidrule(lr){7-10}
-Pairing & $\varepsilon$ & vs.\ HINTS-25 & vs.\ best $\tau$ & vs.\ multigrid & vs.\ MG-Krylov & vs.\ HINTS-25 & vs.\ best $\tau$ & vs.\ multigrid & vs.\ MG-Krylov \\ \midrule
-$\{\mathrm{NO}, \text{Jacobi}\}$ & $h^2$ & \textbf{3.16$\times$ ($<10^{-10}$)} & \textbf{1.25$\times$ ($10^{-9}$)} & -- & -- & \textbf{1.58$\times$ ($10^{-5}$)} & \textbf{1.11$\times$ ($10^{-4}$)} & -- & -- \\
- & $10^{-8}$ & \textbf{1.44$\times$ ($<10^{-10}$)} & \textbf{1.21$\times$ ($<10^{-10}$)} & -- & -- & \textbf{1.93$\times$ ($10^{-5}$)} & \textbf{1.80$\times$ ($10^{-5}$)} & -- & -- \\
-$\{\mathrm{NO}, \text{Jacobi (0.67)}\}$ & $h^2$ & \textbf{3.31$\times$ ($<10^{-10}$)} & \textbf{1.34$\times$ ($<10^{-10}$)} & -- & -- & -- & -- & -- & -- \\
- & $10^{-8}$ & \textbf{1.43$\times$ ($<10^{-10}$)} & \textbf{1.17$\times$ ($10^{-9}$)} & -- & -- & -- & -- & -- & -- \\
-$\{\mathrm{NO}, \text{GS}\}$ & $h^2$ & \textbf{7.61$\times$ ($<10^{-10}$)} & \textbf{1.99$\times$ ($<10^{-10}$)} & -- & -- & \textbf{3.18$\times$ ($10^{-5}$)} & \textbf{1.37$\times$ ($10^{-5}$)} & -- & -- \\
- & $10^{-8}$ & \textbf{4.05$\times$ ($<10^{-10}$)} & \textbf{2.74$\times$ ($<10^{-10}$)} & -- & -- & \textbf{2.26$\times$ ($10^{-5}$)} & \textbf{1.64$\times$ ($10^{-5}$)} & -- & -- \\
-$\{\mathrm{NO}, \text{SymGS}\}$ & $h^2$ & \textbf{11.8$\times$ ($<10^{-10}$)} & \textbf{2.72$\times$ ($<10^{-10}$)} & -- & -- & -- & -- & -- & -- \\
- & $10^{-8}$ & \textbf{3.71$\times$ ($<10^{-10}$)} & \textbf{1.36$\times$ ($<10^{-10}$)} & -- & -- & -- & -- & -- & -- \\
-$\{\mathrm{NO}, \text{SOR (1.5)}\}$ & $h^2$ & \textbf{7.36$\times$ ($<10^{-10}$)} & \textbf{2.04$\times$ ($<10^{-10}$)} & -- & -- & \textbf{2.98$\times$ ($10^{-5}$)} & \textbf{1.38$\times$ ($10^{-5}$)} & -- & -- \\
- & $10^{-8}$ & \textbf{2.40$\times$ ($<10^{-10}$)} & \textbf{1.82$\times$ ($<10^{-10}$)} & -- & -- & \textbf{1.54$\times$ ($10^{-5}$)} & \textbf{1.35$\times$ ($10^{-5}$)} & -- & -- \\
+& & \multicolumn{2}{c}{$128\times128$} & \multicolumn{2}{c}{$256\times256$} \\ \cmidrule(lr){3-4}\cmidrule(lr){5-6}
+Pairing & $\varepsilon$ & vs.\ HINTS-25 & vs.\ best $\tau$ & vs.\ HINTS-25 & vs.\ best $\tau$ \\ \midrule
+$\{\mathrm{NO}, \text{Jacobi}\}$ & $h^2$ & \textbf{3.16$\times$ ($<10^{-10}$)} & \textbf{1.25$\times$ ($10^{-9}$)} & \textbf{1.58$\times$ ($10^{-5}$)} & \textbf{1.11$\times$ ($10^{-4}$)} \\
+ & $10^{-8}$ & \textbf{1.44$\times$ ($<10^{-10}$)} & \textbf{1.21$\times$ ($<10^{-10}$)} & \textbf{1.93$\times$ ($10^{-5}$)} & \textbf{1.80$\times$ ($10^{-5}$)} \\
+$\{\mathrm{NO}, \text{Jacobi (0.67)}\}$ & $h^2$ & \textbf{3.31$\times$ ($<10^{-10}$)} & \textbf{1.34$\times$ ($<10^{-10}$)} & -- & -- \\
+ & $10^{-8}$ & \textbf{1.43$\times$ ($<10^{-10}$)} & \textbf{1.17$\times$ ($10^{-9}$)} & -- & -- \\
+$\{\mathrm{NO}, \text{GS}\}$ & $h^2$ & \textbf{7.61$\times$ ($<10^{-10}$)} & \textbf{1.99$\times$ ($<10^{-10}$)} & \textbf{3.18$\times$ ($10^{-5}$)} & \textbf{1.37$\times$ ($10^{-5}$)} \\
+ & $10^{-8}$ & \textbf{4.05$\times$ ($<10^{-10}$)} & \textbf{2.74$\times$ ($<10^{-10}$)} & \textbf{2.26$\times$ ($10^{-5}$)} & \textbf{1.64$\times$ ($10^{-5}$)} \\
+$\{\mathrm{NO}, \text{SymGS}\}$ & $h^2$ & \textbf{11.8$\times$ ($<10^{-10}$)} & \textbf{2.72$\times$ ($<10^{-10}$)} & -- & -- \\
+ & $10^{-8}$ & \textbf{3.71$\times$ ($<10^{-10}$)} & \textbf{1.36$\times$ ($<10^{-10}$)} & -- & -- \\
+$\{\mathrm{NO}, \text{SOR (1.5)}\}$ & $h^2$ & \textbf{7.36$\times$ ($<10^{-10}$)} & \textbf{2.04$\times$ ($<10^{-10}$)} & \textbf{2.98$\times$ ($10^{-5}$)} & \textbf{1.38$\times$ ($10^{-5}$)} \\
+ & $10^{-8}$ & \textbf{2.40$\times$ ($<10^{-10}$)} & \textbf{1.82$\times$ ($<10^{-10}$)} & \textbf{1.54$\times$ ($10^{-5}$)} & \textbf{1.35$\times$ ($10^{-5}$)} \\
 \bottomrule
 \end{tabular}}
 \newcommand{\causageaniso}{
@@ -512,9 +512,15 @@ Poisson & $128^2$ & $\{Jacobi\}$ & 1.28\,ms & 743\,$\mu$s & \textit{732\,$\mu$s}
  &  & $\{GS\}$ & 1.42\,ms & 901\,$\mu$s & \textit{891\,$\mu$s} & 3.38\,ms & 2.56\,ms & \textit{2.53\,ms} & 6.17\,ms & 4.41\,ms & \textit{4.37\,ms} & -- & -- \\
  &  & $\{Jacobi, Jacobi (0.67)\}$ & 1.42\,ms & 745\,$\mu$s & \textit{735\,$\mu$s} & 2.60\,ms & 1.32\,ms & \textit{1.15\,ms} & 5.46\,ms & 2.58\,ms & \textit{2.56\,ms} & 1.00$\times$ (0.991) & 1.00$\times$ ($10^{-5}$) \\
  &  & $\{Jacobi, Jacobi (0.67), GS\}$ & 1.37\,ms & 896\,$\mu$s & \textit{738\,$\mu$s} & 2.01\,ms & 1.37\,ms & \textit{1.15\,ms} & 4.46\,ms & 2.59\,ms & \textit{2.57\,ms} & 0.89$\times$ (slower, $10^{-5}$) & 1.00$\times$ ($10^{-4}$) \\
+\midrule
+Convection--diffusion & $128^2$ & $\{Jacobi\}$ & 1.40\,ms & 842\,$\mu$s & \textit{832\,$\mu$s} & 10.6\,ms & 6.00\,ms & \textit{5.95\,ms} & 324.9\,ms$^{\dagger 25}$ & 213.8\,ms$^{\dagger 25}$ & \textit{212.2\,ms} & -- & -- \\
+ &  & $\{Jacobi (0.67)\}$ & 1.44\,ms & 913\,$\mu$s & \textit{903\,$\mu$s} & 2.22\,ms & 1.52\,ms & \textit{1.51\,ms} & 4.39\,ms & 2.94\,ms & \textit{2.92\,ms} & (best single) & -- \\
+ &  & $\{GS\}$ & 1.48\,ms & 1.11\,ms & \textit{1.10\,ms} & 3.55\,ms & 2.85\,ms & \textit{2.82\,ms} & 5.84\,ms & 4.94\,ms & \textit{4.90\,ms} & -- & -- \\
+ &  & $\{Jacobi, Jacobi (0.67)\}$ & 1.55\,ms & 842\,$\mu$s & \textit{903\,$\mu$s} & 2.80\,ms & 1.49\,ms & \textit{1.47\,ms} & 6.16\,ms & 3.34\,ms & \textit{2.67\,ms} & 1.00$\times$ (slower, 0.001) & \textbf{1.11$\times$ ($<10^{-10}$)} \\
+ &  & $\{Jacobi, Jacobi (0.67), GS\}$ & 1.39\,ms & 886\,$\mu$s & \textit{911\,$\mu$s} & 2.69\,ms & 1.86\,ms & \textit{1.48\,ms} & 4.40\,ms & 3.17\,ms & \textit{2.68\,ms} & 0.98$\times$ (slower, 0.109) & 1.10$\times$ ($10^{-10}$) \\
 \bottomrule
 \end{tabular}}
-\newcommand{\caNestNum}{2}
+\newcommand{\caNestNum}{4}
 \newcommand{\caNestWins}{0}
 \newcommand{\caNestLosses}{1}
 \newcommand{\caNestSpMin}{0.89$\times$}
@@ -694,6 +700,7 @@ Convection--diffusion, $256^2$ & DeepONet corrector & 1 & 1.000000 & 1.000000 & 
 Convection--diffusion, $512^2$ & DeepONet corrector & 1 & 1.000000 & 1.000000 & 1.000000 & 1.000000 & 9.3e-06 (band) & 0 & -- \\
  & Jacobi & 3 & 0.999962 & 0.999962 & 0.999887 & 0.999962 & 0 & 0 & 3.4e-07 \\
  & GS & 1 & 1.023154 & 0.998983 & 0.998983 & 0.999922 & 0 & 0 & 4.6e-03 \\
+ & SOR (1.5) & 1 & 1.473282 & 0.999075 & 0.999075 & 0.999745 & 7.3e-01 & 0 & 1.8e-02 \\
 \midrule
 Anisotropic diffusion, $128^2$ & DeepONet corrector & 1 & 1.000000 & 1.000000 & 1.000000 & 1.000000 & 4.4e-04 (band) & 0 & -- \\
  & Jacobi & 11 & 0.999988 & 0.999988 & 0.999869 & 0.999988 & 1.1e-16 & 0 & 2.4e-05 \\

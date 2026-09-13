@@ -281,11 +281,13 @@ def main():
         out[-1] = "\\bottomrule\n\\end{tabular}}"
 
         # ---------------------------------------------------------- speedups with p-values
+        has_base = any((eq, N) in Bf for N in Ns)
+        nc = 4 if has_base else 2
         out.append(f"\\newcommand{{\\caspeed{suf}}}{{")
-        out.append("\\begin{tabular}{ll" + "cccc" * len(Ns) + "}\n\\toprule")
-        out.append("& & " + " & ".join(f"\\multicolumn{{4}}{{c}}{{${N}\\times{N}$}}" for N in Ns) + " \\\\ "
-                   + "".join(f"\\cmidrule(lr){{{3+4*i}-{6+4*i}}}" for i in range(len(Ns))))
-        out.append("Pairing & $\\varepsilon$ & " + " & ".join("vs.\\ HINTS-25 & vs.\\ best $\\tau$ & vs.\\ multigrid & vs.\\ MG-Krylov" for _ in Ns) + " \\\\ \\midrule")
+        out.append("\\begin{tabular}{ll" + "c" * nc * len(Ns) + "}\n\\toprule")
+        out.append("& & " + " & ".join(f"\\multicolumn{{{nc}}}{{c}}{{${N}\\times{N}$}}" for N in Ns) + " \\\\ "
+                   + "".join(f"\\cmidrule(lr){{{3+nc*i}-{2+nc*(i+1)}}}" for i in range(len(Ns))))
+        out.append("Pairing & $\\varepsilon$ & " + " & ".join("vs.\\ HINTS-25 & vs.\\ best $\\tau$" + (" & vs.\\ multigrid & vs.\\ MG-Krylov" if has_base else "") for _ in Ns) + " \\\\ \\midrule")
         for spec in PAIRINGS:
             have = {N: cell(eq, N, spec) for N in Ns}
             if not any(have.values()):
@@ -295,7 +297,7 @@ def main():
                 for N in Ns:
                     dg = have[N]
                     if dg is None:
-                        row += ["--"] * 4
+                        row += ["--"] * nc
                         continue
                     d, g = dg
                     P = g["policies"]
@@ -304,12 +306,13 @@ def main():
                     t_r = times(P["router"], key)
                     row.append(sp_cell(times_lb(P["hints25"], key), t_r))
                     row.append(sp_cell(times_lb(P[best_tau(P, key)], key), t_r))
-                    db = Bf.get((eq, N))
-                    for m in ["mg", kry_name(eq)]:
-                        if db is not None and m in db["methods"] and db["methods"][m]:
-                            row.append(sp_cell(base_times(db, m, tol), t_r))
-                        else:
-                            row.append("--")
+                    if has_base:
+                        db = Bf.get((eq, N))
+                        for m in ["mg", kry_name(eq)]:
+                            if db is not None and m in db["methods"] and db["methods"][m]:
+                                row.append(sp_cell(base_times(db, m, tol), t_r))
+                            else:
+                                row.append("--")
                 out.append(" & ".join(row) + " \\\\")
         out.append("\\bottomrule\n\\end{tabular}}")
 

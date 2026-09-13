@@ -112,7 +112,9 @@ Wilcoxon / paired t-tests on log times, and the paper's iteration-based AUC.
 | `bench_seeds.py` | five-seed router retraining trials -> `results/seeds_<eq>_<N>.json` |
 | `make_usage_data.py` | untimed decision traces of all test instances (usage figures) -> `results/usage_<eq>_<N>.json` |
 | `make_tables.py`, `make_figures.py` | LaTeX tables (`paper/costaware_tables.tex`, one macro per table plus summary macros used in the text) and figures (`paper/neurips_images/ca_*.png`) |
-| `run_correctors.sh`, `run_correctors_large.sh`, `run_all.sh`, `run_phase6.sh`, `run_aniso.sh`, `run_phase7.sh` | the exact sequence of commands that produced the reported results |
+| `screen_ensembles.py` | oracle-level screening of every ensemble of up to three members (work units) -> `results/screen_<eq>_<N>.json` |
+| `check_assumptions.py` | numerical verification of the theory assumptions (Lipschitz constants in the Euclidean and energy norms, spectral radii, invertibility, zero preservation, commutators, alpha(O), Thm 5.1 bounds) -> `results/assumptions_<eq>_<N>.json` |
+| `run_correctors.sh`, `run_correctors_large.sh`, `run_all.sh`, `run_phase6.sh`, `run_aniso.sh`, `run_phase7.sh`, `run_usage_large.sh`, `run_screen.sh`, `run_assumptions.sh`, `run_ens_nested.sh` | the exact sequence of commands that produced the reported results |
 
 ### Step-by-step replication
 
@@ -145,7 +147,13 @@ python bench_baselines.py --equation ConvDiff --N 128 --n_test 64
 ./run_aniso.sh          # ~8 h
 # 5b. (optional) retrain the one 512^2 router that misses h^2 with more oracle rollouts
 ./run_phase7.sh
-# 6. tables, figures, paper
+# 6. usage traces on the larger grids, ensemble screening, nested ensembles
+#    ({J} < {J, dJ} < {J, dJ, GS} with same-session pairwise baselines), theory assumptions
+./run_usage_large.sh     # ~1 h
+./run_screen.sh          # ~1.5 h
+./run_ens_nested.sh      # ~5 h
+./run_assumptions.sh     # ~1 h
+# 7. tables, figures, paper
 python make_tables.py   # -> paper/costaware_tables.tex
 python make_figures.py  # -> paper/neurips_images/ca_*.png
 paper/build.sh          # -> paper/neurips_2026.pdf (plain pdflatex/bibtex in a scratch dir)
