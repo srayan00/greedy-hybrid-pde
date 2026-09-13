@@ -526,7 +526,7 @@ def main():
             any_row = True
         # classical baselines: multigrid alone and the multigrid-preconditioned Krylov method
         for m in ["mg", kry_name(eq), "fft", "lu"]:
-            if not any((eq, N) in Bf and m in Bf[(eq, N)]["methods"] and Bf[(eq, N)]["methods"][m] for N in NS):
+            if not any_row or not any((eq, N) in Bf and m in Bf[(eq, N)]["methods"] and Bf[(eq, N)]["methods"][m] for N in NS):
                 continue
             row = ["", {"mg": "Multigrid alone (no corrector)", "pcg_mg": "PCG (MG) (no corrector)", "bicgstab_mg": "BiCGSTAB (MG) (no corrector)", "fft": "FFT direct solve (exact)", "lu": "Sparse LU direct solve"}.get(m, BASE_NAMES[m])]
             for N in NS:

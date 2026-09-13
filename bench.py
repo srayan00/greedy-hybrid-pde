@@ -205,14 +205,20 @@ for group in groups:
             env_, router_, base_, _ = runs[p]
             traces[p] = run_untimed(env_, f1, u1, base_, max_ops=args.max_ops, err_stop=args.err_stop,
                                     router=router_)
-        # timed replays, order rotated per instance
+        # timed replays: random policy order per (instance, replay), and an untimed warm-up
+        # (one corrector call and one sweep) before every replay so that every policy starts
+        # from the same cache state (the corrector's matrix is larger than the CPU caches)
         gc.collect()
         gc.disable()
         times = {p: [] for p in names}
+        order_rng = np.random.default_rng(10_000 + i)
         for rep in range(args.timed_reps):
-            order = names[(i + rep) % len(names):] + names[:(i + rep) % len(names)]
-            for p in order:
+            for p in order_rng.permutation(names):
                 env_, router_, base_, _ = runs[p]
+                r0 = env_.pde.residual(np.zeros_like(f1), f1)
+                if env_.corrector is not None:
+                    env_.corrector.correct(r0)
+                env_.solvers[0].step(np.zeros_like(f1), f1, r0)
                 t, u_end = run_timed(env_, f1, traces[p], base_, router=router_)
                 times[p].append(t)
         gc.enable()
