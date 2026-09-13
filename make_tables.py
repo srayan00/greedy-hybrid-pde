@@ -589,8 +589,12 @@ def main():
                     if len(members) > 1:
                         row.append(sp_cell(tb, times(Rr, key8, field="t_wu")))
                         row.append(sp_cell(tbo, times(Ro, key8, field="t_wu")))
+                        keyh = tkey(dd, dd["h2"])
+                        bsh = min(singles, key=lambda r_: np.median(times(r_[1], tkey(r_[3], r_[3]["h2"]), field="t_wu")))
+                        tbh = times(bsh[1], tkey(bsh[3], bsh[3]["h2"]), field="t_wu")
                         nest_stats.append((eq, N, members, paired_speedup(tb, times(Rr, key8, field="t_wu"))[0],
-                                           wilcoxon_p(tb, times(Rr, key8, field="t_wu"))))
+                                           wilcoxon_p(tb, times(Rr, key8, field="t_wu")),
+                                           paired_speedup(tbh, times(Rr, keyh, field="t_wu"))[0]))
                     else:
                         row += ["(best single)" if members == best_single[0] else "--", "--"]
                     out.append(" & ".join(row) + " \\\\")
@@ -605,9 +609,11 @@ def main():
             rng_macro(out, "caNestSp", [s[3] for s in (wins or nest_stats)])
             out.append(f"\\newcommand{{\\caNestMinRatio}}{{{fmt_sp(min(s[3] for s in nest_stats))}}}")
             out.append(f"\\newcommand{{\\caNestMaxRatio}}{{{fmt_sp(max(s[3] for s in nest_stats))}}}")
+            out.append(f"\\newcommand{{\\caNestMinRatioH}}{{{fmt_sp(min(s[5] for s in nest_stats))}}}")
+            out.append(f"\\newcommand{{\\caNestMaxRatioH}}{{{fmt_sp(max(s[5] for s in nest_stats))}}}")
     else:
         pending(out, "caensnest")
-        for name, val in [("caNestNum", "--"), ("caNestWins", "--"), ("caNestLosses", "--"), ("caNestSpMin", "--"), ("caNestSpMax", "--"), ("caNestMinRatio", "--"), ("caNestMaxRatio", "--")]:
+        for name, val in [("caNestNum", "--"), ("caNestWins", "--"), ("caNestLosses", "--"), ("caNestSpMin", "--"), ("caNestSpMax", "--"), ("caNestMinRatio", "--"), ("caNestMaxRatio", "--"), ("caNestMinRatioH", "--"), ("caNestMaxRatioH", "--")]:
             out.append(f"\\newcommand{{\\{name}}}{{{val}}}")
 
     # ---- oracle-level screening of all subsets (screen_ensembles.py)

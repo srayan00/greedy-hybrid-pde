@@ -114,7 +114,7 @@ Wilcoxon / paired t-tests on log times, and the paper's iteration-based AUC.
 | `make_tables.py`, `make_figures.py` | LaTeX tables (`paper/costaware_tables.tex`, one macro per table plus summary macros used in the text) and figures (`paper/neurips_images/ca_*.png`) |
 | `screen_ensembles.py` | oracle-level screening of every ensemble of up to three members (work units) -> `results/screen_<eq>_<N>.json` |
 | `check_assumptions.py` | numerical verification of the theory assumptions (Lipschitz constants in the Euclidean and energy norms, spectral radii, invertibility, zero preservation, commutators, alpha(O), Thm 5.1 bounds) -> `results/assumptions_<eq>_<N>.json` |
-| `run_correctors.sh`, `run_correctors_large.sh`, `run_all.sh`, `run_phase6.sh`, `run_aniso.sh`, `run_phase7.sh`, `run_usage_large.sh`, `run_screen.sh`, `run_assumptions.sh`, `run_ens_nested.sh` | the exact sequence of commands that produced the reported results |
+| `run_correctors.sh`, `run_correctors_large.sh`, `run_all.sh`, `run_phase6.sh`, `run_aniso.sh`, `run_phase7.sh`, `run_usage_large.sh`, `run_screen.sh`, `run_assumptions.sh`, `run_ens_nested.sh`, `run_retime.sh`, `run_paths.sh`, `run_paths_h2.sh` | the exact sequence of commands that produced the reported results |
 
 ### Step-by-step replication
 
@@ -151,7 +151,8 @@ python bench_baselines.py --equation ConvDiff --N 128 --n_test 64
 #    ({J} < {J, dJ} < {J, dJ, GS} with same-session pairwise baselines), theory assumptions
 ./run_usage_large.sh     # ~1 h
 ./run_screen.sh          # ~1.5 h
-./run_ens_nested.sh      # ~5 h
+./run_ens_nested.sh      # ~6 h (training + benchmark; live times may be inflated if other jobs run)
+./run_retime.sh          # ~3.5 h: re-time every nested cell on an idle machine (no retraining)
 ./run_assumptions.sh     # ~1 h
 # 7. tables, figures, paper
 python make_tables.py   # -> paper/costaware_tables.tex
