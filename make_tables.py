@@ -568,6 +568,41 @@ def main():
         out.append(f"\\newcommand{{\\caNumCells{SUF}}}{{{len(summ['Solver'])}}}")
         out.append(f"\\newcommand{{\\caCellsRouterBeatsBest{SUF}}}{{{sum(v >= 1.0 for v in summ['Best'])}}}")
         out.append(f"\\newcommand{{\\caCellsRouterBeatsHints{SUF}}}{{{sum(v >= 1.0 for v in summ['Hints'])}}}")
+        out.append(f"\\newcommand{{\\caCellsRouterBeatsBestDeep{SUF}}}{{{sum(v >= 1.0 for v in summ['BestDeep'])}}}")
+        out.append(f"\\newcommand{{\\caCellsRouterBeatsHintsDeep{SUF}}}{{{sum(v >= 1.0 for v in summ['HintsDeep'])}}}")
+        out.append(f"\\newcommand{{\\caCellsRouterWithinBest{SUF}}}{{{sum(v >= 0.9 for v in summ['Best'])}}}")
+        # multigrid alone and MG-preconditioned Krylov, at h^2 and 1e-8, every stationary pairing of this grid
+        vm, vmd, vk, vkd = [], [], [], []
+        for eq in EQS:
+            db = Bf.get((eq, N_))
+            if db is None:
+                continue
+            for spec in SOLVER_ORDER:
+                dg = cell(eq, N_, spec)
+                if dg is None:
+                    continue
+                d, g = dg
+                for tol, (lm, lk) in [(d["h2"], (vm, vk)), (1e-8, (vmd, vkd))]:
+                    key = tkey(d, tol)
+                    t_r = times(g["policies"]["router"], key)
+                    if "mg" in db["methods"] and db["methods"]["mg"]:
+                        lm.append(paired_speedup(base_times(db, "mg", tol), t_r)[0])
+                    kn = kry_name(eq)
+                    if kn in db["methods"] and db["methods"][kn]:
+                        lk.append(paired_speedup(base_times(db, kn, tol), t_r)[0])
+        rng_macro(out, "caVsMgAll" + SUF, vm); rng_macro(out, "caVsMgDeep" + SUF, vmd)
+        rng_macro(out, "caVsKrylovAll" + SUF, vk); rng_macro(out, "caVsKrylovDeep" + SUF, vkd)
+        # the {NO, multigrid} router against multigrid alone
+        vme, vmed = [], []
+        for eq in EQS:
+            dg = cell(eq, N_, "mg")
+            db = Bf.get((eq, N_))
+            if dg is None or db is None or "mg" not in db["methods"] or not db["methods"]["mg"]:
+                continue
+            d, g = dg
+            vme.append(paired_speedup(base_times(db, "mg", d["h2"]), times(g["policies"]["router"], tkey(d, d["h2"])))[0])
+            vmed.append(paired_speedup(base_times(db, "mg", 1e-8), times(g["policies"]["router"], tkey(d, 1e-8)))[0])
+        rng_macro(out, "caVsMgEnsAll" + SUF, vme); rng_macro(out, "caVsMgEnsDeep" + SUF, vmed)
     # baselines at 128^2 for the text
     vs_mg, vs_kry, vs_mg_ens = [], [], []
     for (eq, N), d in Bf.items():
@@ -1015,6 +1050,36 @@ def main():
         pending(out, "catheorem")
         out.append("\\newcommand{\\caThmMuMax}{--}"); out.append("\\newcommand{\\caThmHolds}{--}")
 
+    # ================================================================ decision-granularity ablation (unit = corrector / 4)
+    Ru4 = load(tag="_u4")
+    if Ru4:
+        out.append("\\newcommand{\\cagranularity}{")
+        out.append("\\begin{tabular}{llcccccccc}\n\\toprule")
+        out.append("& & \\multicolumn{4}{c}{unit = one corrector call} & \\multicolumn{4}{c}{unit = corrector call / 4} \\\\ \\cmidrule(lr){3-6}\\cmidrule(lr){7-10}")
+        out.append("Equation & Pairing & oracle $h^2$ & router $h^2$ & router $10^{-8}$ & vs.\\ best schedule ($10^{-8}$) & oracle $h^2$ & router $h^2$ & router $10^{-8}$ & vs.\\ best schedule ($10^{-8}$) \\\\ \\midrule")
+        for eq in EQS:
+            first = True
+            for spec in PAIRINGS:
+                k = (eq, 128, spec, False)
+                if k not in Ru4 or k not in R:
+                    continue
+                cells = []
+                for d_, g_ in [R[k], Ru4[k]]:
+                    P = g_["policies"]
+                    key2, key8 = tkey(d_, d_["h2"]), tkey(d_, 1e-8)
+                    Pm = R[k][1]["policies"]   # fixed schedules from the main run (same instances)
+                    cells += [time_cell(P["oracle"], key2, italic=True), time_cell(P["router"], key2), time_cell(P["router"], key8),
+                              sp_cell(times_lb(Pm[best_tau(Pm, key8)], key8, field="t_wu"), times(P["router"], key8, field="t_wu"))]
+                out.append(" & ".join([EQ_NAMES[eq] if first else "", SOLVER_NAMES[spec]] + cells) + " \\\\")
+                first = False
+            if not first and eq != EQS[-1]:
+                out.append("\\midrule")
+        if out[-1] == "\\midrule":
+            out.pop()
+        out.append("\\bottomrule\n\\end{tabular}}")
+    else:
+        pending(out, "cagranularity")
+
     # ================================================================ development vs confirmatory runs
     if Rdev and R:
         out.append("\\newcommand{\\caheldout}{")
@@ -1080,11 +1145,12 @@ def main():
         for name in ["caEnsVsPairMin", "caEnsVsPairMax", "caEnsVsSolverMin", "caEnsVsSolverMax", "caNumEns"]:
             out.append(f"\\newcommand{{\\{name}}}{{--}}")
     for SUF in ["", "B", "C"]:
-        for name in ["caSpSolver", "caSpHints", "caSpBest", "caSpSolverDeep", "caSpHintsDeep", "caSpBestDeep", "caSpOracleRatio"]:
+        for name in ["caSpSolver", "caSpHints", "caSpBest", "caSpSolverDeep", "caSpHintsDeep", "caSpBestDeep", "caSpOracleRatio",
+                     "caVsMgAll", "caVsMgDeep", "caVsKrylovAll", "caVsKrylovDeep", "caVsMgEnsAll", "caVsMgEnsDeep"]:
             for mm in ["Min", "Max"]:
                 if name + SUF + mm not in defined:
                     out.append(f"\\newcommand{{\\{name}{SUF}{mm}}}{{--}}")
-        for name in ["caNumCells", "caCellsRouterBeatsBest", "caCellsRouterBeatsHints"]:
+        for name in ["caNumCells", "caCellsRouterBeatsBest", "caCellsRouterBeatsHints", "caCellsRouterBeatsBestDeep", "caCellsRouterBeatsHintsDeep", "caCellsRouterWithinBest"]:
             if name + SUF not in defined:
                 out.append(f"\\newcommand{{\\{name}{SUF}}}{{--}}")
 

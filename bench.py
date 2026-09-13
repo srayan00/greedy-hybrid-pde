@@ -56,6 +56,8 @@ parser.add_argument("--tag", default="")
 parser.add_argument("--remeasure_costs", action="store_true")
 parser.add_argument("--train_only", action="store_true", help="measure costs, train routers, exit")
 parser.add_argument("--measure_only", action="store_true", help="measure and cache costs only")
+parser.add_argument("--unit_frac", type=float, default=1.0,
+                    help="unit of cost as a fraction of one corrector call (1 = the corrector call; smaller = finer decisions, the corrector then scored per unit cost)")
 parser.add_argument("--with_pairwise", action="store_true",
                     help="ensemble mode: also evaluate every member's pairwise router/oracle (same instances, same session)")
 parser.add_argument("--rate", action="store_true",
@@ -124,7 +126,7 @@ for group in groups:
         cached[gkey] = costs
         json.dump(cached, open(cost_path, "w"), indent=1)
     env.costs = costs
-    env.set_macro_sizes()
+    env.set_macro_sizes(unit="no" if args.unit_frac == 1.0 else args.unit_frac * costs["no"])
     print("  per-iteration costs: " + ", ".join(f"{k} {v*1e6:.0f}us" for k, v in costs.items() if k != "_spread")
           + f" | spread {costs.get('_spread')} | macro sizes {dict(zip(env.ops, env.m))}", flush=True)
     if args.measure_only:
