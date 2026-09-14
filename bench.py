@@ -355,7 +355,15 @@ for group in groups:
             op_frac = [float((ops_h2 == k).mean()) for k in range(env.K)]
             ops_T = tr["op"][:args.T]
             op_frac_T = [float((ops_T == k).mean()) if len(ops_T) else 0.0 for k in range(env.K)]
+            ops_ = np.asarray(tr["op"], dtype=int)
+            if len(ops_):
+                brk_ = np.flatnonzero(np.diff(ops_)) + 1
+                starts_ = np.concatenate([[0], brk_]); ends_ = np.concatenate([brk_, [len(ops_)]])
+                op_rle = [[int(ops_[s_]), int(e_ - s_)] for s_, e_ in zip(starts_, ends_)]
+            else:
+                op_rle = []
             row = {
+                "op_rle": op_rle,      # run-length-encoded operation sequence (for decision-sequence agreement)
                 "op_frac": op_frac, "op_frac_T": op_frac_T,
                 "n_ops": int(len(tr["op"])), "n_no": int(tr["n_no"]),
                 "final_rel_err": float(e[-1]),
@@ -420,7 +428,9 @@ for group in groups:
         rows, curves, drift_rec = time_instance(i, max_wait_s=900)
         rec = gres["drift"][i]
         rec.update({"retimed": True, "ratio_first": rec.get("ratio_first", rec["ratio"]), "retries_first": rec.get("retries_first", rec["retries"]),
-                    "ratio": drift_rec["ratio"], "retries": drift_rec["retries"], "loadavg": drift_rec["loadavg"], "t_wall": drift_rec["t_wall"]})
+                    "ref_us_first": rec.get("ref_us_first", rec.get("ref_us")), "ref0_us_first": rec.get("ref0_us_first", rec.get("ref0_us")),
+                    "ratio": drift_rec["ratio"], "retries": drift_rec["retries"], "loadavg": drift_rec["loadavg"], "t_wall": drift_rec["t_wall"],
+                    "ref_us": drift_rec.get("ref_us"), "ref0_us": drift_rec.get("ref0_us")})
         for p, row in rows.items():
             gres["policies"][p][i] = row
         for p, cv in curves.items():

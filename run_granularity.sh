@@ -15,11 +15,11 @@ for EQ in Poisson ConvDiff AnisoDiff VarCoeff; do
   run $PY bench.py --equation $EQ --N 128 --solvers jacobi,jacobi_0.67 --ensemble --retrain_router --unit_frac 0.25 --router_tag _u4 --tag _u4 --router_inst 256 --router_max_epochs 600 --router_err_stop 1e-9 --dagger_rounds 6 --router_hidden 128 --router_epochs 300 --n_test 64 --max_ops 8000 --policies greedy,oracle,router --with_pairwise --seed 73 --timed_reps 3 > logs/final_nest_${EQ}_128_u4.log 2>&1
   stage "granularity $EQ done"
 done
-# re-timing pass for the 128^2 Poisson and ConvDiff pairwise cells, which were produced before the
+# re-timing pass for the 128^2 Poisson, ConvDiff and AnisoDiff pairwise cells, which were produced before the
 # in-run re-timing of drift-flagged instances existed (same routers and cost caches; only the flagged
 # instances are timed again, with the drift guard waiting up to 15 min)
 POLF=classical,hints2,hints5,hints10,hints15,hints25,hints50,phints5,phints10,phints15,phints25,phints50,oneshot,decay0.9,decay0.95,decay0.98,greedy,oracle,router
-for EQ in Poisson ConvDiff; do for S in $(cat config/solvers_$EQ | tr , ' '); do
+for EQ in Poisson ConvDiff AnisoDiff; do for S in $(cat config/solvers_$EQ | tr , ' '); do
   run $PY bench.py --equation $EQ --N 128 --solvers $S --n_test 64 --max_ops 60000 --policies $POLF --seed 73 --timed_reps 3 --retime_only --retime_all > logs/final_retime_${EQ}_128_$S.log 2>&1
 done; done
 stage "re-timing pass done"

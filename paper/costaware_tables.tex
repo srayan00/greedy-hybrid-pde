@@ -361,12 +361,14 @@ ConvDiff & Jacobi & 1.08\,ms & 781\,$\mu$s$_{\text{one-shot}}$ & 833\,$\mu$s (1.
 \newcommand{\caSpOneshotDeepMax}{52.2$\times$}
 \newcommand{\caSpOracleRatioMin}{1.02$\times$}
 \newcommand{\caSpOracleRatioMax}{1.09$\times$}
-\newcommand{\caAgreeOracleMin}{50}
-\newcommand{\caAgreeOracleMax}{100}
-\newcommand{\caAgreeBestMin}{67}
-\newcommand{\caAgreeBestMax}{100}
-\newcommand{\caAgreeOracleDeepMin}{50}
-\newcommand{\caAgreeOracleDeepMax}{94}
+\newcommand{\caAgreeOracleMin}{\textbf{[pending]}}
+\newcommand{\caAgreeOracleMax}{\textbf{[pending]}}
+\newcommand{\caAgreeBestMin}{\textbf{[pending]}}
+\newcommand{\caAgreeBestMax}{\textbf{[pending]}}
+\newcommand{\caAgreeOracleDeepMin}{\textbf{[pending]}}
+\newcommand{\caAgreeOracleDeepMax}{\textbf{[pending]}}
+\newcommand{\caOneCallMin}{80}
+\newcommand{\caOneCallMax}{100}
 \newcommand{\caCellsRouterBeatsOneshotDeep}{10}
 \newcommand{\caCellsRouterBeatsHintsTFDeep}{12}
 \newcommand{\caBestDeepSchedList}{$\tau{=}15$ (first call at $0$) (3), one-shot (2), $\tau{=}10$ (first call at $0$) (2), $\tau{=}5$ (first call at $0$) (2), $\tau{=}25$ (first call at $0$) (2), $\tau{=}10$ (1)}
@@ -421,12 +423,14 @@ ConvDiff & Jacobi & 1.08\,ms & 781\,$\mu$s$_{\text{one-shot}}$ & 833\,$\mu$s (1.
 \newcommand{\caNDecMax}{2}
 \newcommand{\caDriftMax}{222.6}
 \newcommand{\caDriftWaits}{2211}
-\newcommand{\caDriftRetimed}{0}
-\newcommand{\caDriftFlagged}{36}
+\newcommand{\caDriftRetimed}{\textbf{[pending]}}
+\newcommand{\caDriftFlagged}{\textbf{[pending]}}
 \newcommand{\caDriftN}{768}
 \newcommand{\caKrylovCheckMax}{1.00}
-\newcommand{\caKrylovInvalid}{0}
+\newcommand{\caKrylovInvalid}{\textbf{[pending]}}
+\newcommand{\caPreProtocolCells}{12}
 \newcommand{\caMJacobi}{32}
+\newcommand{\caMJacobiDamped}{32}
 \newcommand{\caJacDampMacro}{2\times 10^{-6}}
 \newcommand{\caJacNyqMacro}{1\times 10^{-15}}
 \newcommand{\caCostJacobi}{21\,$\mu$s}
@@ -466,6 +470,7 @@ ConvDiff & Jacobi & 1.08\,ms & 781\,$\mu$s$_{\text{one-shot}}$ & 833\,$\mu$s (1.
 \newcommand{\caThmFloor}{\textbf{[pending]}}
 \newcommand{\caThmPlainDiff}{\textbf{[pending]}}
 \newcommand{\caThmViol}{\textbf{[pending]}}
+\newcommand{\caThmViolAll}{\textbf{[pending]}}
 \newcommand{\caThmMaxRatio}{\textbf{[pending]}}
 \newcommand{\caThmAlphaGreedyMax}{\textbf{[pending]}}
 \newcommand{\caThmAlphaAllMax}{\textbf{[pending]}}
@@ -513,6 +518,7 @@ Convection--diffusion & $128^2$ & $\{\mathrm{NO}, \text{Jacobi}\}$ & \textbf{2.9
 \newcommand{\caBreakEvenMin}{\textbf{[pending]}}
 \newcommand{\caBreakEvenMax}{\textbf{[pending]}}
 \newcommand{\caBreakEvenNone}{\textbf{[pending]}}
+\newcommand{\caBreakEvenNoTrain}{\textbf{[pending]}}
 \newcommand{\caEnsVsPairMin}{\textbf{[pending]}}
 \newcommand{\caEnsVsPairMax}{\textbf{[pending]}}
 \newcommand{\caEnsVsSolverMin}{\textbf{[pending]}}
@@ -550,6 +556,8 @@ Convection--diffusion & $128^2$ & $\{\mathrm{NO}, \text{Jacobi}\}$ & \textbf{2.9
 \newcommand{\caAgreeBestBMax}{\textbf{[pending]}}
 \newcommand{\caAgreeOracleDeepBMin}{\textbf{[pending]}}
 \newcommand{\caAgreeOracleDeepBMax}{\textbf{[pending]}}
+\newcommand{\caOneCallBMin}{\textbf{[pending]}}
+\newcommand{\caOneCallBMax}{\textbf{[pending]}}
 \newcommand{\caVsMgAllBMin}{\textbf{[pending]}}
 \newcommand{\caVsMgAllBMax}{\textbf{[pending]}}
 \newcommand{\caVsMgDeepBMin}{\textbf{[pending]}}
@@ -615,6 +623,8 @@ Convection--diffusion & $128^2$ & $\{\mathrm{NO}, \text{Jacobi}\}$ & \textbf{2.9
 \newcommand{\caAgreeBestCMax}{\textbf{[pending]}}
 \newcommand{\caAgreeOracleDeepCMin}{\textbf{[pending]}}
 \newcommand{\caAgreeOracleDeepCMax}{\textbf{[pending]}}
+\newcommand{\caOneCallCMin}{\textbf{[pending]}}
+\newcommand{\caOneCallCMax}{\textbf{[pending]}}
 \newcommand{\caVsMgAllCMin}{\textbf{[pending]}}
 \newcommand{\caVsMgAllCMax}{\textbf{[pending]}}
 \newcommand{\caVsMgDeepCMin}{\textbf{[pending]}}

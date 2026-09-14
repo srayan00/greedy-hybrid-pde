@@ -107,6 +107,27 @@ def iters(rows, key):
     return np.array([np.inf if r["tol"][key]["iters"] is None else r["tol"][key]["iters"] for r in rows])
 
 
+def seq_agree(rows_a, rows_b, key):
+    """Percentage of instances on which two policies executed the same operation sequence up to the
+    tolerance crossing (same crossing iteration and identical operations before it). Instances on which
+    both are censored are skipped; one censored counts as disagreement. nan if the rows carry no
+    operation sequences (cells produced before they were stored)."""
+    if not rows_a or not rows_b or "op_rle" not in rows_a[0] or "op_rle" not in rows_b[0]:
+        return np.nan
+    agree, n = 0, 0
+    for ra, rb in zip(rows_a, rows_b):
+        ia, ib = ra["tol"][key]["iters"], rb["tol"][key]["iters"]
+        if ia is None and ib is None:
+            continue
+        n += 1
+        if ia is None or ib is None or ia != ib:
+            continue
+        oa = np.repeat([o for o, c in ra["op_rle"]], [c for o, c in ra["op_rle"]])[:ia]
+        ob = np.repeat([o for o, c in rb["op_rle"]], [c for o, c in rb["op_rle"]])[:ib]
+        agree += int(len(oa) == len(ob) and np.array_equal(oa, ob))
+    return 100.0 * agree / n if n else np.nan
+
+
 def times_lb(rows, key, field="t_live"):
     """Censored runs enter at the time spent up to the iteration cap (a lower bound;
     conservative on the baseline side of a paired test)."""
@@ -155,9 +176,9 @@ def fmt_sp(sp):
 
 
 def wilcoxon_p(base, ours):
-    """Two-sided paired Wilcoxon signed-rank test on the log time ratios (the direction is reported
-    separately from the sign of the median ratio). Censored runs enter at their time-to-cap on both
-    sides (callers pass times_lb), so a router failure counts against the router instead of being dropped."""
+    """Two-sided paired Wilcoxon signed-rank test on the log time ratios of two time arrays (legacy path;
+    the row-based helpers pair_ratios / wilcoxon_d classify censoring before substitution and are used
+    for every table and macro). A ratio of 0 (router censored) enters as the most extreme negative rank."""
     _, r = paired_speedup(base, ours)
     r = r[~np.isnan(r)]
     fin = np.isfinite(r) & (r > 0)
@@ -210,14 +231,14 @@ def time_cell(rows, key, bold=False, italic=False):
     ts = times(rows, key)
     ts = ts[~np.isnan(ts)]
     cens = int(np.isinf(ts).sum())
-    if cens > len(ts) / 2:
-        # the median of the mixed vector (reached times, and the time spent up to the cap for the
-        # censored runs) is a lower bound on the median time to the tolerance
+    if cens > 0:
+        # with any censored run the median of the mixed vector (reached times, and the time spent up
+        # to the cap for the censored runs) is reported: a lower bound on the median time to the tolerance
         lb = times_lb(rows, key)
         lb = lb[~np.isnan(lb)]
         s = f"$\\geq${fmt_time(np.median(lb))}$^{{\\dagger {cens}}}$" if len(lb) else "--"
     else:
-        s = fmt_time(np.median(ts)) + (f"$^{{\\dagger {cens}}}$" if cens else "")
+        s = fmt_time(np.median(ts)) if len(ts) else "--"
     if bold:
         s = f"\\textbf{{{s}}}"
     if italic:
@@ -257,15 +278,84 @@ def sp_parts(base, ours, ci=False, n_fail=0, lb=False):
     return f"{s} (slower, {pstr(p)})", sp, p
 
 
+def pair_ratios(rows_b, rows_r, key, field="t_live"):
+    """Per-instance ratios base/router with the censoring classes of Appendix E.1, decided from the
+    censoring masks before any substitution: both reached -> t_b/t_r; base censored only -> cap_b/t_r
+    (a lower bound); router censored only -> 0 (counted against the router; enters the test as the most
+    extreme negative rank); both censored -> 1 (a tie carrying no information); an invalid run on either
+    side -> the pair is dropped. Returns the ratios r (nan = dropped), the log-differences d for the
+    test (nan = dropped) and the class counts."""
+    tb_f, tr_f = times(rows_b, key, field), times(rows_r, key, field)
+    tb_lb = times_lb(rows_b, key, field)
+    n = min(len(tb_f), len(tr_f))
+    r = np.full(n, np.nan)
+    cls = []
+    for i in range(n):
+        if np.isnan(tb_f[i]) or np.isnan(tr_f[i]):
+            cls.append("invalid"); continue
+        bc, rc = np.isinf(tb_f[i]), np.isinf(tr_f[i])
+        if bc and rc:
+            r[i] = 1.0; cls.append("both")
+        elif rc:
+            r[i] = 0.0; cls.append("router")
+        elif bc:
+            r[i] = tb_lb[i] / tr_f[i]; cls.append("base")
+        else:
+            r[i] = tb_f[i] / tr_f[i]; cls.append("ok")
+    ok = ~np.isnan(r)
+    d = np.full(n, np.nan)
+    fin = ok & (r > 0) & np.isfinite(r)
+    if fin.any():
+        d[fin] = np.log(r[fin])
+    ext = (np.abs(d[fin]).max() if fin.any() else 0.0) + 1.0
+    d[ok & (r == 0)] = -ext
+    counts = {c: cls.count(c) for c in ("ok", "base", "router", "both", "invalid")}
+    return r, d, counts
+
+
+def wilcoxon_d(d):
+    """Two-sided Wilcoxon signed-rank test on the log-differences of pair_ratios (nan dropped)."""
+    d = d[~np.isnan(d)]
+    if len(d) < 8 or np.allclose(d, 0.0):
+        return 1.0
+    return float(wilcoxon(d, alternative="two-sided").pvalue)
+
+
+def ratio_rows(rows_b, rows_r, key, field="t_live"):
+    """Paired median ratio base/router with the censoring classes of pair_ratios."""
+    r, _, _ = pair_ratios(rows_b, rows_r, key, field)
+    r = r[~np.isnan(r)]
+    return float(np.median(r)) if len(r) else np.nan
+
+
+def p_rows(rows_b, rows_r, key, field="t_live"):
+    return wilcoxon_d(pair_ratios(rows_b, rows_r, key, field)[1])
+
+
 def sp_rows(rows_b, rows_r, key, ci=True, field="t_live"):
-    """sp_parts for two row lists at a tolerance key. A censored baseline enters at its time-to-cap
-    (the ratio is then a lower bound, marked >= when that is the case for most instances); a censored
-    router run enters as ratio 0 (counted against the router) and is marked with a dagger; the >=
-    mark is not used when the router has failures, since the ratio is then bounded on neither side."""
-    tb, tr = times_lb(rows_b, key, field=field), times(rows_r, key, field=field)
-    n_fail = int(sum(1 for r in rows_r if r.get("valid", True) and r["tol"][key][field] is None))
-    n_cb = int(sum(1 for r in rows_b if r.get("valid", True) and r["tol"][key][field] is None))
-    return sp_parts(tb, tr, ci=ci, n_fail=n_fail, lb=(n_cb > len(rows_b) / 2 and n_fail == 0))
+    """'ratio [CI] (p)' for two row lists at a tolerance key, with the censoring classes of
+    pair_ratios: >= marks a ratio that is a lower bound (baseline censored on most instances, no router
+    failure), a dagger counts router failures (ratio 0), a double dagger counts both-censored ties."""
+    r, d, c = pair_ratios(rows_b, rows_r, key, field)
+    rr = r[~np.isnan(r)]
+    sp = float(np.median(rr)) if len(rr) else np.nan
+    p = wilcoxon_d(d)
+    s = fmt_sp(sp)
+    if c["base"] > len(rows_b) / 2 and c["router"] == 0:
+        s = "$\\geq$" + s
+    if ci and len(rr) >= 4:
+        lo, hi = boot_ci(rr)
+        if np.isfinite(lo) and np.isfinite(hi):
+            s += f" [{fmt_sp(lo)[:-8]}, {fmt_sp(hi)[:-8]}]"
+        elif np.isfinite(lo):
+            s += f" [{fmt_sp(lo)[:-8]}, $>10^{{3}}$]"
+    if c["router"]:
+        s += f"$^{{\\dagger {c['router']}}}$"
+    if c["both"]:
+        s += f"$^{{\\ddagger {c['both']}}}$"
+    if np.isnan(sp):
+        return "--", np.nan, 1.0
+    return (f"{s} ({pstr(p)})" if sp >= 1.0 else f"{s} (slower, {pstr(p)})"), sp, p
 
 
 def rng_macro(out, name, vals):
@@ -317,7 +407,7 @@ def main():
 
     def base_times(d, m, tol):
         key = tkey(d, tol)
-        return np.array([np.inf if r["tol"][key]["t_live"] is None else r["tol"][key]["t_live"] for r in d["methods"][m]])
+        return times(d["methods"][m], key)
 
     def base_rows_present(eq, N):
         d = Bf.get((eq, N))
@@ -586,9 +676,11 @@ def main():
                         tr_ = np.array([np.inf if r["tol"][key]["t_wu"] is None else r["tol"][key]["t_wu"] for r in blk["rows"]])
                         it_s = np.array([np.inf if r["tol"][key]["iters"] is None else r["tol"][key]["iters"] for r in blk["rows"]])
                         meds.append(np.median(tr_))
-                        sps.append(paired_speedup(th, tr_)[0])
+                        sp_h_ = ratio_rows(P[HREF], blk["rows"], key, field="t_wu")
+                        sp_b_ = ratio_rows(P[best_tau(P, key)], blk["rows"], key, field="t_wu")
+                        sps.append(sp_h_)
                         agree.append(float(np.mean(it_s == it_main)))
-                        if paired_speedup(th, tr_)[0] >= 1.0 and wilcoxon_p(th, tr_) < 0.01 and paired_speedup(tb, tr_)[0] >= 1.0 and wilcoxon_p(tb, tr_) < 0.01:
+                        if sp_h_ > 1.0 and p_rows(P[HREF], blk["rows"], key, field="t_wu") < 0.01 and sp_b_ > 1.0 and p_rows(P[best_tau(P, key)], blk["rows"], key, field="t_wu") < 0.01:
                             nsig += 1
                     out.append(" & ".join([f"${N_}^2$", f"$\\{{\\mathrm{{NO}}, \\text{{{SOLVER_NAMES[spec]}}}\\}}$",
                                            f"{np.mean(meds)*1e3:.2f} $\\pm$ {np.std(meds)*1e3:.2f}\\,ms",
@@ -622,8 +714,8 @@ def main():
                 key = tkey(d, d["h2"])
                 t_r = times(P["router"], key)
                 bt = best_tau(P, key)
-                sp_h = paired_speedup(times_lb(P[HREF], key), times_lb(P["router"], key))[0]
-                sp_b = paired_speedup(times_lb(P[bt], key), times_lb(P["router"], key))[0]
+                sp_h = ratio_rows(P[HREF], P["router"], key)
+                sp_b = ratio_rows(P[bt], P["router"], key)
                 row.append(time_cell(P[HREF], key))
                 row.append(time_cell(P[bt], key) + f"$_{{{sched_label(bt)}}}$")
                 rc = time_cell(P["router"], key, bold=(sp_h >= 1 and sp_b >= 1))
@@ -653,7 +745,7 @@ def main():
     for N_ in NS:
         SUF = GRID_SUF[N_]
         summ = {"Solver": [], "Hints": [], "HintsTF": [], "Best": [], "Decay": [], "Oneshot": [], "SolverDeep": [], "HintsDeep": [], "HintsTFDeep": [], "BestDeep": [], "DecayDeep": [], "OneshotDeep": [], "OracleRatio": [],
-                "AgreeOracle": [], "AgreeBest": [], "AgreeOracleDeep": []}
+                "AgreeOracle": [], "AgreeBest": [], "AgreeOracleDeep": [], "OneCall": []}
         for eq in EQS:
             for spec in PAIRINGS:
                 dg = cell(eq, N_, spec)
@@ -664,37 +756,37 @@ def main():
                 for tol, suf_ in [(d["h2"], ""), (1e-8, "Deep")]:
                     key = tkey(d, tol)
                     t_r = times(P["router"], key)
-                    summ["Solver" + suf_].append(paired_speedup(times_lb(P["classical"], key), t_r)[0])
-                    summ["Hints" + suf_].append(paired_speedup(times_lb(P[HREF], key), t_r)[0])
-                    summ["HintsTF" + suf_].append(paired_speedup(times_lb(P["hints25"], key), t_r)[0])
-                    summ["Best" + suf_].append(paired_speedup(times_lb(P[best_tau(P, key)], key), t_r)[0])
+                    summ["Solver" + suf_].append(ratio_rows(P["classical"], P["router"], key))
+                    summ["Hints" + suf_].append(ratio_rows(P[HREF], P["router"], key))
+                    summ["HintsTF" + suf_].append(ratio_rows(P["hints25"], P["router"], key))
+                    summ["Best" + suf_].append(ratio_rows(P[best_tau(P, key)], P["router"], key))
                     if "oneshot" in P:
-                        summ["Oneshot" + suf_].append(paired_speedup(times_lb(P["oneshot"], key), t_r)[0])
+                        summ["Oneshot" + suf_].append(ratio_rows(P["oneshot"], P["router"], key))
                     bd_ = best_decay(P, key)
                     if bd_:
-                        summ["Decay" + suf_].append(paired_speedup(times_lb(P[bd_], key), t_r)[0])
+                        summ["Decay" + suf_].append(ratio_rows(P[bd_], P["router"], key))
                 key = tkey(d, d["h2"])
                 summ["OracleRatio"].append(np.median(times(P["router"], key)) / np.median(times(P["oracle"], key)))
-                # agreement of the decision sequence to h^2 (identical iteration count and corrector calls)
-                it_r, it_o, it_b = iters(P["router"], key), iters(P["oracle"], key), iters(P[best_tau(P, key)], key)
-                nr = np.array([r["tol"][key]["no_calls"] for r in P["router"]], dtype=float)
-                no_ = np.array([r["tol"][key]["no_calls"] for r in P["oracle"]], dtype=float)
-                nb = np.array([r["tol"][key]["no_calls"] for r in P[best_tau(P, key)]], dtype=float)
-                summ["AgreeOracle"].append(100 * float(np.mean((it_r == it_o) & (nr == no_))))
-                summ["AgreeBest"].append(100 * float(np.mean((it_r == it_b) & (nr == nb))))
-                key8 = tkey(d, 1e-8)
-                it_r8, it_o8 = iters(P["router"], key8), iters(P["oracle"], key8)
-                summ["AgreeOracleDeep"].append(100 * float(np.mean(it_r8 == it_o8)))
+                # agreement of the executed decision sequence up to the tolerance crossing (from the
+                # run-length-encoded operation sequences stored with every row; nan if a cell predates them)
+                a_o, a_b = seq_agree(P["router"], P["oracle"], key), seq_agree(P["router"], P[best_tau(P, key)], key)
+                a_o8 = seq_agree(P["router"], P["oracle"], tkey(d, 1e-8))
+                for nm_, v_ in [("AgreeOracle", a_o), ("AgreeBest", a_b), ("AgreeOracleDeep", a_o8)]:
+                    if np.isfinite(v_):
+                        summ[nm_].append(v_)
+                # instances on which the router makes exactly one corrector call to h^2
+                nc_ = np.array([r["tol"][key]["no_calls"] if r["tol"][key]["no_calls"] is not None else -1 for r in P["router"]])
+                summ["OneCall"].append(100 * float(np.mean(nc_ == 1)))
         if not summ["Solver"]:
             continue
         for name, vals in summ.items():
-            if name.startswith("Agree"):
-                out.append(f"\\newcommand{{\\ca{name}{SUF}Min}}{{{min(vals):.0f}}}")
-                out.append(f"\\newcommand{{\\ca{name}{SUF}Max}}{{{max(vals):.0f}}}")
+            if name.startswith("Agree") or name == "OneCall":
+                out.append(f"\\newcommand{{\\ca{name}{SUF}Min}}{{{(f'{min(vals):.0f}' if vals else PENDING)}}}")
+                out.append(f"\\newcommand{{\\ca{name}{SUF}Max}}{{{(f'{max(vals):.0f}' if vals else PENDING)}}}")
             else:
                 rng_macro(out, "caSp" + name + SUF, vals)
-        out.append(f"\\newcommand{{\\caCellsRouterBeatsOneshotDeep{SUF}}}{{{sum(v >= 1.0 for v in summ['OneshotDeep'])}}}")
-        out.append(f"\\newcommand{{\\caCellsRouterBeatsHintsTFDeep{SUF}}}{{{sum(v >= 1.0 for v in summ['HintsTFDeep'])}}}")
+        out.append(f"\\newcommand{{\\caCellsRouterBeatsOneshotDeep{SUF}}}{{{sum(v > 1.0 for v in summ['OneshotDeep'])}}}")
+        out.append(f"\\newcommand{{\\caCellsRouterBeatsHintsTFDeep{SUF}}}{{{sum(v > 1.0 for v in summ['HintsTFDeep'])}}}")
         # best fixed schedule at 1e-8 per pairing (labels), for the text
         bl_ = []
         for eq in EQS:
@@ -716,13 +808,13 @@ def main():
             cnt_[p] = cnt_.get(p, 0) + 1
         out.append(f"\\newcommand{{\\caBestDeepSchedList{SUF}}}{{{', '.join(f'{_lab(p)} ({n})' for p, n in sorted(cnt_.items(), key=lambda kv: -kv[1]))}}}")
         out.append(f"\\newcommand{{\\caNumCells{SUF}}}{{{len(summ['Solver'])}}}")
-        out.append(f"\\newcommand{{\\caCellsRouterBeatsBest{SUF}}}{{{sum(v >= 1.0 for v in summ['Best'])}}}")
-        out.append(f"\\newcommand{{\\caCellsRouterBeatsHints{SUF}}}{{{sum(v >= 1.0 for v in summ['Hints'])}}}")
-        out.append(f"\\newcommand{{\\caCellsRouterBeatsBestDeep{SUF}}}{{{sum(v >= 1.0 for v in summ['BestDeep'])}}}")
-        out.append(f"\\newcommand{{\\caCellsRouterBeatsHintsDeep{SUF}}}{{{sum(v >= 1.0 for v in summ['HintsDeep'])}}}")
+        out.append(f"\\newcommand{{\\caCellsRouterBeatsBest{SUF}}}{{{sum(v > 1.0 for v in summ['Best'])}}}")
+        out.append(f"\\newcommand{{\\caCellsRouterBeatsHints{SUF}}}{{{sum(v > 1.0 for v in summ['Hints'])}}}")
+        out.append(f"\\newcommand{{\\caCellsRouterBeatsBestDeep{SUF}}}{{{sum(v > 1.0 for v in summ['BestDeep'])}}}")
+        out.append(f"\\newcommand{{\\caCellsRouterBeatsHintsDeep{SUF}}}{{{sum(v > 1.0 for v in summ['HintsDeep'])}}}")
         out.append(f"\\newcommand{{\\caCellsRouterWithinBest{SUF}}}{{{sum(v >= 0.9 for v in summ['Best'])}}}")
-        out.append(f"\\newcommand{{\\caCellsRouterBeatsDecay{SUF}}}{{{sum(v >= 1.0 for v in summ['Decay'])}}}")
-        out.append(f"\\newcommand{{\\caCellsRouterBeatsDecayDeep{SUF}}}{{{sum(v >= 1.0 for v in summ['DecayDeep'])}}}")
+        out.append(f"\\newcommand{{\\caCellsRouterBeatsDecay{SUF}}}{{{sum(v > 1.0 for v in summ['Decay'])}}}")
+        out.append(f"\\newcommand{{\\caCellsRouterBeatsDecayDeep{SUF}}}{{{sum(v > 1.0 for v in summ['DecayDeep'])}}}")
         # multigrid alone and MG-preconditioned Krylov, at h^2 and 1e-8, every stationary pairing of this grid
         vm, vmd, vk, vkd = [], [], [], []
         for eq in EQS:
@@ -739,10 +831,10 @@ def main():
                     t_r = times_lb(g["policies"]["router"], key)
                     rm_ = bl_rows(g, db, "mg")
                     if rm_:
-                        lm.append(paired_speedup(times_lb(rm_, key), t_r)[0])
+                        lm.append(ratio_rows(rm_, g["policies"]["router"], key))
                     rk_ = bl_rows(g, db, kry_name(eq))
                     if rk_:
-                        lk.append(paired_speedup(times_lb(rk_, key), t_r)[0])
+                        lk.append(ratio_rows(rk_, g["policies"]["router"], key))
         rng_macro(out, "caVsMgAll" + SUF, vm); rng_macro(out, "caVsMgDeep" + SUF, vmd)
         rng_macro(out, "caVsKrylovAll" + SUF, vk); rng_macro(out, "caVsKrylovDeep" + SUF, vkd)
         # the {NO, multigrid} router against multigrid alone
@@ -754,8 +846,8 @@ def main():
                 continue
             d, g = dg
             rm_ = bl_rows(g, db, "mg")
-            vme.append(paired_speedup(times_lb(rm_, tkey(d, d["h2"])), times_lb(g["policies"]["router"], tkey(d, d["h2"])))[0])
-            vmed.append(paired_speedup(times_lb(rm_, tkey(d, 1e-8)), times_lb(g["policies"]["router"], tkey(d, 1e-8)))[0])
+            vme.append(ratio_rows(rm_, g["policies"]["router"], tkey(d, d["h2"])))
+            vmed.append(ratio_rows(rm_, g["policies"]["router"], tkey(d, 1e-8)))
         rng_macro(out, "caVsMgEnsAll" + SUF, vme); rng_macro(out, "caVsMgEnsDeep" + SUF, vmed)
     # baselines at 128^2 for the text
     vs_mg, vs_kry, vs_mg_ens = [], [], []
@@ -771,10 +863,10 @@ def main():
         t_r = times_lb(g["policies"]["router"], kh)
         rm_ = bl_rows(g, d, "mg")
         if rm_:
-            vs_mg.append(paired_speedup(times_lb(rm_, kh), t_r)[0])
+            vs_mg.append(ratio_rows(rm_, g["policies"]["router"], kh))
         rk_ = bl_rows(g, d, kry_name(eq))
         if rk_:
-            vs_kry.append(paired_speedup(times_lb(rk_, kh), t_r)[0])
+            vs_kry.append(ratio_rows(rk_, g["policies"]["router"], kh))
         mgp = cell(eq, N, "mg")
         if mgp:
             vs_mg_ens.append(paired_speedup(times(mgp[1]["policies"]["classical"], tkey(mgp[0], dd["h2"])),
@@ -789,7 +881,7 @@ def main():
         best_s = min(pw, key=lambda s_: np.median(times(pw[s_][1]["policies"]["router"], tkey(pw[s_][0], d["h2"]))))
         dd, g = pw[best_s]
         rf_ = bl_rows(g, d, "fft")
-        fft_ratio.append(paired_speedup(times_lb(g["policies"]["router"], tkey(dd, dd["h2"])), times_lb(rf_, tkey(dd, dd["h2"])))[0])
+        fft_ratio.append(ratio_rows(g["policies"]["router"], rf_, tkey(dd, dd["h2"])))
     rng_macro(out, "caFftRatio", fft_ratio)
 
     def num_macro(name, vals, fmt):
@@ -826,6 +918,7 @@ def main():
     # ================================================================ in-situ overheads, drift, charged fraction, live/WU, macro sizes
     dec_us, gap_us, dfrac, dfrac8, charged, livewu, drifts, waits, kchk, ndec = [], [], [], [], [], [], [], 0, [], []
     n_retimed, n_flagged, kinv = 0, 0, 0
+    pre_protocol = set()     # cells produced before the validity flag / in-cell re-timing existed
     for (eq_, N_, spec_, ens_), (d_, g_) in R.items():
         if ens_:
             continue
@@ -856,7 +949,13 @@ def main():
         for k_, v_ in g_.items():
             if k_.startswith("krylov_check:"):
                 kchk.append(v_["max_ratio_timed_over_untimed_error"])
-                kinv += int(v_.get("n_invalid", 0))
+        for p_, rows_ in P.items():
+            if p_.startswith("base:"):
+                kinv += int(sum(1 for r in rows_ if not r.get("valid", True)))
+                if rows_ and "valid" not in rows_[0]:
+                    pre_protocol.add((eq_, N_, spec_))
+        if g_.get("drift") and "ref_us" not in g_["drift"][0]:
+            pre_protocol.add((eq_, N_, spec_))
     num_macro("caDecInSitu", dec_us, "%.0f")
     num_macro("caRouterOracleGap", gap_us, "%.0f")
     num_macro("caDecFrac", dfrac, "%.1f")
@@ -866,11 +965,13 @@ def main():
     num_macro("caNDec", ndec, "%.0f")
     out.append(f"\\newcommand{{\\caDriftMax}}{{{('%.1f' % max(drifts)) if drifts else PENDING}}}")
     out.append(f"\\newcommand{{\\caDriftWaits}}{{{waits}}}")
-    out.append(f"\\newcommand{{\\caDriftRetimed}}{{{n_retimed}}}")
-    out.append(f"\\newcommand{{\\caDriftFlagged}}{{{n_flagged}}}")
+    out.append(f"\\newcommand{{\\caDriftRetimed}}{{{n_retimed if not pre_protocol else PENDING}}}")
+    out.append(f"\\newcommand{{\\caDriftFlagged}}{{{n_flagged if not pre_protocol else PENDING}}}")
     out.append(f"\\newcommand{{\\caDriftN}}{{{len(drifts)}}}")
     out.append(f"\\newcommand{{\\caKrylovCheckMax}}{{{('%.2f' % max(kchk)) if kchk else PENDING}}}")
-    out.append(f"\\newcommand{{\\caKrylovInvalid}}{{{kinv}}}")
+    # the validity count and the re-timing counts are only meaningful once every cell carries them
+    out.append(f"\\newcommand{{\\caKrylovInvalid}}{{{kinv if not pre_protocol else PENDING}}}")
+    out.append(f"\\newcommand{{\\caPreProtocolCells}}{{{len(pre_protocol)}}}")
     for N_ in NS:
         SUF = GRID_SUF[N_]
         for spec_, nm_ in [("jacobi", "Jacobi"), ("gs", "Gs"), ("mg", "Mg"), ("ssor", "SymGs")]:
@@ -878,7 +979,9 @@ def main():
             if dg:
                 out.append(f"\\newcommand{{\\caM{nm_}{SUF}}}{{{dg[1]['m'][0]}}}")
                 if spec_ == "jacobi" and SUF == "":
-                    mj_ = dg[1]["m"][0]
+                    dgd_ = cell("Poisson", N_, "jacobi_0.67") or next((cell(e_, N_, "jacobi_0.67") for e_ in EQS if cell(e_, N_, "jacobi_0.67")), None)
+                    mj_ = (dgd_[1]["m"][0] if dgd_ else dg[1]["m"][0])
+                    out.append(f"\\newcommand{{\\caMJacobiDamped}}{{{mj_}}}")
                     def sci_tex(x):
                         e_ = int(np.floor(np.log10(x))); mant_ = x / 10 ** e_
                         return f"{mant_:.0f}\\times 10^{{{e_}}}"
@@ -945,15 +1048,13 @@ def main():
                     if len(members) > 1:
                         s1, sp1, p1 = sp_rows(best_single[1], Rr, key8, ci=False, field="t_wu")
                         s2, sp2, p2 = sp_rows(best_single[2], Ro, key8, ci=False, field="t_wu")
+                        ci1 = len(nest_comps)
                         nest_comps.append((len(out), len(row), s1, sp1, p1)); row.append(s1)
                         nest_comps.append((len(out), len(row), s2, sp2, p2)); row.append(s2)
                         keyh = tkey(dd, dd["h2"])
                         bsh = min(singles, key=lambda r_: np.median(times(r_[1], tkey(r_[3], r_[3]["h2"]), field="t_wu")))
                         tbh = times(bsh[1], tkey(bsh[3], bsh[3]["h2"]), field="t_wu")
-                        nest_stats.append((eq, N, members, paired_speedup(tb, times(Rr, key8, field="t_wu"))[0],
-                                           wilcoxon_p(tb, times(Rr, key8, field="t_wu")),
-                                           paired_speedup(tbh, times(Rr, keyh, field="t_wu"))[0],
-                                           paired_speedup(tbo, times(Ro, key8, field="t_wu"))[0]))
+                        nest_stats.append((eq, N, members, sp1, p1, ratio_rows(bsh[1], Rr, keyh, field="t_wu"), sp2, ci1))
                     else:
                         row += ["(best single)" if members == best_single[0] else "--", "--"]
                     out.append(" & ".join(row) + " \\\\")
@@ -970,7 +1071,8 @@ def main():
                 cells_[ci_] = f"\\textbf{{{s_}}}"
                 out[li] = " & ".join(cells_) + " \\\\"
         if nest_stats:
-            wins = [s for s in nest_stats if s[3] >= 1.05 and s[4] < 0.01]
+            # a win is a cell whose table entry is bold: ratio >= 1.10 and Holm-significant over the table
+            wins = [s for s in nest_stats if s[3] >= 1.10 and bool(sig_n[s[7]])]
             out.append(f"\\newcommand{{\\caNestNum}}{{{len(nest_stats)}}}")
             out.append(f"\\newcommand{{\\caNestWins}}{{{len(wins)}}}")
             out.append(f"\\newcommand{{\\caNestLosses}}{{{sum(1 for s in nest_stats if s[3] < 0.95)}}}")
@@ -1150,7 +1252,7 @@ def main():
             out.append(lab + " & " + " & ".join(cells) + " \\\\")
         out.append("\\bottomrule\n\\end{tabular}}")
         tr = O["training"]
-        be_list = []
+        be_list, be_kind = [], []
         out.append("\\newcommand{\\caamort}{")
         out.append("\\begin{tabular}{llccccc}\n\\toprule")
         out.append("Equation & $N$ & Corrector data + fit & Router training (GS pairing) & Saving per solve vs HINTS ($\\tau{=}15$) & Break-even solves (router) & Saving per solve vs solver only \\\\ \\midrule")
@@ -1169,6 +1271,7 @@ def main():
                 sav_h = t_h - t_r; sav_c = t_c - t_r
                 be = (rt["train_s"] / sav_h) if (rt and sav_h > 0) else np.inf
                 be_list.append(be)
+                be_kind.append("ok" if (rt and sav_h > 0) else ("notrain" if not rt else "nosaving"))
                 out.append(" & ".join([EQ_NAMES[eq] if first else "", f"${N}^2$", f"{c['data_s'] + c['fit_s']:.0f}\\,s",
                                        f"{rt['train_s']:.0f}\\,s" if rt else "--", fmt_time(sav_h) if sav_h > 0 else "--",
                                        f"{be:.0f}" if np.isfinite(be) else "--", fmt_time(sav_c)]) + " \\\\")
@@ -1179,7 +1282,8 @@ def main():
         fin_be = [b for b in be_list if np.isfinite(b)]
         out.append(f"\\newcommand{{\\caBreakEvenMin}}{{{(f'{min(fin_be):.0f}' if fin_be else PENDING)}}}")
         out.append(f"\\newcommand{{\\caBreakEvenMax}}{{{(f'{max(fin_be):.0f}' if fin_be else PENDING)}}}")
-        out.append(f"\\newcommand{{\\caBreakEvenNone}}{{{len(be_list) - len(fin_be)}}}")
+        out.append(f"\\newcommand{{\\caBreakEvenNone}}{{{be_kind.count('nosaving')}}}")
+        out.append(f"\\newcommand{{\\caBreakEvenNoTrain}}{{{be_kind.count('notrain')}}}")
         n128 = O["per_op"].get("128", {})
         if n128.get("lstm_router_decision") and n128.get("jacobi"):
             out.append(f"\\newcommand{{\\caLstmOverJacobi}}{{{n128['lstm_router_decision']/n128['jacobi']:.0f}}}")
@@ -1306,7 +1410,7 @@ def main():
     if Tf:
         out.append("\\newcommand{\\catheorem}{")
         out.append("\\begin{tabular}{llcccccccccc}\n\\toprule")
-        out.append("Equation & Ensemble & $K$ & $T$ & $n$ & $\\mu$ & $\\alpha(O)$ greedy prefixes & $\\alpha(O)$ all $|S| < T$ & bound holds & $g(S^T)/g(O)$ med (max) & greedy $= O$ & $g(O)$ at floor / rule $=$ Alg.~1 / violations / premises verified \\\\ \\midrule")
+        out.append("Equation & Ensemble & $K$ & $T$ & $n$ & $\\mu$ & $\\alpha(O)$ greedy prefixes & $\\alpha(O)$ all $|S| < T$ & bound holds & $g(S^T)/g(O)$ med (max) & greedy $= O$ & $g(O)$ at floor / rule $=$ Alg.~1 / violations (greedy prefixes, all prefixes) / on-path premises verified \\\\ \\midrule")
         for eq in EQS:
             for N in NS:
                 d = Tf.get((eq, N))
@@ -1321,7 +1425,7 @@ def main():
                                            f"{max(r['alpha_all'] for r in rows):.3f}", f"{sum(r['holds'] for r in rows)}/{len(rows)}",
                                            f"{np.median([r['greedy_over_opt'] for r in rows]):.3f} ({max(r['greedy_over_opt'] for r in rows):.2f})",
                                            f"{sum(r['greedy'] == r['O'] for r in rows)}/{len(rows)}",
-                                           f"{sum(r.get('opt_at_floor', False) for r in rows)} / {sum(r.get('deployed_eq_plain', True) for r in rows)} / {sum(r.get('viol_greedy', 0) + r.get('viol_all', 0) for r in rows)} / {sum(r.get('premises_verified', False) for r in rows)}"]) + " \\\\")
+                                           f"{sum(r.get('opt_at_floor', False) for r in rows)} / {sum(r.get('deployed_eq_plain', True) for r in rows)} / {sum(r.get('viol_greedy', 0) for r in rows)}, {sum(r.get('viol_all', 0) for r in rows)} / {sum(r.get('premises_verified', False) for r in rows)}"]) + " \\\\")
                     first = False
                 out.append("\\midrule")
         out[-1] = "\\bottomrule\n\\end{tabular}}"
@@ -1330,8 +1434,9 @@ def main():
         out.append(f"\\newcommand{{\\caThmHolds}}{{{sum(r['holds'] for r in allrows)}/{len(allrows)}}}")
         out.append(f"\\newcommand{{\\caThmFloor}}{{{sum(r.get('opt_at_floor', False) for r in allrows)}}}")
         out.append(f"\\newcommand{{\\caThmPlainDiff}}{{{sum(not r.get('deployed_eq_plain', True) for r in allrows)}}}")
-        out.append(f"\\newcommand{{\\caThmViol}}{{{sum(r.get('viol_greedy', 0) + r.get('viol_all', 0) for r in allrows)}}}")
-        out.append(f"\\newcommand{{\\caThmMaxRatio}}{{{max(r['greedy_over_opt'] for r in allrows):.1f}}}")
+        out.append(f"\\newcommand{{\\caThmViol}}{{{sum(r.get('viol_greedy', 0) for r in allrows)}}}")
+        out.append(f"\\newcommand{{\\caThmViolAll}}{{{sum(r.get('viol_all', 0) for r in allrows)}}}")
+        out.append(f"\\newcommand{{\\caThmMaxRatio}}{{{math.ceil(10 * max(r['greedy_over_opt'] for r in allrows)) / 10:.1f}}}")
         out.append(f"\\newcommand{{\\caThmAlphaGreedyMax}}{{{max(r['alpha_greedy'] for r in allrows):.3f}}}")
         out.append(f"\\newcommand{{\\caThmAlphaAllMax}}{{{max(r['alpha_all'] for r in allrows):.3f}}}")
         out.append(f"\\newcommand{{\\caThmPremises}}{{{sum(r.get('premises_verified', False) for r in allrows)}/{len(allrows)}}}")
@@ -1341,7 +1446,7 @@ def main():
         out.append(f"\\newcommand{{\\caThmN}}{{{len(allrows)}}}")
     else:
         pending(out, "catheorem")
-        for nm_ in ["caThmMuMax", "caThmHolds", "caThmFloor", "caThmPlainDiff", "caThmViol", "caThmMaxRatio", "caThmAlphaGreedyMax", "caThmAlphaAllMax", "caThmPremises", "caThmExpand", "caThmExpandAll", "caThmClip", "caThmN"]:
+        for nm_ in ["caThmMuMax", "caThmHolds", "caThmFloor", "caThmPlainDiff", "caThmViol", "caThmViolAll", "caThmMaxRatio", "caThmAlphaGreedyMax", "caThmAlphaAllMax", "caThmPremises", "caThmExpand", "caThmExpandAll", "caThmClip", "caThmN"]:
             out.append(f"\\newcommand{{\\{nm_}}}{{{PENDING}}}")
 
     # ================================================================ decision-granularity ablation (unit = corrector / 4)
@@ -1384,6 +1489,7 @@ def main():
 
     # ================================================================ development vs confirmatory runs
     if Rdev and R:
+        held_comps = []
         out.append("\\newcommand{\\caheldout}{")
         out.append("\\begin{tabular}{lllcccc}\n\\toprule")
         out.append("& & & \\multicolumn{2}{c}{development (seed 72, numpy kernels)} & \\multicolumn{2}{c}{confirmatory (seed 73, compiled kernels)} \\\\ \\cmidrule(lr){4-5}\\cmidrule(lr){6-7}")
@@ -1394,24 +1500,41 @@ def main():
                 keys = sorted([k for k in R if k[0] == eq and k[1] == N and k in Rdev], key=lambda k: (k[3], PAIRINGS.index(k[2]) if k[2] in PAIRINGS else 99, len(k[2])))
                 for k in keys:
                     cells = []
+                    row_start = len(held_comps)
                     for d_, g_ in [Rdev[k], R[k]]:
                         P = g_["policies"]
                         if not k[3]:
                             key = tkey(d_, d_["h2"])
-                            t_r = times(P["router"], key)
-                            cells.append(sp_cell(times_lb(P["hints25"], key), t_r))
-                            cells.append(sp_cell(times_lb(P[best_tau(P, key)], key), t_r))
+                            for rows_b in [P["hints25"], P[best_tau(P, key)]]:
+                                s_, sp_, p_ = sp_rows(rows_b, P["router"], key, ci=False)
+                                held_comps.append([None, 3 + len(cells), s_, sp_, p_]); cells.append(s_)
                         else:
                             key = tkey(d_, 1e-8)
-                            t_r = times(P["router"], key, field="t_wu")
-                            singles = {p_: times(P[p_], key, field="t_wu") for p_ in P if p_.startswith("router@")}
-                            cells.append(sp_cell(singles[min(singles, key=lambda p_: np.median(singles[p_]))], t_r) if singles else "--")
-                            cells.append(sp_cell(times(P["oracle"], key, field="t_wu"), t_r) if "oracle" in P else "--")
+                            singles = {p_: P[p_] for p_ in P if p_.startswith("router@")}
+                            if singles:
+                                bs_ = min(singles, key=lambda p_: np.median(times(singles[p_], key, field="t_wu")))
+                                s_, sp_, p_ = sp_rows(singles[bs_], P["router"], key, ci=False, field="t_wu")
+                                held_comps.append([None, 3 + len(cells), s_, sp_, p_]); cells.append(s_)
+                            else:
+                                cells.append("--")
+                            if "oracle" in P:
+                                s_, sp_, p_ = sp_rows(P["oracle"], P["router"], key, ci=False, field="t_wu")
+                                held_comps.append([None, 3 + len(cells), s_, sp_, p_]); cells.append(s_)
+                            else:
+                                cells.append("--")
                     lab = (f"$\\{{\\mathrm{{NO}}, \\text{{{SOLVER_NAMES[k[2]]}}}\\}}$" if not k[3] else wname(k[2].split("+")) + " ($10^{-8}$, work units)")
                     out.append(" & ".join([EQ_NAMES[eq] if first else "", f"${N}^2$", lab] + cells) + " \\\\")
+                    for kk in range(row_start, len(held_comps)):
+                        held_comps[kk][0] = len(out) - 1
                     first = False
             if not first and eq != EQS[-1]:
                 out.append("\\midrule")
+        sig_h = holm_mask([c[4] for c in held_comps]) if held_comps else []
+        for (li, ci_, s_, sp_, p_), ok_ in zip(held_comps, sig_h):
+            if ok_ and sp_ >= 1.10:
+                cells_ = out[li].rstrip(" \\\\").split(" & ")
+                cells_[ci_] = f"\\textbf{{{s_}}}"
+                out[li] = " & ".join(cells_) + " \\\\"
         if out[-1] == "\\midrule":
             out.pop()
         out.append("\\bottomrule\n\\end{tabular}}")
@@ -1439,7 +1562,15 @@ def main():
                           + glob.glob(f"{RESULTS_DIR}/assumptions_*.json") + glob.glob(f"{RESULTS_DIR}/screen_*.json") + glob.glob(f"{RESULTS_DIR}/theorem_*.json")
                           + glob.glob("results_ens_big/*.json") + [f"{RESULTS_DIR}/overheads.json", f"{RESULTS_DIR}/discretization_error.json"])):
         if os.path.exists(path):
-            man[path] = hashlib.sha256(open(path, "rb").read()).hexdigest()
+            man[path] = {"sha256": hashlib.sha256(open(path, "rb").read()).hexdigest()}
+            try:
+                dj_ = json.load(open(path))
+                if isinstance(dj_, dict) and "provenance" in dj_:
+                    man[path]["git_commit"] = dj_["provenance"].get("git_commit"); man[path]["git_dirty"] = dj_["provenance"].get("git_dirty")
+                    if "retime_provenance" in dj_:
+                        man[path]["retime_git_commit"] = dj_["retime_provenance"].get("git_commit")
+            except Exception:
+                pass
     json.dump(man, open(os.path.join(os.path.dirname(OUT_TEX) or ".", "manifest.json"), "w"), indent=1)
 
     # ================================================================ placeholders / summary macros
@@ -1449,7 +1580,8 @@ def main():
                       ("caFftRatioMin", PENDING), ("caFftRatioMax", PENDING),
                       ("caRhoAMax", PENDING), ("caRhoSpecMax", PENDING), ("caRhoTwoGsMax", PENDING), ("caBandMax", PENDING), ("caAlphaHatMax", PENDING),
                       ("caAlphaHatMed", PENDING), ("caAlphaHatMaxH", PENDING), ("caAlphaBoundMin", PENDING), ("caAlphaBoundMax", PENDING),
-                      ("caJacDampMacro", PENDING), ("caJacNyqMacro", PENDING), ("caBreakEvenMin", PENDING), ("caBreakEvenMax", PENDING), ("caBreakEvenNone", PENDING)]:
+                      ("caJacDampMacro", PENDING), ("caJacNyqMacro", PENDING), ("caBreakEvenMin", PENDING), ("caBreakEvenMax", PENDING), ("caBreakEvenNone", PENDING),
+                      ("caBreakEvenNoTrain", PENDING), ("caMJacobiDamped", PENDING)]:
         if name not in defined:
             out.append(f"\\newcommand{{\\{name}}}{{{val}}}")
     if ens_ratios:
@@ -1463,7 +1595,7 @@ def main():
             out.append(f"\\newcommand{{\\{name}}}{{{PENDING}}}")
     for SUF in ["", "B", "C"]:
         for name in ["caSpSolver", "caSpHints", "caSpHintsTF", "caSpBest", "caSpDecay", "caSpOneshot", "caSpSolverDeep", "caSpHintsDeep", "caSpHintsTFDeep", "caSpBestDeep", "caSpDecayDeep", "caSpOneshotDeep", "caSpOracleRatio",
-                     "caAgreeOracle", "caAgreeBest", "caAgreeOracleDeep",
+                     "caAgreeOracle", "caAgreeBest", "caAgreeOracleDeep", "caOneCall",
                      "caVsMgAll", "caVsMgDeep", "caVsKrylovAll", "caVsKrylovDeep", "caVsMgEnsAll", "caVsMgEnsDeep"]:
             for mm in ["Min", "Max"]:
                 if name + SUF + mm not in defined:

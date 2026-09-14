@@ -101,7 +101,9 @@ for grp, T in groups:
             sc = env.macro_score(e0, [math.sqrt(max(g_raw[S_g + (j,)], 1e-300)) for j in range(K)])
             S_g = S_g + (int(np.argmin(sc)),)
             S_plain = S_plain + (min(range(K), key=lambda j: g_raw[S_plain + (j,)]),)
-            S_g_clip = S_g_clip + (min(range(K), key=lambda j: g[S_g_clip + (j,)]),)
+            e0c = math.sqrt(g[S_g_clip])
+            scc = env.macro_score(e0c, [math.sqrt(g[S_g_clip + (j,)]) for j in range(K)])
+            S_g_clip = S_g_clip + (int(np.argmin(scc)),)     # the deployed rule on the clipped objective
         greedy_prefixes = [S_g[:t] for t in range(T)]
 
         def g_concat(S, seq):
@@ -151,7 +153,10 @@ for grp, T in groups:
                      # the theorem is verified on this instance only if its premises were: no violation of the
                      # weak-supermodularity inequality with the reported alpha on the greedy prefixes, the
                      # deployed rule equal to Alg. 1, and an optimum resolved above the round-off floor
-                     "premises_verified": bool(viol["greedy"] == 0 and S_plain == S_g and g[O] > floor * (1 + 1e-9)),
+                     # on-path premises of the recurrence proof: prefix monotonicity and the weak-supermodularity
+                     # inequality at the reported alpha on the greedy prefixes, the deployed rule equal to Alg. 1,
+                     # and an exhaustive optimum resolved above the round-off floor (a finite numerical check)
+                     "premises_verified": bool(viol["greedy"] == 0 and expand["greedy"] == 0 and S_plain == S_g and g[O] > floor * (1 + 1e-9)),
                      "macro_exp": list(env.macro_exp)})
     key = "+".join(grp)
     out["groups"][key] = {"ops": env.ops, "m": env.m, "T": T, "rows": rows}
