@@ -101,13 +101,15 @@ def ref_time(n=5):
     return float(np.median(ts))
 
 
-def drift_guard(ref0, tol, max_wait_s=600):
-    """Waits (in 5 s steps) while the reference operation is more than `tol` slower or faster than
-    at the start of the session; returns (ratio, retries)."""
+def drift_guard(ref0, tol, max_wait_s=300):
+    """Waits (in 5 s steps, at most max_wait_s) while the reference operation is more than `tol`
+    slower than at the start of the session (a transient load); a faster machine is not waited
+    for (paired comparisons are within an instance). Returns (ratio, retries); the ratio is
+    stored per instance so that any drift is visible in the results."""
     retries = 0
     while True:
-        ratio = ref_time() / ref0
-        if abs(ratio - 1.0) <= tol or retries * 5 >= max_wait_s:
+        ratio = ref_time(9) / ref0
+        if ratio <= 1.0 + tol or retries * 5 >= max_wait_s:
             return ratio, retries
         retries += 1
         time.sleep(5)
@@ -243,7 +245,7 @@ for group in groups:
     names = list(runs.keys())
     bnames = [f"base:{bn}" for bn in base_names]
     all_names = names + bnames
-    ref0 = ref_time(15)
+    ref0 = ref_time(25)
     t_start = time.time()
     for i in range(args.n_test):
         f1, u1 = f_test[i:i + 1], u_truth[i:i + 1]
