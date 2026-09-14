@@ -1,4 +1,6 @@
 {
+ "results/ConvDiff_128_jacobi.json": "ecfef99210cfed8100ceee78404f8eb78bc99373e53c74082983844ead84c40a",
+ "results/ConvDiff_128_jacobi_0.67.json": "227b0b387f7a868fa018fc87996a56cf25dc559a087fa0972967a38774a70a12",
  "results/Poisson_128_gs.json": "52919563ff58668d5d840fbdc9a4c2f41a40e0bfd99aec46fd898bce50c3e661",
  "results/Poisson_128_jacobi.json": "a6b663ada6d577965415081ecf7742e7a6a8d193c24a85335814e193f5b34a3f",
  "results/Poisson_128_jacobi_0.67.json": "16b70d6b7151bf64ec705ed90688192b39e377b5bd1b48b49d21bde35ffc4805",

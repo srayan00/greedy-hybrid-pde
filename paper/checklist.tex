@@ -19,7 +19,7 @@
 \item {\bf Limitations}
     \item[] Question: Does the paper discuss the limitations of the work performed by the authors?
     \item[] Answer: \answerYes{}% \answerTODO{} % Replace by \answerYes{}, \answerNo{}, or \answerNA{}.
-    \item[] Justification: The paper discusses key limitations in Appendix E. %\justificationTODO{}
+    \item[] Justification: The paper discusses its limitations in the Limitations section (Appendix F), including the constant-coefficient periodic scope of the corrector, the single-thread CPU setting, the test-set-selected optimistic baselines and the pairing-dependent results below truncation level.
     \item[] Guidelines:
     \begin{itemize}
         \item The answer \answerNA{} means that the paper has no limitation while the answer \answerNo{} means that the paper has limitations, but those are not discussed in the paper. 
@@ -35,7 +35,7 @@
 \item {\bf Theory assumptions and proofs}
     \item[] Question: For each theoretical result, does the paper provide the full set of assumptions and a complete (and correct) proof?
     \item[] Answer: \answerYes{}% \answerTODO{} % Replace by \answerYes{}, \answerNo{}, or \answerNA{}.
-    \item[] Justification: All theoretical results include clearly stated assumptions in the statement of theorems. Complete proofs are provided in Appendices A and B with appropriate cross-referencing from the main text.
+    \item[] Justification: All theoretical results include clearly stated assumptions in the statement of theorems. Complete proofs are provided in Appendices A and B (greedy guarantee) and C (surrogate consistency) with cross-references from the main text.
     \item[] Guidelines:
     \begin{itemize}
         \item The answer \answerNA{} means that the paper does not include theoretical results. 
@@ -49,7 +49,7 @@
     \item {\bf Experimental result reproducibility}
     \item[] Question: Does the paper fully disclose all the information needed to reproduce the main experimental results of the paper to the extent that it affects the main claims and/or conclusions of the paper (regardless of whether the code and data are provided or not)?
     \item[] Answer: \answerYes{} %\answerTODO{} % Replace by \answerYes{}, \answerNo{}, or \answerNA{}.
-    \item[] Justification: The paper provides sufficient detail to reproduce all experiments, including training procedures and implementation details described in the main text and Appendix C. Additionally, we release code with a comprehensive README to support the reproducibility of our results.
+    \item[] Justification: The paper provides sufficient detail to reproduce all experiments, including the protocol, training procedures and implementation details described in Section 7 and Appendix E.1, and the code, run scripts and README that produce every table and figure from scratch.
     \item[] Guidelines:
     \begin{itemize}
         \item The answer \answerNA{} means that the paper does not include experiments.
@@ -86,7 +86,7 @@
 \item {\bf Experimental setting/details}
     \item[] Question: Does the paper specify all the training and test details (e.g., data splits, hyperparameters, how they were chosen, type of optimizer) necessary to understand the results?
     \item[] Answer: \answerYes{} %\answerTODO{} % Replace by \answerYes{}, \answerNo{}, or \answerNA{}.
-    \item[] Justification: The paper specifies all key training and evaluation details in the Section 6 and Appendix C.
+    \item[] Justification: The paper specifies all training and evaluation details in Section 7 and Appendix E.1 (protocol, corrector fitting, router training, baselines, statistics); Appendix C documents the pipeline of the original submission whose experiment was withdrawn.
     \item[] Guidelines:
     \begin{itemize}
         \item The answer \answerNA{} means that the paper does not include experiments.
@@ -97,7 +97,7 @@
 \item {\bf Experiment statistical significance}
     \item[] Question: Does the paper report error bars suitably and correctly defined or other appropriate information about the statistical significance of the experiments?
     \item[] Answer: \answerYes{} %\answerTODO{} % Replace by \answerYes{}, \answerNo{}, or \answerNA{}.
-    \item[] Justification: The papr reports standard deviations in the main results tables, and further provides statistical significance via t-test p values in Appendix D.
+    \item[] Justification: Every speedup is a paired median ratio over test instances with a bootstrap 95\% interval and a two-sided Wilcoxon signed-rank test, Holm-corrected within each table (Appendix E.1); the AUC tables report means with standard errors and one-sided paired t-tests on log AUC; the seed trials report means and standard deviations over five router-training seeds.
     \item[] Guidelines:
     \begin{itemize}
         \item The answer \answerNA{} means that the paper does not include experiments.
@@ -114,7 +114,7 @@
 \item {\bf Experiments compute resources}
     \item[] Question: For each experiment, does the paper provide sufficient information on the computer resources (type of compute workers, memory, time of execution) needed to reproduce the experiments?
     \item[] Answer: \answerYes{} % \answerTODO{} % Replace by \answerYes{}, \answerNo{}, or \answerNA{}.
-    \item[] Justification: The paper provides details on compute resources in Appendix C.
+    \item[] Justification: The paper provides details on compute resources (single-thread CPU timings on one machine, training times, amortisation) in Appendix E.1 and E.8.
     \item[] Guidelines:
     \begin{itemize}
         \item The answer \answerNA{} means that the paper does not include experiments.
@@ -215,8 +215,8 @@
 \item {\bf Declaration of LLM usage}
     \item[] Question: Does the paper describe the usage of LLMs if it is an important, original, or non-standard component of the core methods in this research? Note that if the LLM is used only for writing, editing, or formatting purposes and does \emph{not} impact the core methodology, scientific rigor, or originality of the research, declaration is not required.
     %this research? 
-    \item[] Answer: \answerNA{} %\answerTODO{} % Replace by \answerYes{}, \answerNo{}, or \answerNA{}.
-    \item[] Justification: LLMs are primarily used for writing and editing. Further details are provided in Appendix F.
+    \item[] Answer: \answerYes{} %\answerTODO{} % Replace by \answerYes{}, \answerNo{}, or \answerNA{}.
+    \item[] Justification: LLMs are not a component of the method, but an LLM coding assistant was used substantially in this revision to implement the benchmark pipeline, to help draft the corrections to the theory and to draft text from the generated tables, under the authors' direction and with the authors' verification; the LLM Usage section (Appendix G) describes this precisely.
     \item[] Guidelines:
     \begin{itemize}
         \item The answer \answerNA{} means that the core method development in this research does not involve LLMs as any important, original, or non-standard components.

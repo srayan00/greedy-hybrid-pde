@@ -47,6 +47,8 @@ After all these models are trained, run the command:
 `python multiple_solver_results.py --ml_model_name ML_MODEL_NAME --n_test 64 --model_name MODEL_NAME --equation [Poisson/ConvDiff] --numerical_solvers LIST_OF_SOLVERS`
 for all $8$ combinations. All the results (plots and tables) can be found in the results folder
 
+> Everything above this line documents the pipeline of the original submission (LSTM routers, `train_router.py`, `results.py`); its one retained experiment has been withdrawn from the paper and it is kept for the record only. The wall-clock study reported in the paper is the section below.
+
 ## Cost-Aware Wall-Clock Study (branch `costaware-wallclock`) — replication guide
 
 This section documents the wall-clock experiments added for the revision
@@ -163,7 +165,7 @@ python corrector.py --equation AnisoDiff --N 256 --coarsen_x 1 --coarsen_y 4 --n
 #    run_varcoeff.sh (variable-coefficient diffusion), then run_granularity.sh (unit = corrector / 4).
 #    Solver lists per equation are read from config/solvers_<eq> at the start of each stage; every
 #    script is fail-fast (a failing command writes logs/*.failed and stops the chain).
-nohup ./run_all.sh > logs/run_all.out 2>&1 &
+mkdir -p logs && PY=$(which python) nohup ./run_all.sh > logs/run_all.out 2>&1 &
 #    Development runs (numpy kernels, seed 72, earlier sampler) on which every configuration was chosen
 #    are archived in results_dev/; the first confirmatory run (before the protocol revision) in results_conf1/.
 
@@ -176,9 +178,13 @@ paper/build.sh          # -> paper/neurips_2026.pdf (plain pdflatex/bibtex in a 
 Individual pieces can be run by hand, e.g. one pairing:
 
 ```
-python bench.py --equation Poisson --N 128 --solvers gs --measure_only       # per-iteration costs -> checkpoints/costs_Poisson_128.json
-python bench.py --equation Poisson --N 128 --solvers gs --train_only         # router -> checkpoints/router_Poisson_128_gs.pth
-python bench.py --equation Poisson --N 128 --solvers gs --n_test 64          # benchmark -> results/Poisson_128_gs.json
+S=jacobi,jacobi_0.67,gs,ssor,sor_1.5,mg
+python bench.py --equation Poisson --N 128 --solvers $S --measure_only --remeasure_costs   # shared per-iteration costs of all operations -> checkpoints/costs_Poisson_128.json
+python bench.py --equation Poisson --N 128 --solvers gs --train_only --retrain_router    # router -> checkpoints/router_Poisson_128_gs.pth
+python bench.py --equation Poisson --N 128 --solvers gs --n_test 64 --seed 73 --timed_reps 3   # benchmark (revised protocol) -> results/Poisson_128_gs.json
+#   (the default seed is the development seed 72 with one replay; measure the costs with the full solver
+#    list first, as run_final.sh does, so that every pairing shares one calibration; delete the cost cache
+#    and retrain the routers when moving to another machine)
 ```
 
 Useful options of `bench.py`: `--policies` (comma list), `--ensemble`
@@ -216,5 +222,9 @@ runs that hit it are reported as lower bounds), `--retrain_router`,
   iCloud-synced folder; `paper/build.sh` therefore builds in `/private/tmp`
   and copies the PDF back. On other machines a plain `latexmk -pdf` in
   `paper/` also works.
-* `logs/` and `checkpoints/*.pth` are not tracked; `results/*.json` (all
-  reported numbers) are.
+* `logs/`, `checkpoints/*.pth` and the cost caches are not tracked. The result
+  files of the revision-2 confirmatory run are committed to `results/` when the
+  chain finishes (until then only the table file `paper/costaware_tables.tex`
+  and `paper/manifest.json` with the sha256 of every file it was built from are
+  tracked); the development runs are in `results_dev/`, the first confirmatory
+  run in `results_conf1/` (untracked).
