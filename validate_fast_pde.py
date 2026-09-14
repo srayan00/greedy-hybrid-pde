@@ -64,4 +64,25 @@ for eq_name in ["Poisson", "ConvDiff"]:
         print(f"  {tag} one-step max err: {np.abs(u1_fast - u1_dense).max():.3e} (relative to the update: {rel:.3e})")
         assert rel < tol, f"{eq_name}/{tag}: one-step relative error {rel:.2e} exceeds {tol:.0e}"
 
+# --- compiled line Gauss-Seidel against an explicit sparse block-lower-triangular solve, and the fused
+#     residual + norm kernel against residual followed by the numpy norm (all equations, N = 32)
+import scipy.sparse as _sp
+import scipy.sparse.linalg as _spla
+from fast_pde import FastLineGS, GRF2D, l2
+for _eq in ["Poisson", "ConvDiff", "AnisoDiff", "VarCoeff"]:
+    _pde = FastStencilPDE(32, equation=_eq)
+    _A = _pde.sparse_A().tocoo()
+    _keep = (_A.col // 32) <= (_A.row // 32)
+    _M = _sp.csc_matrix((_A.data[_keep], (_A.row[_keep], _A.col[_keep])), shape=_A.shape)
+    _u = np.random.default_rng(1).standard_normal((1, 32, 32)); _f = GRF2D(32, rng=np.random.default_rng(2)).sample(1)
+    _r = _pde.residual(_u, _f)
+    if _eq != "VarCoeff":
+        _ref = _u + _spla.spsolve(_M, _r.ravel()).reshape(_r.shape)
+        _got = FastLineGS(_pde).step(_u, _f, _r)
+        _err = float(np.abs(_got - _ref).max() / np.abs(_ref).max())
+        print(f"  line GS ({_eq}) vs block-lower-triangular solve: {_err:.2e}")
+        assert _err < 1e-11, _err
+    _r2, _n2 = _pde.residual_norm(_u, _f)
+    assert np.allclose(_r2, _r) and abs(float(_n2[0]) - float(l2(_r)[0])) <= 1e-12 * float(l2(_r)[0])
+    print(f"  fused residual+norm ({_eq}): ok")
 print("all checks passed")

@@ -360,6 +360,8 @@ def run_timed(env: Env, f, trace, policy, router=None, return_decision_time=Fals
     t_cum += time.perf_counter_ns() - t0
     t[0] = t_cum * 1e-9
     macro = is_macro_policy(policy)
+    decay_th = float(policy[5:]) if policy.startswith("decay") else None
+    dec_prev = None
     for (start, j) in epochs:
         m_planned = env.m[j] if macro else 1
         if fs is not None:
@@ -371,6 +373,22 @@ def run_timed(env: Env, f, trace, policy, router=None, return_decision_time=Fals
             d_cum += dt
             if jj != j:
                 raise RuntimeError(f"router replay mismatch at op {it}: {jj} vs {j}")
+        elif decay_th is not None:
+            # the residual-decay rule is executed live too (its decision statistic and threshold test
+            # are charged, and its decisions are verified against the untimed trace)
+            t0 = time.perf_counter_ns()
+            if dec_prev is None:
+                jj = env.no_index
+            else:
+                lr_prev, n_prev, a_prev = dec_prev
+                rate = 10.0 ** ((math.log10(max(rr, 1e-300)) - lr_prev) / max(n_prev, 1))
+                jj = env.no_index if (a_prev != env.no_index and rate > decay_th) else 0
+            lr_before = math.log10(max(rr, 1e-300))
+            dt = time.perf_counter_ns() - t0
+            t_cum += dt
+            d_cum += dt
+            if jj != j:
+                raise RuntimeError(f"decay-rule replay mismatch at op {it}: {jj} vs {j}")
         n_exec = 0
         for i in range(m_planned):
             if it >= n_ops:
@@ -392,6 +410,8 @@ def run_timed(env: Env, f, trace, policy, router=None, return_decision_time=Fals
             d_cum += dt
             t[it] = t_cum * 1e-9
             tdec[it] = d_cum * 1e-9
+        if decay_th is not None:
+            dec_prev = (lr_before, n_exec, j)
     assert it == n_ops, (it, n_ops)
     if return_decision_time:
         return t, u, tdec

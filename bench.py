@@ -39,6 +39,7 @@ parser.add_argument("--b_vel", type=float, default=20.0)
 parser.add_argument("--policies", default="classical,hints2,hints5,hints10,hints15,hints25,hints50,phints5,phints10,phints15,phints25,phints50,oneshot,decay0.9,decay0.95,decay0.98,greedy,oracle,router")
 parser.add_argument("--baselines", default="auto", help="classical methods without corrector timed in the same replay loop (comma list, 'auto' = per-equation default, 'none')")
 parser.add_argument("--max_iter_baseline", type=int, default=5000, help="iteration cap of the classical baselines (units of work)")
+parser.add_argument("--retime_all", action="store_true", help="with --retime_only: re-time every instance, not only the drift-flagged ones")
 parser.add_argument("--retime_only", action="store_true", help="re-time the drift-flagged instances of an existing result file (same routers and costs) and re-save it")
 parser.add_argument("--drift_tol", type=float, default=0.10, help="drift guard: re-time a reference operation before every instance and wait while it deviates by more than this fraction")
 parser.add_argument("--tols", default="1e-2,1e-3,h2,1e-5,1e-6,1e-8")
@@ -201,6 +202,7 @@ for group in groups:
     router = None
     t_dec = 0.0
     rpol = "router_rate" if args.rate else "router"
+    rpath = f"{args.ckp_dir}/router_{args.equation}_{args.N}_{gkey}{'_rate' if args.rate else ''}{args.router_tag}.pth"
     if rpol in pol_list:
         rpath = f"{args.ckp_dir}/router_{args.equation}_{args.N}_{gkey}{'_rate' if args.rate else ''}{args.router_tag}.pth"
         if os.path.exists(rpath) and not args.retrain_router:
@@ -278,12 +280,16 @@ for group in groups:
         for bn in base_names:
             traces[f"base:{bn}"] = baselines[bn].untimed(f1, u1)
         # drift guard: the reference operation must be within drift_tol of its start-of-session time
+        global ref0
         ratio, retries = drift_guard(ref0, args.drift_tol, max_wait_s=max_wait_s)
+        ref_abs = ratio * ref0
+        ref0 = min(ref0, ref_abs)          # the reference is the fastest state observed in the session
         try:
             load1 = float(os.getloadavg()[0])
         except (AttributeError, OSError):
             load1 = None
-        drift_rec = {"instance": i, "ratio": ratio, "retries": retries, "loadavg": load1, "t_wall": time.time()}
+        drift_rec = {"instance": i, "ratio": ratio, "retries": retries, "loadavg": load1, "t_wall": time.time(),
+                     "ref_us": ref_abs * 1e-6, "ref0_us": ref0 * 1e-6}
         rows, curves = {}, {}
         # timed replays: random order over policies and baselines per (instance, replay), and an
         # untimed warm-up (one corrector call and one sweep, or the baseline's own operation)
@@ -293,6 +299,7 @@ for group in groups:
         gc.disable()
         times = {p: [] for p in all_names}
         outer = {p: [] for p in all_names}
+        valid = {}
         dec_times = {p: [] for p in names}
         order_rng = np.random.default_rng(10_000 + i)
         for rep in range(args.timed_reps):
@@ -304,6 +311,7 @@ for group in groups:
                     t = bl.timed(f1, traces[p])
                     outer[p].append((time.perf_counter_ns() - t0o) * 1e-9)
                     times[p].append(t)
+                    valid[p] = valid.get(p, True) and bool(getattr(bl, "last_ok", True))
                     continue
                 env_, router_, base_, _ = runs[p]
                 r0 = env_.pde.residual(np.zeros_like(f1), f1)
@@ -322,7 +330,7 @@ for group in groups:
             tt_live = time_to_tol(tr, t_live, tols)
             e = tr["rel_err"]
             row = {"n_ops": int(len(tr["op"])), "final_rel_err": float(e[-1]), "t_total_live": float(t_live[-1]),
-                   "t_outer_total": float(np.median(outer[p])), "tol": {}}
+                   "t_outer_total": float(np.median(outer[p])), "valid": bool(valid.get(p, True)), "tol": {}}
             for tol in tols:
                 tl, il = tt_live[tol]
                 row["tol"][f"{tol:.6g}"] = {"iters": None if not np.isfinite(il) else int(il),
@@ -405,7 +413,7 @@ for group in groups:
     # re-timing pass: instances whose drift guard gave up (reference still more than drift_tol slower
     # than at the start of the session) are timed again once the machine has calmed down (the guard
     # then waits up to 15 min); the first-pass ratio is kept in the record
-    flagged = [dr["instance"] for dr in gres["drift"] if dr["ratio"] > 1.0 + args.drift_tol]
+    flagged = [dr["instance"] for dr in gres["drift"] if dr["ratio"] > 1.0 + args.drift_tol or args.retime_all]
     if flagged:
         print(f"  re-timing {len(flagged)} instance(s) timed under a machine slowdown: {flagged}", flush=True)
     for i in flagged:
@@ -423,7 +431,8 @@ for group in groups:
         if chk:
             worst = max(c[0] / max(c[1], 1e-300) for c in chk)
             gres[f"krylov_check:{bn}"] = {"n": len(chk), "max_ratio_timed_over_untimed_error": float(worst),
-                                          "n_info_nonzero": int(sum(1 for c in chk if c[2] != 0))}
+                                          "n_info_nonzero": int(sum(1 for c in chk if c[2] != 0)),
+                                          "n_invalid": int(sum(1 for c in chk if len(c) > 3 and not c[3]))}
             print(f"  krylov cross-check {bn}: timed/untimed final error ratio <= {worst:.3g} on {len(chk)} runs", flush=True)
     results["groups"][gkey] = gres
     out = f"{args.out_dir}/{args.equation}_{args.N}_{'ens_' if args.ensemble else ''}{gkey}{args.tag}.json"

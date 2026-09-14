@@ -280,13 +280,18 @@ class KrylovBaseline:
             t[1:k + 1] = (np.array(ts[:k]) - t0) * 1e-9
         if k < n:
             t[k + 1:] = (t_end - t0) * 1e-9
-        # cross-check: the timed run's final iterate reaches the error the untimed pass recorded
+        # cross-check: the timed run must have made exactly n units of work (callback count) and its
+        # final iterate must reach the error the untimed pass recorded (same deterministic iteration);
+        # a run failing either test is marked invalid and excluded from the paired comparisons
         N = self.pde.N
         ut = trace.get("u_truth")
+        self.last_ok = (len(ts) == n)
         if ut is not None:
             un = max(float(l2(demean(ut))[0]), 1e-300)
             e_end = float(l2(demean(x.reshape(1, N, N) - ut))[0]) / un
-            self.err_end_check.append((e_end, float(trace["rel_err"][-1]), int(info)))
+            e_ref = float(trace["rel_err"][-1])
+            self.last_ok = self.last_ok and (e_end <= 1.1 * e_ref + 1e-14)
+            self.err_end_check.append((e_end, e_ref, int(info), bool(self.last_ok)))
         return t
 
 

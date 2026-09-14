@@ -13,7 +13,7 @@ NT = {128: 64, 256: 32, 512: 16}
 out = {}
 for eq in ["Poisson", "ConvDiff", "AnisoDiff", "VarCoeff"]:
     for N in ([128, 256] if eq in ("VarCoeff", "AnisoDiff") else [128, 256, 512]):
-        n = NT[N]
+        n = NT[N] if not (eq == "AnisoDiff" and N == 256) else 16     # the anisotropic 256^2 benchmark uses 16 instances
         f = GRF2D(N, rng=np.random.default_rng(seed)).sample(n)
         fh = np.fft.fft2(f); M = 4 * N
         Fh = np.zeros((n, M, M), dtype=complex)

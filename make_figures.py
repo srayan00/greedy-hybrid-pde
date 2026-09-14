@@ -117,7 +117,7 @@ def fig_usage(R, T=60):
                 ax.axis("off")
                 continue
             for pol, lab, st in [("router", "learned router", "-"), ("oracle", "cost-aware oracle", "--"),
-                                 ("hints25", "HINTS ($\\tau{=}25$)", ":")]:
+                                 ("hints15", "HINTS ($\\tau{=}15$)", ":")]:
                 seqs, K_no = op_sequences(R, U, eq, spec, pol)
                 if seqs:
                     ax.plot(np.arange(1, T + 1), usage_curve(seqs, T, K_no), st, lw=1.3, label=lab)
@@ -153,7 +153,7 @@ def fig_usage_grids(R, T=60):
                     continue
                 g = R[k[0]][1]
                 for pol, lab, st in [("router", "learned router", "-"), ("oracle", "cost-aware oracle", "--"),
-                                     ("hints25", "HINTS ($\\tau{=}25$)", ":")]:
+                                     ("hints15", "HINTS ($\\tau{=}15$)", ":")]:
                     if (eq, N, spec) in U and pol in U[(eq, N, spec)]["policies"]:
                         seqs = [np.asarray(s_) for s_ in U[(eq, N, spec)]["policies"][pol]]
                     else:
@@ -216,7 +216,7 @@ def fig_convergence(R, inst=0):
                 continue
             d, g = R[k[0]]
             h2 = d["h2"]
-            for pol, lab, st in [("classical", "solver only", "-"), ("hints25", "HINTS ($\\tau{=}25$)", ":"),
+            for pol, lab, st in [("classical", "solver only", "-"), ("hints15", "HINTS ($\\tau{=}15$)", ":"),
                                  ("hints5", "HINTS ($\\tau{=}5$)", "-."), ("router", "learned router", "-"),
                                  ("oracle", "cost-aware oracle", "--")]:
                 if pol not in g["curves"]:
