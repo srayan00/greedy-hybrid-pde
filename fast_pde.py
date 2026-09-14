@@ -39,11 +39,15 @@ try:
         _dp = _ct.POINTER(_ct.c_double)
         _LIB.apply_A.argtypes = [_dp, _dp, _ct.c_int, _ct.c_int, _ct.c_double, _ct.c_double, _ct.c_double, _ct.c_double]
         _LIB.residual.argtypes = [_dp, _dp, _dp, _ct.c_int, _ct.c_int, _ct.c_double, _ct.c_double, _ct.c_double, _ct.c_double]
+        _LIB.residual_norm2.argtypes = [_dp, _dp, _dp, _ct.c_int, _ct.c_int, _ct.c_double, _ct.c_double, _ct.c_double, _ct.c_double]
+        _LIB.residual_norm2.restype = _ct.c_double
         _LIB.jacobi.argtypes = [_dp, _dp, _dp, _ct.c_int, _ct.c_int, _ct.c_double, _ct.c_double, _ct.c_double, _ct.c_double, _ct.c_double]
         _LIB.sor_sweep.argtypes = [_dp, _dp, _ct.c_int, _ct.c_int, _ct.c_double, _ct.c_double, _ct.c_double, _ct.c_double, _ct.c_double, _ct.c_int]
         _LIB.ssor_sweep.argtypes = [_dp, _dp, _ct.c_int, _ct.c_int, _ct.c_double, _ct.c_double, _ct.c_double, _ct.c_double, _ct.c_double]
         _LIB.apply_A_var.argtypes = [_dp, _dp, _ct.c_int, _ct.c_int, _dp, _dp, _dp, _dp, _dp]
         _LIB.residual_var.argtypes = [_dp, _dp, _dp, _ct.c_int, _ct.c_int, _dp, _dp, _dp, _dp, _dp]
+        _LIB.residual_norm2_var.argtypes = [_dp, _dp, _dp, _ct.c_int, _ct.c_int, _dp, _dp, _dp, _dp, _dp]
+        _LIB.residual_norm2_var.restype = _ct.c_double
         _LIB.jacobi_var.argtypes = [_dp, _dp, _dp, _ct.c_int, _ct.c_int, _dp, _dp, _dp, _dp, _dp, _ct.c_double]
         _LIB.sor_sweep_var.argtypes = [_dp, _dp, _ct.c_int, _ct.c_int, _dp, _dp, _dp, _dp, _dp, _ct.c_double, _ct.c_int]
         _LIB.ssor_sweep_var.argtypes = [_dp, _dp, _ct.c_int, _ct.c_int, _dp, _dp, _dp, _dp, _dp, _ct.c_double]
@@ -95,6 +99,8 @@ class FastStencilPDE:
             self.diag = 2.0 * (self.ax + self.ay) / self.h ** 2
             self._symbol = self._build_symbol()
 
+    _coef_norm = {}
+
     @staticmethod
     def random_coefficient(N, seed=0, contrast=10.0, kmax=4):
         """Smooth random coefficient field on the periodic grid (deterministic in seed and N,
@@ -109,7 +115,24 @@ class FastStencilPDE:
                     continue
                 amp = rng.standard_normal(2) / (1.0 + kx ** 2 + ky ** 2)
                 z += amp[0] * np.cos(2 * np.pi * (kx * X + ky * Y)) + amp[1] * np.sin(2 * np.pi * (kx * X + ky * Y))
-        z = z / np.abs(z).max()
+        # normalise by the maximum of the same trigonometric polynomial on a fixed fine reference
+        # grid (1024^2), so that the coefficient is one grid-independent function a(x) whose samples
+        # on every grid agree (the earlier per-grid normalisation changed a by ~1e-4 between grids)
+        key = (seed, kmax)
+        if key not in FastStencilPDE._coef_norm:
+            rng2 = np.random.default_rng(1000 + seed)
+            M = 1024
+            xr = np.arange(M) / M
+            XR, YR = np.meshgrid(xr, xr, indexing="ij")
+            zr = np.zeros((M, M))
+            for kx in range(-kmax, kmax + 1):
+                for ky in range(-kmax, kmax + 1):
+                    if kx == 0 and ky == 0:
+                        continue
+                    amp = rng2.standard_normal(2) / (1.0 + kx ** 2 + ky ** 2)
+                    zr += amp[0] * np.cos(2 * np.pi * (kx * XR + ky * YR)) + amp[1] * np.sin(2 * np.pi * (kx * XR + ky * YR))
+            FastStencilPDE._coef_norm[key] = float(np.abs(zr).max())
+        z = z / FastStencilPDE._coef_norm[key]
         return np.exp(0.5 * np.log(contrast) * z)
 
     def _build_var_stencil(self):
@@ -164,6 +187,21 @@ class FastStencilPDE:
             _LIB.residual(_ptr(uc), _ptr(fc), _ptr(r), B, self.N, self.ax, self.ay, self.b1, self.b2)
             return r
         return f - self.apply_A(u)
+
+    def residual_norm(self, u, f):
+        """Residual r = f - A u and its L2 norm (shape (B,)), computed in one pass by the
+        compiled kernel for a single instance (the stopping test every method pays)."""
+        single = (u.ndim == 2) or (u.ndim == 3 and u.shape[0] == 1)
+        if COMPILED and single and u.dtype == np.float64 and f.shape == u.shape:
+            uc, fc = _c64(u), _c64(f)
+            r = np.empty_like(uc)
+            if self.equation == "VarCoeff":
+                acc = _LIB.residual_norm2_var(_ptr(uc), _ptr(fc), _ptr(r), 1, self.N, *[_ptr(s) for s in self._stencil])
+            else:
+                acc = _LIB.residual_norm2(_ptr(uc), _ptr(fc), _ptr(r), 1, self.N, self.ax, self.ay, self.b1, self.b2)
+            return r, np.array([acc ** 0.5]) if u.ndim == 3 else np.array(acc ** 0.5)
+        r = self.residual(u, f)
+        return r, l2(r)
 
     # -- FFT direct solve (exact solution of the discrete system) -------------
     def _build_symbol(self):
@@ -268,7 +306,7 @@ class FastJacobi:
         return u + (self.weight / self.pde.diag) * r
 
 
-def _c_sweep(pde, u, f, r, omega, symmetric=False):
+def _c_sweep(pde, u, f, r, omega, symmetric=False, forward=1):
     """In-place SOR / symmetric-SOR sweep in C on a copy of u (needs f; if only r is
     available, f is reconstructed as A u + r)."""
     uc = _c64(u).copy()
@@ -281,12 +319,12 @@ def _c_sweep(pde, u, f, r, omega, symmetric=False):
         if symmetric:
             _LIB.ssor_sweep_var(_ptr(uc), _ptr(fc), B, pde.N, *st, omega)
         else:
-            _LIB.sor_sweep_var(_ptr(uc), _ptr(fc), B, pde.N, *st, omega, 1)
+            _LIB.sor_sweep_var(_ptr(uc), _ptr(fc), B, pde.N, *st, omega, forward)
         return uc
     if symmetric:
         _LIB.ssor_sweep(_ptr(uc), _ptr(fc), B, pde.N, pde.ax, pde.ay, pde.b1, pde.b2, omega)
     else:
-        _LIB.sor_sweep(_ptr(uc), _ptr(fc), B, pde.N, pde.ax, pde.ay, pde.b1, pde.b2, omega, 1)
+        _LIB.sor_sweep(_ptr(uc), _ptr(fc), B, pde.N, pde.ax, pde.ay, pde.b1, pde.b2, omega, forward)
     return uc
 
 
@@ -413,24 +451,29 @@ class GRF2D:
         self.mask = (np.abs(self.kx) <= self.k_max) & (np.abs(self.ky) <= self.k_max)
 
     def sample(self, n, gamma=None, return_params=False):
+        """n fields. Every field is drawn sequentially (its (alpha, beta, gamma), then its noise), so
+        the first k fields of sample(n) are exactly sample(k) for the same generator state. The
+        noise is real white noise filtered in Fourier space, which gives exactly the stated
+        covariance with the Hermitian symmetry of a real field (an earlier version drew
+        independent complex coefficients on the half-spectrum, which halved the variance of the
+        modes on the k_y = 0 and k_y = N/2 lines)."""
         rng = self.rng
-        alpha = np.exp(rng.uniform(np.log(self.alpha_min), np.log(self.alpha_max), n))
-        beta = np.exp(rng.uniform(np.log(self.beta_min), np.log(self.beta_max), n))
-        if gamma is None:
-            gamma = rng.choice(self.gamma_list, size=n)
-        else:
-            gamma = np.full(n, gamma, dtype=np.float64)
-        psd = (np.sqrt(alpha)[:, None, None]
-               * (4 * np.pi ** 2 * (self.kx ** 2 + self.ky ** 2)[None] + beta[:, None, None])
-               ** (-gamma[:, None, None] / 2))
-        z = rng.standard_normal((n,) + self.kx.shape) + 1j * rng.standard_normal((n,) + self.kx.shape)
-        z[:, 0, 0] = 0.0
-        z = z * self.mask[None]
-        field = np.fft.irfft2(psd * z, s=(self.N, self.N), norm="ortho")
-        field = field - field.mean(axis=(-2, -1), keepdims=True)
+        N = self.N
+        fields = np.empty((n, N, N))
+        al = np.empty(n); be = np.empty(n); ga = np.empty(n)
+        for i in range(n):
+            al[i] = np.exp(rng.uniform(np.log(self.alpha_min), np.log(self.alpha_max)))
+            be[i] = np.exp(rng.uniform(np.log(self.beta_min), np.log(self.beta_max)))
+            ga[i] = rng.choice(self.gamma_list) if gamma is None else float(gamma)
+            psd = np.sqrt(al[i]) * (4 * np.pi ** 2 * (self.kx ** 2 + self.ky ** 2) + be[i]) ** (-ga[i] / 2)
+            w = np.fft.rfft2(rng.standard_normal((N, N)), norm="ortho")   # unit variance per mode, Hermitian
+            w[0, 0] = 0.0
+            w = w * self.mask
+            field = np.fft.irfft2(psd * w, s=(N, N), norm="ortho")
+            fields[i] = field - field.mean()
         if return_params:
-            return field, {"alpha": alpha, "beta": beta, "gamma": gamma}
-        return field
+            return fields, {"alpha": al, "beta": be, "gamma": ga}
+        return fields
 
 
 # ---------------------------------------------------------------------------

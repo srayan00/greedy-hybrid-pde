@@ -12,6 +12,7 @@ and whether g(S^T) <= bound.  g(S) = ||e_S||_2^2 (mean-free), macro-actions as i
 writes results/theorem_<eq>_<N>.json
 """
 import argparse, itertools, json, time
+import math
 import numpy as np, torch
 from fast_pde import FastStencilPDE, GRF2D, demean
 from corrector import DeepONetCorrector
@@ -84,10 +85,16 @@ for grp, T in groups:
                     g[S2] = gg(ui - states[S2])
         leaves = [S for S in g if len(S) == T]
         O = min(leaves, key=lambda S: g[S])
-        # greedy (Alg. 1: argmin of the error after one macro-action)
+        # greedy: the deployed cost-aware rule (argmin of the per-macro-action score, which is the
+        # plain error of Alg. 1 for every action not dearer than the unit, exponent 1, and the
+        # per-unit-cost error for dearer actions); also recorded: whether it differs from plain Alg. 1
         S_g = ()
+        S_plain = ()
         for t in range(T):
-            S_g = S_g + (min(range(K), key=lambda j: g[S_g + (j,)]),)
+            e0 = math.sqrt(g[S_g])
+            sc = env.macro_score(e0, [math.sqrt(g[S_g + (j,)]) for j in range(K)])
+            S_g = S_g + (int(np.argmin(sc)),)
+            S_plain = S_plain + (min(range(K), key=lambda j: g[S_plain + (j,)]),)
         greedy_prefixes = [S_g[:t] for t in range(T)]
 
         def g_concat(S, seq):
@@ -96,22 +103,31 @@ for grp, T in groups:
                 u = apply_macro(env, j, u, fi)
             return gg(ui - u)
 
-        def ratio(S):
+        viol = {"greedy": 0, "all": 0}      # prefixes with lhs > 0 and rhs <= 0: the inequality fails for every alpha
+
+        def ratio(S, which):
             lhs = g[S] - g_concat(S, O)
             rhs = sum(g[S] - g_concat(S, (Oi,)) for Oi in O)
-            return (lhs / rhs) if rhs > 0 else None
+            if rhs > 0:
+                return lhs / rhs
+            if lhs > 1e-12 * max(g[S], floor):
+                viol[which] += 1
+            return None                      # lhs <= 0 with rhs <= 0: holds trivially
         mu = max(g_concat(S, O) / g[O] for S in greedy_prefixes)
-        a_g = [ratio(S) for S in greedy_prefixes]
+        a_g = [ratio(S, "greedy") for S in greedy_prefixes]
         a_g = [x for x in a_g if x is not None]
         alpha_g = max(max(a_g), 1.0) if a_g else 1.0
-        a_all = [ratio(S) for S in g if len(S) <= T - 1]
+        a_all = [ratio(S, "all") for S in g if len(S) <= T - 1]
         a_all = [x for x in a_all if x is not None]
         alpha_all = max(max(a_all), 1.0) if a_all else 1.0
         phi = (1 - 1 / (alpha_g * T)) ** T
         bound = mu * (1 - phi) * g[O] + phi * g[()]
         rows.append({"T": T, "K": K, "O": list(O), "greedy": list(S_g), "g0": g[()], "gO": g[O], "gS": g[S_g], "floor": floor,
                      "mu": mu, "alpha_greedy": alpha_g, "alpha_all": alpha_all, "phi": phi, "bound": bound,
-                     "holds": bool(g[S_g] <= bound * (1 + 1e-9)), "greedy_over_opt": g[S_g] / g[O]})
+                     "holds": bool(g[S_g] <= bound * (1 + 1e-9)), "greedy_over_opt": g[S_g] / g[O],
+                     "greedy_plain": list(S_plain), "deployed_eq_plain": bool(S_plain == S_g),
+                     "opt_at_floor": bool(g[O] <= floor * (1 + 1e-9)), "viol_greedy": viol["greedy"], "viol_all": viol["all"],
+                     "macro_exp": list(env.macro_exp)})
     key = "+".join(grp)
     out["groups"][key] = {"ops": env.ops, "m": env.m, "T": T, "rows": rows}
     print(f"[{args.equation} N={N}] {key:35s} K={K} T={T}: mu max {max(r['mu'] for r in rows):.3f} | alpha greedy max {max(r['alpha_greedy'] for r in rows):.3f} | alpha all max {max(r['alpha_all'] for r in rows):.3f} "

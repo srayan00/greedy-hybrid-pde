@@ -59,10 +59,11 @@ class Env:
         """Cost-equalised macro-actions. The unit of cost is one corrector call
         (unit="no"; "max" uses the most expensive operation). Operation j is
         applied m_j = max(1, round(u / c_j)) times per decision, which
-        equalises costs up to rounding for operations cheaper than the unit;
-        an operation dearer than the unit (e.g. a multigrid cycle) is applied
-        once and its error reduction is compared per unit of cost, i.e. the
-        oracle compares ||e_j||^(u / (m_j c_j)) (exponent 1 when costs match)."""
+        equalises costs up to rounding for operations not dearer than the unit,
+        and those macro-actions are compared by their plain error (Alg. 1,
+        exponent 1); an operation dearer than the unit (e.g. a multigrid cycle
+        on a large grid) is applied once and its error reduction is compared
+        per unit of cost, ||e_j||^(u / c_j)."""
         c = np.array([self.costs[o] for o in self.ops])
         assert np.all(c > 0)
         if unit == "max":
@@ -74,7 +75,10 @@ class Env:
         self.m = [max(1, int(round(cu / cj))) for cj in c]
         self.unit_cost = cu
         mc = np.array(self.m) * c
-        self.macro_exp = (cu / mc).tolist()          # per-macro-action exponent
+        # per-macro-action exponent: exactly 1 for every action not dearer than the unit (its
+        # macro-action is cost-equalised up to rounding and Alg. 1 applies verbatim); u / c_j
+        # only for an action dearer than the unit (m_j = 1), which is compared per unit of cost
+        self.macro_exp = [1.0 if cj <= cu * (1 + 1e-9) else float(cu / cj) for cj in c]
         # exponent used by the per-iteration (rate) form of the rule
         self.rate_exp = (cu / c).tolist()
 
@@ -102,15 +106,16 @@ class Env:
 
 
 def measure_costs(env: Env, f, reps=60, warm=10, blocks=7):
-    """Per-iteration cost (residual + update) of every operation, measured in
-    isolation on one instance, single thread. Each operation is timed in
-    `blocks` separate blocks of `reps` repetitions (interleaved across
-    operations to balance drift) and the minimum over blocks of the block
-    median is used, which is robust to transient slow-downs of the machine.
-    Returns dict op -> seconds and the residual cost."""
+    """Live per-iteration cost of every operation: the exact body of one iteration of the
+    timed replay (the update given the current residual, then the residual of the new iterate
+    and its norm, i.e. the stopping test), measured in isolation on one instance, single
+    thread, in `blocks` interleaved blocks of `reps` repetitions. The cost is the median over
+    blocks of the block median (the minimum and the spread across blocks are recorded as
+    well). Returns dict op -> seconds, plus "_residual" (residual + norm alone)."""
     u = np.zeros_like(f[:1])
     ff = f[:1]
-    r = env.pde.residual(u, ff)
+    pde = env.pde
+    r, _ = pde.residual_norm(u, ff)
 
     def block(fn):
         for _ in range(warm):
@@ -122,17 +127,20 @@ def measure_costs(env: Env, f, reps=60, warm=10, blocks=7):
             ts[k] = time.perf_counter_ns() - t0
         return float(np.median(ts)) * 1e-9
 
-    fns = {"_residual": (lambda: env.pde.residual(u, ff))}
+    def body(j):
+        u2 = env.apply_op(j, u, ff, r)
+        r2, n2 = pde.residual_norm(u2, ff)
+        return float(n2[0])
+
+    fns = {"_residual": (lambda: float(pde.residual_norm(u, ff)[1][0]))}
     for j, op in enumerate(env.ops):
-        fns[op] = (lambda j=j: env.apply_op(j, u, ff, r))
+        fns[op] = (lambda j=j: body(j))
     meds = {k: [] for k in fns}
     for b in range(blocks):
         for k, fn in fns.items():
             meds[k].append(block(fn))
-    out = {k: float(min(v)) for k, v in meds.items()}
-    t_res = out["_residual"]
-    for op in env.ops:
-        out[op] = out[op] + t_res
+    out = {k: float(np.median(v)) for k, v in meds.items()}
+    out["_min"] = {k: float(min(v)) for k, v in meds.items()}
     out["_spread"] = {k: float(max(v) / min(v)) for k, v in meds.items()}
     return out
 
@@ -232,13 +240,15 @@ def run_untimed(env: Env, f, u_truth, policy, max_ops=100000, err_stop=1e-9,
     if router is not None and policy in ("router", "router_rate"):
         router.reset()
 
-    def record(r):
-        rel_res.append(float(l2(r)[0]) / fn)
+    def record(rn):
+        rel_res.append(float(rn) / fn)
         rel_err.append(float(l2(demean(u - u_truth))[0]) / un)
 
-    r = pde.residual(u, f)
-    record(r)
+    r, rn = pde.residual_norm(u, f)
+    record(rn[0])
     it = 0
+    decay_th = float(policy[5:]) if policy.startswith("decay") else None
+    dec_prev = None                      # (log10 rel_res, n_ops, action) of the last macro-action
     while it < max_ops and rel_err[-1] > err_stop and rel_res[-1] > res_floor:
         # ---------------- choose a (macro-)action
         if policy.startswith("classical"):
@@ -250,6 +260,18 @@ def run_untimed(env: Env, f, u_truth, policy, max_ops=100000, err_stop=1e-9,
             j, m = (env.no_index if it == 0 else 0), 1
         elif policy.startswith("phints"):          # phase-shifted HINTS: first call at t = 0
             j, m = (env.no_index if it % int(policy[6:]) == 0 else 0), 1
+        elif decay_th is not None:
+            # residual-decay rule (deterministic control at the router's granularity): the
+            # corrector at t = 0, then the solver's macro-action; call the corrector again
+            # whenever the per-iteration residual contraction over the last solver macro-action
+            # was worse than the threshold (the residual norm is free: the stopping test computes it)
+            if dec_prev is None:
+                j = env.no_index
+            else:
+                lr_prev, n_prev, a_prev = dec_prev
+                rate = 10.0 ** ((math.log10(max(rel_res[-1], 1e-300)) - lr_prev) / max(n_prev, 1))
+                j = env.no_index if (a_prev != env.no_index and rate > decay_th) else 0
+            m = env.m[j]
         elif policy == "greedy":
             errs = [float(l2(demean(env.apply_op(k, u, f, r) - u_truth))[0]) for k in range(env.K)]
             j, m = int(np.argmin(errs)), 1
@@ -286,12 +308,14 @@ def run_untimed(env: Env, f, u_truth, policy, max_ops=100000, err_stop=1e-9,
             u = env.apply_op(j, u, f, r)
             ops.append(j)
             it += 1
-            r = pde.residual(u, f)
-            record(r)
+            r, rn = pde.residual_norm(u, f)
+            record(rn[0])
             if rel_err[-1] <= err_stop or rel_res[-1] <= res_floor or it >= max_ops:
                 break
         if fs is not None:
             fs.update(j, i + 1)
+        if decay_th is not None:
+            dec_prev = (math.log10(max(rel_res[-1 - (i + 1)], 1e-300)), i + 1, j)
     ops = np.asarray(ops, dtype=np.int16)
     return {"rel_err": np.asarray(rel_err), "rel_res": np.asarray(rel_res), "op": ops,
             "epochs": epochs, "n_no": int((ops == env.no_index).sum()) if env.no_index is not None else 0,
@@ -303,34 +327,48 @@ def run_untimed(env: Env, f, u_truth, policy, max_ops=100000, err_stop=1e-9,
 # deployed method would pay
 # ---------------------------------------------------------------------------
 
-def run_timed(env: Env, f, trace, policy, router=None):
+MACRO_POLICIES = ("oracle", "router")
+
+
+def is_macro_policy(policy):
+    return policy in MACRO_POLICIES or policy.startswith("decay")
+
+
+def run_timed(env: Env, f, trace, policy, router=None, return_decision_time=False):
     """Replays trace['epochs'] (macro-actions) and returns cumulative charged
     time after every iteration (n_ops+1 entries, t[0] = 0 + first residual).
     For policy == 'router' the router is executed live (its decisions are
-    verified against the trace) so its feature and inference costs are paid."""
+    verified against the trace) so its feature and inference costs are paid;
+    the cumulative decision time (features + inference + state update) is
+    returned separately when return_decision_time is set."""
     pde = env.pde
     u = np.zeros_like(f)
     fn = max(float(l2(f)[0]), 1e-300)
     n_ops = len(trace["op"])
     t = np.empty(n_ops + 1)
+    tdec = np.zeros(n_ops + 1)
     fs = FeatureState(env.K, env.no_index) if policy in ("router", "router_rate") else None
     if fs is not None:
         router.reset()
     epochs = trace["epochs"]
     t_cum = 0
+    d_cum = 0
     it = 0
     t0 = time.perf_counter_ns()
-    r = pde.residual(u, f)
-    rr = float(l2(r)[0]) / fn          # stopping test (charged, all methods)
+    r, rn = pde.residual_norm(u, f)
+    rr = float(rn[0]) / fn             # stopping test (charged, all methods)
     t_cum += time.perf_counter_ns() - t0
     t[0] = t_cum * 1e-9
+    macro = is_macro_policy(policy)
     for (start, j) in epochs:
-        m_planned = env.m[j] if policy in ("oracle", "router") else 1
+        m_planned = env.m[j] if macro else 1
         if fs is not None:
             t0 = time.perf_counter_ns()
             x = fs.features(rr)
             jj = router.decide(x)
-            t_cum += time.perf_counter_ns() - t0
+            dt = time.perf_counter_ns() - t0
+            t_cum += dt
+            d_cum += dt
             if jj != j:
                 raise RuntimeError(f"router replay mismatch at op {it}: {jj} vs {j}")
         n_exec = 0
@@ -339,17 +377,24 @@ def run_timed(env: Env, f, trace, policy, router=None):
                 break
             t0 = time.perf_counter_ns()
             u = env.apply_op(j, u, f, r)      # r is the residual of the current iterate
-            r = pde.residual(u, f)           # residual of the new iterate (stopping test)
-            rr = float(l2(r)[0]) / fn
+            r, rn = pde.residual_norm(u, f)  # residual of the new iterate and its norm (stopping test)
+            rr = float(rn[0]) / fn
             t_cum += time.perf_counter_ns() - t0
             it += 1
             n_exec += 1
             t[it] = t_cum * 1e-9
+            tdec[it] = d_cum * 1e-9
         if fs is not None:
             t0 = time.perf_counter_ns()
             fs.update(j, n_exec)
-            t_cum += time.perf_counter_ns() - t0
+            dt = time.perf_counter_ns() - t0
+            t_cum += dt
+            d_cum += dt
+            t[it] = t_cum * 1e-9
+            tdec[it] = d_cum * 1e-9
     assert it == n_ops, (it, n_ops)
+    if return_decision_time:
+        return t, u, tdec
     return t, u
 
 

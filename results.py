@@ -507,7 +507,7 @@ if __name__ == "__main__":
     constant_router=  ConstantRouter(2, 0, device = device)
     model_constant = HybridSolver(N=ml_arguments["N"], dim=dim, in_channels=in_channels, boundary=boundary, equation=pde,
                                     suite_solver=list_of_solvers+[ml_model], router=constant_router, tol=1e-7, max_iters=arguments["max_iters"], threshold=0.1).to(device)
-    loss = ApproxGreedyRouterLoss(centered=(equation == "Poisson" and boundary == "Periodic"))
+    loss = ApproxGreedyRouterLoss(centered=centered)
     errors_constant, loss_constant, residuals_constant, mode_one_constant, mode_five_constant, mode_ten_constant, solver_decisions_constant, pred_constant, _ = test_model(model_constant, test_loader, in_channels, dim, loss, centered = centered, loss_t = False)
 
     if "jacobi" in numerical_solvers[0] or "gs" in numerical_solvers[0] or "sor" in numerical_solvers[0] or "ssor" in numerical_solvers[0]:
@@ -518,7 +518,7 @@ if __name__ == "__main__":
     model_hints = HybridSolver(N=ml_arguments["N"], dim=dim, in_channels=in_channels, boundary=boundary, equation=pde,
                                 suite_solver=list_of_solvers+[ml_model], router=hints, tol=1e-7, max_iters=arguments["max_iters"], threshold=0.1).to(device)
 
-    errors_hints, loss_hints, residuals_hints , mode_one_hints, mode_five_hints, mode_ten_hints, solver_decisions_hints, pred_hints, output_hints = test_model(model_hints, test_loader, in_channels, dim, loss, equation == "Poisson")
+    errors_hints, loss_hints, residuals_hints , mode_one_hints, mode_five_hints, mode_ten_hints, solver_decisions_hints, pred_hints, output_hints = test_model(model_hints, test_loader, in_channels, dim, loss, centered = centered)  # same centering as every other method (an earlier version passed equation == "Poisson", which mean-subtracted HINTS' Dirichlet predictions)
 
     errors_true_greedy, best_solvers = true_greedy_model(model_hints, test_loader, in_channels, dim, loss, centered = centered, loss_t = False, max_iters = arguments["max_iters"])
 

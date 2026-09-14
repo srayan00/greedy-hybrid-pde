@@ -50,6 +50,26 @@ void residual(const double *u, const double *f, double *r, int B, int N, double 
     }
 }
 
+
+/* residual r = f - A u and its squared L2 norm, in one pass (the stopping test of every method) */
+double residual_norm2(const double *u, const double *f, double *r, int B, int N, double ax, double ay, double b1, double b2) {
+    St s = coeffs(N, ax, ay, b1, b2); double acc = 0.0;
+    for (int b = 0; b < B; b++) {
+        const double *U = u + (size_t)b * N * N, *F = f + (size_t)b * N * N; double *R = r + (size_t)b * N * N;
+        for (int i = 0; i < N; i++) {
+            ROW_SETUP(U, i)
+            const double *ru = U + (size_t)i * N, *fr = F + (size_t)i * N; double *o = R + (size_t)i * N;
+            double v;
+            v = fr[0] - (s.diag * ru[0] + s.cw * rm[0] + s.ce * rp[0] + s.cs * ru[N - 1] + s.cn * ru[1]); o[0] = v; acc += v * v;
+            for (int j = 1; j < N - 1; j++) {
+                v = fr[j] - (s.diag * ru[j] + s.cw * rm[j] + s.ce * rp[j] + s.cs * ru[j - 1] + s.cn * ru[j + 1]); o[j] = v; acc += v * v;
+            }
+            v = fr[N - 1] - (s.diag * ru[N - 1] + s.cw * rm[N - 1] + s.ce * rp[N - 1] + s.cs * ru[N - 2] + s.cn * ru[0]); o[N - 1] = v; acc += v * v;
+        }
+    }
+    return acc;
+}
+
 /* fused (damped) Jacobi: out = u + w/diag * (f - A u) */
 void jacobi(const double *u, const double *f, double *out, int B, int N, double ax, double ay, double b1, double b2, double w) {
     St s = coeffs(N, ax, ay, b1, b2); double sc = w * s.inv;
@@ -163,6 +183,21 @@ void residual_var(const double *u, const double *f, double *res, int B, int N, c
             o[N - 1] = fr[N - 1] - VAU(N - 1, N - 2, 0);
         }
     }
+}
+
+double residual_norm2_var(const double *u, const double *f, double *res, int B, int N, const double *cw, const double *ce, const double *cs, const double *cn, const double *diag) {
+    double acc = 0.0;
+    for (int b = 0; b < B; b++) {
+        const double *U = u + (size_t)b * N * N, *F = f + (size_t)b * N * N; double *R = res + (size_t)b * N * N;
+        for (int i = 0; i < N; i++) {
+            VROW(i) const double *r = U + (size_t)i * N, *fr = F + (size_t)i * N; double *o = R + (size_t)i * N;
+            double v;
+            v = fr[0] - VAU(0, N - 1, 1); o[0] = v; acc += v * v;
+            for (int j = 1; j < N - 1; j++) { v = fr[j] - VAU(j, j - 1, j + 1); o[j] = v; acc += v * v; }
+            v = fr[N - 1] - VAU(N - 1, N - 2, 0); o[N - 1] = v; acc += v * v;
+        }
+    }
+    return acc;
 }
 
 void jacobi_var(const double *u, const double *f, double *out, int B, int N, const double *cw, const double *ce, const double *cs, const double *cn, const double *diag, double w) {

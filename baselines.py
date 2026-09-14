@@ -25,19 +25,23 @@ import numpy as np
 import scipy.sparse.linalg as spla
 
 from fast_pde import (FastStencilPDE, FastGaussSeidel, FastSSOR, FastMultigrid, FFTDirect,
-                      demean, l2, restrict_fw, prolong_bilinear)
+                      demean, l2, restrict_fw, prolong_bilinear, COMPILED, _c_sweep)
 
 
 class FastGaussSeidelBackward:
     """u <- u + (D + U)^{-1} (f - A u): backward lexicographic sweep."""
 
     def __init__(self, pde):
-        import scipy.sparse as sp
         self.pde = pde
-        A = pde.sparse_A()
-        self.lu = spla.splu(sp.triu(A).tocsc(), permc_spec="NATURAL")
+        self.lu = None
+        if not COMPILED:
+            import scipy.sparse as sp
+            A = pde.sparse_A()
+            self.lu = spla.splu(sp.triu(A).tocsc(), permc_spec="NATURAL")
 
     def step(self, u, f, r=None):
+        if COMPILED and u.dtype == np.float64 and u.ndim in (2, 3):
+            return _c_sweep(self.pde, u, f, r, 1.0, symmetric=False, forward=0)   # compiled backward GS sweep
         if r is None:
             r = self.pde.residual(u, f)
         B = r.shape[0] if r.ndim == 3 else 1
@@ -166,3 +170,127 @@ def time_krylov(pde, f, method, n_iter, reps=1):
         fn(A, f.ravel(), M=M, rtol=1e-300, atol=0.0, maxiter=n_iter, **kw)
         ts.append((time.perf_counter_ns() - t0) * 1e-9)
     return float(np.median(ts))
+
+
+# ---------------------------------------------------------------------------
+# Baselines as replayable methods for bench.py: every baseline is timed inside the
+# same per-instance replay loop as the hybrid policies (same instance, same warm-up,
+# same random order, same number of replays), so that every comparison is within one
+# session. untimed(f, u_truth) returns a trace with the true relative error after every
+# unit of work; timed(f, trace) returns the cumulative charged time after every unit.
+# ---------------------------------------------------------------------------
+
+def default_baselines(equation):
+    if equation == "VarCoeff":
+        return ["lu", "mg", "cg", "pcg_ssor", "pcg_mg"]
+    if equation in ("Poisson", "AnisoDiff"):
+        return ["fft", "mg", "cg", "pcg_ssor", "pcg_mg"]
+    return ["fft", "mg", "bicgstab", "bicgstab_mg", "gmres"]
+
+
+class StationaryBaseline:
+    """A stationary method alone (multigrid V(2,2), FFT direct solve, ...) through the
+    hybrid replay machinery (policy 'classical' of a corrector-free environment)."""
+
+    def __init__(self, pde, spec, max_iter=5000, err_stop=1e-9):
+        from hybrid import Env, run_untimed, run_timed
+        self._run_untimed, self._run_timed = run_untimed, run_timed
+        self.env = Env(pde, [spec], None)
+        self.env.costs = {spec: 1.0, "_residual": 0.0}
+        self.env.set_macro_sizes()
+        self.max_iter, self.err_stop = max_iter, err_stop
+        self.name = spec
+
+    def warm(self, f):
+        r0 = self.env.pde.residual(np.zeros_like(f), f)
+        self.env.solvers[0].step(np.zeros_like(f), f, r0)
+
+    def untimed(self, f, u_truth):
+        return self._run_untimed(self.env, f, u_truth, "classical", max_ops=self.max_iter, err_stop=self.err_stop)
+
+    def timed(self, f, trace):
+        return self._run_timed(self.env, f, trace, "classical")[0]
+
+
+class LUBaseline:
+    """Sparse direct solve with a cached LU factorisation (one unit of work = one solve)."""
+
+    def __init__(self, pde):
+        self.pde = pde
+        self.lu = SparseLUDirect(pde)
+        self.factor_s = self.lu.factor_s
+        self.name = "lu"
+
+    def warm(self, f):
+        self.lu.solve(f)
+
+    def untimed(self, f, u_truth):
+        us = self.lu.solve(f)
+        un = max(float(l2(demean(u_truth))[0]), 1e-300)
+        err = float(l2(demean(us - u_truth))[0]) / un
+        return {"rel_err": np.array([1.0, err]), "rel_res": np.array([1.0, 0.0]), "op": np.zeros(1, dtype=np.int16),
+                "epochs": [(0, 0)], "n_no": 0}
+
+    def timed(self, f, trace):
+        t0 = time.perf_counter_ns()
+        self.lu.solve(f)
+        return np.array([0.0, (time.perf_counter_ns() - t0) * 1e-9])
+
+
+class KrylovBaseline:
+    """SciPy Krylov method (optionally preconditioned by compiled SSOR / multigrid); one unit
+    of work is one iteration (one restart cycle of 20 inner iterations for GMRES(20)). The
+    untimed pass records the true error of every iterate through a callback; the timed pass
+    runs exactly the same number of units with a timestamp-only callback (a few hundred
+    nanoseconds per call) and verifies the error of its final iterate."""
+
+    def __init__(self, pde, method, max_iter=5000, err_stop=1e-9):
+        self.pde, self.method = pde, method
+        self.A, self.M, self.fn, self.kw = make_krylov(pde, method)
+        self.max_iter, self.err_stop = max_iter, err_stop
+        self.name = method
+        self.err_end_check = []
+
+    def warm(self, f):
+        x = self.A.matvec(f.ravel())
+        if self.M is not None:
+            self.M.matvec(x)
+
+    def untimed(self, f, u_truth):
+        errs, hit = run_krylov_untimed(self.pde, f, u_truth, self.method, [self.err_stop], max_iter=self.max_iter,
+                                       err_stop=self.err_stop)
+        n = len(errs) - 1
+        return {"rel_err": np.asarray(errs), "rel_res": np.full(len(errs), np.nan), "op": np.zeros(n, dtype=np.int16),
+                "epochs": [(k, 0) for k in range(n)], "n_no": 0, "u_truth": u_truth}
+
+    def timed(self, f, trace):
+        n = len(trace["rel_err"]) - 1
+        t = np.zeros(n + 1)
+        if n == 0:
+            return t
+        ts = []
+        t0 = time.perf_counter_ns()
+        x, info = self.fn(self.A, f.ravel(), M=self.M, rtol=1e-300, atol=0.0, maxiter=n,
+                          callback=lambda xk: ts.append(time.perf_counter_ns()), **self.kw)
+        t_end = time.perf_counter_ns()
+        k = min(len(ts), n)
+        if k:
+            t[1:k + 1] = (np.array(ts[:k]) - t0) * 1e-9
+        if k < n:
+            t[k + 1:] = (t_end - t0) * 1e-9
+        # cross-check: the timed run's final iterate reaches the error the untimed pass recorded
+        N = self.pde.N
+        ut = trace.get("u_truth")
+        if ut is not None:
+            un = max(float(l2(demean(ut))[0]), 1e-300)
+            e_end = float(l2(demean(x.reshape(1, N, N) - ut))[0]) / un
+            self.err_end_check.append((e_end, float(trace["rel_err"][-1]), int(info)))
+        return t
+
+
+def make_baseline(pde, method, max_iter=5000, err_stop=1e-9):
+    if method in KRYLOV:
+        return KrylovBaseline(pde, method, max_iter=max_iter, err_stop=err_stop)
+    if method == "lu":
+        return LUBaseline(pde)
+    return StationaryBaseline(pde, method, max_iter=max_iter, err_stop=err_stop)

@@ -13,3 +13,6 @@ args/hierarchical_grf.json
 batch/logs/
 results_smoke/
 .DS_Store
+results_conf1/
+checkpoints_old/
+review_artifacts/

@@ -22,7 +22,9 @@ import torch
 
 from fast_pde import FastStencilPDE, GRF2D, demean, l2
 from corrector import DeepONetCorrector
-from hybrid import Env, FeatureState, measure_costs, run_untimed, run_timed, time_to_tol, work_units
+from hybrid import Env, FeatureState, measure_costs, run_untimed, run_timed, time_to_tol, work_units, is_macro_policy
+from baselines import make_baseline, default_baselines
+from fast_pde import COMPILED
 from router import Router, fit_router
 
 parser = argparse.ArgumentParser()
@@ -33,7 +35,10 @@ parser.add_argument("--ensemble", action="store_true")
 parser.add_argument("--n_test", type=int, default=64)
 parser.add_argument("--seed", type=int, default=72)
 parser.add_argument("--b_vel", type=float, default=20.0)
-parser.add_argument("--policies", default="classical,hints1,hints2,hints5,hints10,hints25,hints50,phints5,phints10,phints25,phints50,oneshot,greedy,oracle,router")
+parser.add_argument("--policies", default="classical,hints2,hints5,hints10,hints15,hints25,hints50,phints5,phints10,phints15,phints25,phints50,oneshot,decay0.9,decay0.95,decay0.98,greedy,oracle,router")
+parser.add_argument("--baselines", default="auto", help="classical methods without corrector timed in the same replay loop (comma list, 'auto' = per-equation default, 'none')")
+parser.add_argument("--max_iter_baseline", type=int, default=5000, help="iteration cap of the classical baselines (units of work)")
+parser.add_argument("--drift_tol", type=float, default=0.10, help="drift guard: re-time a reference operation before every instance and wait while it deviates by more than this fraction")
 parser.add_argument("--tols", default="1e-2,1e-3,h2,1e-5,1e-6,1e-8")
 parser.add_argument("--T", type=int, default=300, help="horizon for AUC / final error")
 parser.add_argument("--max_ops", type=int, default=60000)
@@ -79,6 +84,35 @@ f_test, params = grf.sample(args.n_test, return_params=True)
 u_truth = pde.solve_direct(f_test)
 _ = corrector.correct(f_test[:1])  # warm-up
 
+base_names = [] if args.baselines == "none" else (default_baselines(args.equation) if args.baselines == "auto" else args.baselines.split(","))
+if args.ensemble or args.train_only or args.measure_only:
+    base_names = []
+baselines = {m: make_baseline(pde, m, max_iter=args.max_iter_baseline, err_stop=args.err_stop) for m in base_names}
+
+
+def ref_time(n=5):
+    """Reference operation for the drift guard: one corrector call on the first test residual."""
+    r0 = pde.residual(np.zeros_like(f_test[:1]), f_test[:1])
+    ts = []
+    for _ in range(n):
+        t0 = time.perf_counter_ns()
+        corrector.correct(r0)
+        ts.append(time.perf_counter_ns() - t0)
+    return float(np.median(ts))
+
+
+def drift_guard(ref0, tol, max_wait_s=600):
+    """Waits (in 5 s steps) while the reference operation is more than `tol` slower or faster than
+    at the start of the session; returns (ratio, retries)."""
+    retries = 0
+    while True:
+        ratio = ref_time() / ref0
+        if abs(ratio - 1.0) <= tol or retries * 5 >= max_wait_s:
+            return ratio, retries
+        retries += 1
+        time.sleep(5)
+
+
 groups = [specs] if args.ensemble else [[s] for s in specs]
 def provenance(ckp_path):
     """git commit / dirty state, package versions, checkpoint hash, time and run id."""
@@ -89,14 +123,18 @@ def provenance(ckp_path):
         except Exception:
             return None
     ck = hashlib.sha256(open(ckp_path, "rb").read()).hexdigest()[:16] if os.path.exists(ckp_path) else None
+    lib = os.path.join(os.path.dirname(os.path.abspath(__file__)), "libstencil.so")
+    lk = hashlib.sha256(open(lib, "rb").read()).hexdigest()[:16] if os.path.exists(lib) else None
     return {"git_commit": sh(["git", "rev-parse", "HEAD"]), "git_dirty": bool(sh(["git", "status", "--porcelain"])),
+            "compiled_kernels": bool(COMPILED), "libstencil_sha256": lk,
             "numpy": np.__version__, "scipy": scipy.__version__, "torch": torch.__version__, "python": platform.python_version(),
             "platform": platform.platform(), "corrector_sha256": ck, "started": datetime.datetime.now().isoformat(timespec="seconds"),
             "run_id": uuid.uuid4().hex}
 
 
 results = {"args": vars(args), "tols": tols, "h2": h2, "groups": {}, "provenance": provenance(ckp),
-           "test_params": {k: v.tolist() for k, v in params.items()}}
+           "test_params": {k: v.tolist() for k, v in params.items()}, "baselines": base_names,
+           "lu_factorization_s": (baselines["lu"].factor_s if "lu" in baselines else None)}
 
 for group in groups:
     gkey = "+".join(group)
@@ -127,7 +165,7 @@ for group in groups:
         json.dump(cached, open(cost_path, "w"), indent=1)
     env.costs = costs
     env.set_macro_sizes(unit="no" if args.unit_frac == 1.0 else args.unit_frac * costs["no"])
-    print("  per-iteration costs: " + ", ".join(f"{k} {v*1e6:.0f}us" for k, v in costs.items() if k != "_spread")
+    print("  per-iteration costs: " + ", ".join(f"{k} {v*1e6:.0f}us" for k, v in costs.items() if not isinstance(v, dict))
           + f" | spread {costs.get('_spread')} | macro sizes {dict(zip(env.ops, env.m))}", flush=True)
     if args.measure_only:
         continue
@@ -171,8 +209,12 @@ for group in groups:
 
     if args.train_only:
         continue
-    gres = {"costs": costs, "m": env.m, "ops": env.ops, "router_decision_cost": t_dec,
-            "policies": {p: [] for p in pol_list}, "curves": {p: [] for p in pol_list}}
+    import hashlib as _hl
+    gres = {"costs": costs, "m": env.m, "ops": env.ops, "macro_exp": env.macro_exp, "router_decision_cost": t_dec,
+            "router_sha256": (_hl.sha256(open(rpath, "rb").read()).hexdigest()[:16] if os.path.exists(rpath) else None),
+            "policies": {p: [] for p in pol_list}, "curves": {p: [] for p in pol_list}, "drift": []}
+    for bn in base_names:
+        gres["policies"][f"base:{bn}"] = []
     # same-session pairwise baselines for ensembles: every member's own router and oracle
     # (pairwise costs / routers from the pairwise runs), evaluated on the same instances
     runs = {p: (env, router, p, t_dec) for p in pol_list}   # name -> (env, router, base policy, decision cost)
@@ -199,6 +241,9 @@ for group in groups:
             gres.setdefault("pairwise", {})[s_] = {"costs": cached[s_], "m": env_s.m, "ops": env_s.ops,
                                                     "router_decision_cost": runs[f"router@{s_}"][3]}
     names = list(runs.keys())
+    bnames = [f"base:{bn}" for bn in base_names]
+    all_names = names + bnames
+    ref0 = ref_time(15)
     t_start = time.time()
     for i in range(args.n_test):
         f1, u1 = f_test[i:i + 1], u_truth[i:i + 1]
@@ -207,27 +252,63 @@ for group in groups:
             env_, router_, base_, _ = runs[p]
             traces[p] = run_untimed(env_, f1, u1, base_, max_ops=args.max_ops, err_stop=args.err_stop,
                                     router=router_)
-        # timed replays: random policy order per (instance, replay), and an untimed warm-up
-        # (one corrector call and one sweep) before every replay so that every policy starts
-        # from the same cache state (the corrector's matrix is larger than the CPU caches)
+        for bn in base_names:
+            traces[f"base:{bn}"] = baselines[bn].untimed(f1, u1)
+        # drift guard: the reference operation must be within drift_tol of its start-of-session time
+        ratio, retries = drift_guard(ref0, args.drift_tol)
+        try:
+            load1 = float(os.getloadavg()[0])
+        except (AttributeError, OSError):
+            load1 = None
+        gres["drift"].append({"instance": i, "ratio": ratio, "retries": retries, "loadavg": load1, "t_wall": time.time()})
+        # timed replays: random order over policies and baselines per (instance, replay), and an
+        # untimed warm-up (one corrector call and one sweep, or the baseline's own operation)
+        # before every replay so that every method starts from the same cache state (the
+        # corrector's matrix is larger than the CPU caches)
         gc.collect()
         gc.disable()
-        times = {p: [] for p in names}
+        times = {p: [] for p in all_names}
+        outer = {p: [] for p in all_names}
+        dec_times = {p: [] for p in names}
         order_rng = np.random.default_rng(10_000 + i)
         for rep in range(args.timed_reps):
-            for p in order_rng.permutation(names):
+            for p in order_rng.permutation(all_names):
+                if p.startswith("base:"):
+                    bl = baselines[p[5:]]
+                    bl.warm(f1)
+                    t0o = time.perf_counter_ns()
+                    t = bl.timed(f1, traces[p])
+                    outer[p].append((time.perf_counter_ns() - t0o) * 1e-9)
+                    times[p].append(t)
+                    continue
                 env_, router_, base_, _ = runs[p]
                 r0 = env_.pde.residual(np.zeros_like(f1), f1)
                 if env_.corrector is not None:
                     env_.corrector.correct(r0)
                 env_.solvers[0].step(np.zeros_like(f1), f1, r0)
-                t, u_end = run_timed(env_, f1, traces[p], base_, router=router_)
+                t0o = time.perf_counter_ns()
+                t, u_end, tdec = run_timed(env_, f1, traces[p], base_, router=router_, return_decision_time=True)
+                outer[p].append((time.perf_counter_ns() - t0o) * 1e-9)
                 times[p].append(t)
+                dec_times[p].append(tdec)
         gc.enable()
+        for p in bnames:
+            tr = traces[p]
+            t_live = np.median(np.stack(times[p]), axis=0)
+            tt_live = time_to_tol(tr, t_live, tols)
+            e = tr["rel_err"]
+            row = {"n_ops": int(len(tr["op"])), "final_rel_err": float(e[-1]), "t_total_live": float(t_live[-1]),
+                   "t_outer_total": float(np.median(outer[p])), "tol": {}}
+            for tol in tols:
+                tl, il = tt_live[tol]
+                row["tol"][f"{tol:.6g}"] = {"iters": None if not np.isfinite(il) else int(il),
+                                            "t_live": None if not np.isfinite(tl) else float(tl), "t_wu": None}
+            gres["policies"][p].append(row)
         for p in names:
             env, router, base_, t_dec_ = runs[p]
             tr = traces[p]
             t_live = np.median(np.stack(times[p]), axis=0)
+            t_dec_live = np.median(np.stack(dec_times[p]), axis=0)
             t_wu = work_units(env, tr, base_, router_cost=t_dec_)
             tt_live = time_to_tol(tr, t_live, tols)
             tt_wu = time_to_tol(tr, t_wu, tols)
@@ -249,8 +330,11 @@ for group in groups:
                 "auc_T": float(eT.sum()), "err_T": float(eT[-1]),
                 "no_calls_T": int(no_cum[min(args.T, len(no_cum)) - 1]) if len(no_cum) else 0,
                 "t_total_live": float(t_live[-1]), "t_total_wu": float(t_wu[-1]),
+                "t_outer_total": float(np.median(outer[p])), "t_dec_total": float(t_dec_live[-1]),
+                "n_epochs": int(len(tr["epochs"])),
                 "tol": {},
             }
+            starts = np.array([s for (s, _) in tr["epochs"]], dtype=int)
             for tol in tols:
                 tl, il = tt_live[tol]
                 tw, iw = tt_wu[tol]
@@ -258,7 +342,9 @@ for group in groups:
                 row["tol"][f"{tol:.6g}"] = {"iters": None if not np.isfinite(il) else int(il),
                                             "t_live": None if not np.isfinite(tl) else float(tl),
                                             "t_wu": None if not np.isfinite(tw) else float(tw),
-                                            "no_calls": nno}
+                                            "no_calls": nno,
+                                            "t_dec": None if not np.isfinite(il) else float(t_dec_live[int(il)]),
+                                            "n_dec": None if not np.isfinite(il) else int((starts < max(int(il), 1)).sum())}
             gres["policies"][p].append(row)
             if i < args.keep_curves:
                 gres["curves"][p].append({"rel_err": e[:min(len(e), 5000)].tolist(),
@@ -268,8 +354,17 @@ for group in groups:
         if (i + 1) % 8 == 0 or i == args.n_test - 1:
             msg = " | ".join(
                 f"{p}: {np.median([r['tol'][f'{h2:.6g}']['t_live'] or np.inf for r in gres['policies'][p]])*1e3:.1f}ms"
-                for p in names)
+                for p in all_names)
+            dr = gres["drift"][-1]
+            msg += f" | drift {dr['ratio']:.3f} ({dr['retries']} waits)"
             print(f"  [{i+1:3d}/{args.n_test}] median time-to-h2  {msg}   ({time.time()-t_start:.0f}s)", flush=True)
+    for bn, bl in baselines.items():
+        chk = getattr(bl, "err_end_check", None)
+        if chk:
+            worst = max(c[0] / max(c[1], 1e-300) for c in chk)
+            gres[f"krylov_check:{bn}"] = {"n": len(chk), "max_ratio_timed_over_untimed_error": float(worst),
+                                          "n_info_nonzero": int(sum(1 for c in chk if c[2] != 0))}
+            print(f"  krylov cross-check {bn}: timed/untimed final error ratio <= {worst:.3g} on {len(chk)} runs", flush=True)
     results["groups"][gkey] = gres
     out = f"{args.out_dir}/{args.equation}_{args.N}_{'ens_' if args.ensemble else ''}{gkey}{args.tag}.json"
     with open(out, "w") as fh:
