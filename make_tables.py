@@ -202,13 +202,18 @@ def sp_parts(base, ours):
 def rng_macro(out, name, vals):
     vals = [v for v in vals if np.isfinite(v)]
     if not vals:
+        out.append(f"\\newcommand{{\\{name}Min}}{{{PENDING}}}")
+        out.append(f"\\newcommand{{\\{name}Max}}{{{PENDING}}}")
         return
     out.append(f"\\newcommand{{\\{name}Min}}{{{fmt_sp(min(vals))}}}")
     out.append(f"\\newcommand{{\\{name}Max}}{{{fmt_sp(max(vals))}}}")
 
 
+PENDING = "\\textbf{[pending]}"
+
+
 def pending(out, name, msg="results pending"):
-    out.append(f"\\newcommand{{\\{name}}}{{\\begin{{tabular}}{{c}}({msg})\\end{{tabular}}}}")
+    out.append(f"\\newcommand{{\\{name}}}{{\\begin{{tabular}}{{c}}\\textbf{{[{msg}: confirmatory run in progress]}}\\end{{tabular}}}}")
 
 
 # ------------------------------------------------------------------- main
@@ -712,7 +717,7 @@ def main():
             out.append(f"\\newcommand{{\\caNestMaxRatioH}}{{{fmt_sp(max(s[5] for s in nest_stats))}}}")
     else:
         pending(out, "caensnest")
-        for name, val in [("caNestNum", "--"), ("caNestWins", "--"), ("caNestLosses", "--"), ("caNestSpMin", "--"), ("caNestSpMax", "--"), ("caNestMinRatio", "--"), ("caNestMaxRatio", "--"), ("caNestMinRatioH", "--"), ("caNestMaxRatioH", "--")]:
+        for name, val in [("caNestNum", PENDING), ("caNestWins", PENDING), ("caNestLosses", PENDING), ("caNestSpMin", PENDING), ("caNestSpMax", PENDING), ("caNestMinRatio", PENDING), ("caNestMaxRatio", PENDING), ("caNestMinRatioH", PENDING), ("caNestMaxRatioH", PENDING)]:
             out.append(f"\\newcommand{{\\{name}}}{{{val}}}")
 
     # ---- oracle-level screening of all subsets (screen_ensembles.py)
@@ -1048,7 +1053,7 @@ def main():
         out.append(f"\\newcommand{{\\caThmHolds}}{{{sum(r['holds'] for r in allrows)}/{len(allrows)}}}")
     else:
         pending(out, "catheorem")
-        out.append("\\newcommand{\\caThmMuMax}{--}"); out.append("\\newcommand{\\caThmHolds}{--}")
+        out.append(f"\\newcommand{{\\caThmMuMax}}{{{PENDING}}}"); out.append(f"\\newcommand{{\\caThmHolds}}{{{PENDING}}}")
 
     # ================================================================ decision-granularity ablation (unit = corrector / 4)
     Ru4 = load(tag="_u4")
@@ -1128,11 +1133,11 @@ def main():
 
     # ================================================================ placeholders / summary macros
     defined = set(re.findall(r"\\newcommand\{\\(\w+)\}", "\n".join(out)))
-    for name, val in [("caT", "300"), ("caN", "128"), ("caLstmMs", "--"), ("caLstmOverJacobi", "--"), ("caVsMgMin", "--"), ("caVsMgMax", "--"),
-                      ("caVsKrylovMin", "--"), ("caVsKrylovMax", "--"), ("caVsMgEnsMin", "--"), ("caVsMgEnsMax", "--"),
-                      ("caFftRatioMin", "--"), ("caFftRatioMax", "--"),
-                      ("caRhoAMax", "--"), ("caRhoSpecMax", "--"), ("caRhoTwoGsMax", "--"), ("caBandMax", "--"), ("caAlphaHatMax", "--"),
-                      ("caAlphaHatMed", "--"), ("caAlphaHatMaxH", "--"), ("caAlphaBoundMin", "--"), ("caAlphaBoundMax", "--")]:
+    for name, val in [("caT", "300"), ("caN", "128"), ("caLstmMs", PENDING), ("caLstmOverJacobi", PENDING), ("caVsMgMin", PENDING), ("caVsMgMax", PENDING),
+                      ("caVsKrylovMin", PENDING), ("caVsKrylovMax", PENDING), ("caVsMgEnsMin", PENDING), ("caVsMgEnsMax", PENDING),
+                      ("caFftRatioMin", PENDING), ("caFftRatioMax", PENDING),
+                      ("caRhoAMax", PENDING), ("caRhoSpecMax", PENDING), ("caRhoTwoGsMax", PENDING), ("caBandMax", PENDING), ("caAlphaHatMax", PENDING),
+                      ("caAlphaHatMed", PENDING), ("caAlphaHatMaxH", PENDING), ("caAlphaBoundMin", PENDING), ("caAlphaBoundMax", PENDING)]:
         if name not in defined:
             out.append(f"\\newcommand{{\\{name}}}{{{val}}}")
     if ens_ratios:
@@ -1143,16 +1148,16 @@ def main():
         out.append(f"\\newcommand{{\\caNumEns}}{{{len(ens_ratios)}}}")
     else:
         for name in ["caEnsVsPairMin", "caEnsVsPairMax", "caEnsVsSolverMin", "caEnsVsSolverMax", "caNumEns"]:
-            out.append(f"\\newcommand{{\\{name}}}{{--}}")
+            out.append(f"\\newcommand{{\\{name}}}{{{PENDING}}}")
     for SUF in ["", "B", "C"]:
         for name in ["caSpSolver", "caSpHints", "caSpBest", "caSpSolverDeep", "caSpHintsDeep", "caSpBestDeep", "caSpOracleRatio",
                      "caVsMgAll", "caVsMgDeep", "caVsKrylovAll", "caVsKrylovDeep", "caVsMgEnsAll", "caVsMgEnsDeep"]:
             for mm in ["Min", "Max"]:
                 if name + SUF + mm not in defined:
-                    out.append(f"\\newcommand{{\\{name}{SUF}{mm}}}{{--}}")
+                    out.append(f"\\newcommand{{\\{name}{SUF}{mm}}}{{{PENDING}}}")
         for name in ["caNumCells", "caCellsRouterBeatsBest", "caCellsRouterBeatsHints", "caCellsRouterBeatsBestDeep", "caCellsRouterBeatsHintsDeep", "caCellsRouterWithinBest"]:
             if name + SUF not in defined:
-                out.append(f"\\newcommand{{\\{name}{SUF}}}{{--}}")
+                out.append(f"\\newcommand{{\\{name}{SUF}}}{{{PENDING}}}")
 
     os.makedirs("paper", exist_ok=True)
     with open(OUT_TEX, "w") as fh:

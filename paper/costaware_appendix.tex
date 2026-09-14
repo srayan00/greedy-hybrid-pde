@@ -324,7 +324,7 @@ The cost-aware router decides once per macro-action, and the macro-action of a c
 \begin{table}[H]
 \color{red}
 \centering
-\caption{Oracle-level screening of ensembles: for every equation and grid, the fastest single solver and the fastest ensemble of up to three members under the cost-aware oracle (median work-unit time over $16$ test instances), at $\varepsilon = h^2$ and $10^{-8}$; the ratio is the speedup of the ensemble over the best single solver, and the last column is the ratio for $\{\text{Jacobi}, \text{Jacobi (0.67)}\}$.}
+\caption{Oracle-level screening of ensembles (\textbf{[provisional: development-run costs and instances]}): for every equation and grid, the fastest single solver and the fastest ensemble of up to three members under the cost-aware oracle (median work-unit time over $16$ test instances), at $\varepsilon = h^2$ and $10^{-8}$; the ratio is the speedup of the ensemble over the best single solver, and the last column is the ratio for $\{\text{Jacobi}, \text{Jacobi (0.67)}\}$.}
 \resizebox{\textwidth}{!}{\caensscreen}
 \label{tab:ca_ens_screen}
 \end{table}
@@ -405,7 +405,7 @@ Several choices of this study were made after looking at test results: the corre
 \begin{table}[H]
 \color{red}
 \centering
-\caption{Numerical verification of the assumptions of Propositions~\ref{th:weaklyalphasupermodular}--\ref{th:simultaneoussupermodular} for every operation of the study (mean-free subspace). $\|\cdot\|_2$: Euclidean Lipschitz constant of the error propagation map; $\|\cdot\|_A$: Lipschitz constant in the energy norm of the symmetric part of $\mathcal{L}_h$, for one iteration and for the macro-action of $m_j$ iterations; $\rho$: spectral radius; $\sigma_{\min}$: smallest observed contraction (a unit error at the first grid point for the triangular sweeps, the minimum over Fourier modes otherwise; for the corrector, the largest remaining fraction of a band mode); $\|C_j(0)\|$: zero preservation; last column: commutator with the corrector's map on random unit vectors (Proposition~\ref{th:simultaneoussupermodular}). For (damped) Jacobi the constants are exact from the Fourier symbol (the value with the Nyquist modes included; without them undamped Jacobi has $\|G\|_2 = \rho = 0.9994$ at $128^2$).}
+\caption{Numerical verification of the assumptions of Propositions~\ref{th:weaklyalphasupermodular}--\ref{th:simultaneoussupermodular} for every operation of the study (mean-free subspace). \textbf{[Provisional: development run; the confirmatory run regenerates this table with the compiled kernels' macro-action sizes.]} $\|\cdot\|_2$: Euclidean Lipschitz constant of the error propagation map; $\|\cdot\|_A$: Lipschitz constant in the energy norm of the symmetric part of $\mathcal{L}_h$, for one iteration and for the macro-action of $m_j$ iterations; $\rho$: spectral radius; $\sigma_{\min}$: smallest observed contraction (a unit error at the first grid point for the triangular sweeps, the minimum over Fourier modes otherwise; for the corrector, the largest remaining fraction of a band mode); $\|C_j(0)\|$: zero preservation; last column: commutator with the corrector's map on random unit vectors (Proposition~\ref{th:simultaneoussupermodular}). For (damped) Jacobi the constants are exact from the Fourier symbol (the value with the Nyquist modes included; without them undamped Jacobi has $\|G\|_2 = \rho = 0.9994$ at $128^2$).}
 \resizebox{\textwidth}{!}{\caassump}
 \label{tab:ca_assump}
 \end{table}
@@ -413,7 +413,7 @@ Several choices of this study were made after looking at test results: the corre
 \begin{table}[H]
 \color{red}
 \centering
-\caption{Exact verification of \Cref{th:suboptgreedy} for short horizons ($128\times128$, $8$ test instances, $T$ macro-actions, $K$ actions including the corrector): the optimal sequence $O$ is found by exhaustive search; $\mu = \max_{t<T} g(S^t \oplus O)/g(O)$ over the greedy prefixes; $\alpha(O)$ over the greedy prefixes and over all sequences of length below $T$; whether $g(S^T) \le \mu(1-\phi_T)g(O) + \phi_T g(\emptyset)$ holds; the ratio $g(S^T)/g(O)$ of the greedy to the optimal error (median and maximum over instances); and the number of instances on which the greedy sequence is the optimum. Errors below $10^{-11}$ relative are clipped to that floor.}
+\caption{Exact verification of \Cref{th:suboptgreedy} for short horizons ($128\times128$, $8$ test instances, $T$ macro-actions, $K$ actions including the corrector; \textbf{[provisional: development-run macro-action sizes and instances]}): the optimal sequence $O$ is found by exhaustive search; $\mu = \max_{t<T} g(S^t \oplus O)/g(O)$ over the greedy prefixes; $\alpha(O)$ over the greedy prefixes and over all sequences of length below $T$; whether $g(S^T) \le \mu(1-\phi_T)g(O) + \phi_T g(\emptyset)$ holds; the ratio $g(S^T)/g(O)$ of the greedy to the optimal error (median and maximum over instances); and the number of instances on which the greedy sequence is the optimum. Errors below $10^{-11}$ relative are clipped to that floor.}
 \resizebox{\textwidth}{!}{\catheorem}
 \label{tab:ca_theorem}
 \end{table}
