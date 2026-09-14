@@ -183,7 +183,9 @@ def time_krylov(pde, f, method, n_iter, reps=1):
 def default_baselines(equation):
     if equation == "VarCoeff":
         return ["lu", "mg", "cg", "pcg_ssor", "pcg_mg"]
-    if equation in ("Poisson", "AnisoDiff"):
+    if equation == "AnisoDiff":
+        return ["fft", "mg", "mg_line", "cg", "pcg_ssor", "pcg_mg"]
+    if equation == "Poisson":
         return ["fft", "mg", "cg", "pcg_ssor", "pcg_mg"]
     return ["fft", "mg", "bicgstab", "bicgstab_mg", "gmres"]
 

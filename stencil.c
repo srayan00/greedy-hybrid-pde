@@ -111,6 +111,49 @@ void sor_sweep(double *u, const double *f, int B, int N, double ax, double ay, d
     }
 }
 
+/* Lexicographic line Gauss-Seidel: every grid line i (all j, the contiguous axis) is solved exactly
+   for its N unknowns given the neighbouring lines (line i-1 already updated in this sweep, line i+1
+   not yet; periodic wrap as in the point sweep). The line system is cyclic tridiagonal with constant
+   coefficients (diag, cs below, cn above, corners cs at (0, N-1) and cn at (N-1, 0)); it is solved by
+   the Thomas algorithm on the modified matrix A' = A - u v^T (Sherman-Morrison), whose factorisation
+   and the vector z = A'^{-1} u are computed once per call. Suited to anisotropic problems whose strong
+   coupling is along j. */
+void line_gs_sweep(double *u, const double *f, int B, int N, double ax, double ay, double b1, double b2, int forward) {
+    St s = coeffs(N, ax, ay, b1, b2);
+    double a = s.diag, lo = s.cs, up = s.cn;
+    double alpha = up, beta = lo;              /* A[N-1][0] = cn (u_{j+1} of the last row wraps), A[0][N-1] = cs */
+    double gamma = -a;
+    double *bp = (double *)__builtin_alloca(sizeof(double) * N), *mm = (double *)__builtin_alloca(sizeof(double) * N);
+    double *z = (double *)__builtin_alloca(sizeof(double) * N), *y = (double *)__builtin_alloca(sizeof(double) * N);
+    /* Thomas factorisation of A' (diag b'_0 = a - gamma, b'_{N-1} = a - alpha beta / gamma, a otherwise) */
+    bp[0] = a - gamma; mm[0] = 0.0;
+    for (int j = 1; j < N; j++) {
+        double bj = (j == N - 1) ? a - alpha * beta / gamma : a;
+        mm[j] = lo / bp[j - 1];
+        bp[j] = bj - mm[j] * up;
+    }
+    /* z = A'^{-1} (gamma, 0, ..., 0, alpha) */
+    y[0] = gamma; for (int j = 1; j < N; j++) y[j] = ((j == N - 1) ? alpha : 0.0) - mm[j] * y[j - 1];
+    z[N - 1] = y[N - 1] / bp[N - 1]; for (int j = N - 2; j >= 0; j--) z[j] = (y[j] - up * z[j + 1]) / bp[j];
+    double vz = 1.0 + z[0] + (beta / gamma) * z[N - 1];   /* 1 + v.z with v = (1, 0, ..., 0, beta/gamma) */
+    for (int b = 0; b < B; b++) {
+        double *U = u + (size_t)b * N * N; const double *F = f + (size_t)b * N * N;
+        for (int ii = 0; ii < N; ii++) {
+            int i = forward ? ii : N - 1 - ii;
+            ROW_SETUP(U, i)
+            double *r = U + (size_t)i * N; const double *fr = F + (size_t)i * N;
+            /* right-hand side of the line system: f - (coupling to the neighbouring lines) */
+            y[0] = fr[0] - s.cw * rm[0] - s.ce * rp[0];
+            for (int j = 1; j < N; j++) y[j] = fr[j] - s.cw * rm[j] - s.ce * rp[j] - mm[j] * y[j - 1];
+            r[N - 1] = y[N - 1] / bp[N - 1];
+            for (int j = N - 2; j >= 0; j--) r[j] = (y[j] - up * r[j + 1]) / bp[j];
+            double vy = r[0] + (beta / gamma) * r[N - 1];
+            double fac = vy / vz;
+            for (int j = 0; j < N; j++) r[j] -= fac * z[j];
+        }
+    }
+}
+
 void ssor_sweep(double *u, const double *f, int B, int N, double ax, double ay, double b1, double b2, double omega) {
     sor_sweep(u, f, B, N, ax, ay, b1, b2, omega, 1);
     sor_sweep(u, f, B, N, ax, ay, b1, b2, omega, 0);

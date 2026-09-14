@@ -29,20 +29,22 @@ import numpy as np
 from scipy.stats import ttest_rel, wilcoxon
 
 SOLVER_NAMES = {"jacobi": "Jacobi", "jacobi_0.67": "Jacobi (0.67)", "gs": "GS",
-                "ssor": "SymGS", "sor_1.5": "SOR (1.5)", "mg": "Multigrid"}
-SOLVER_ORDER = ["jacobi", "jacobi_0.67", "gs", "ssor", "sor_1.5"]
+                "ssor": "SymGS", "sor_1.5": "SOR (1.5)", "mg": "Multigrid", "linegs": "Line GS", "mg_line": "Multigrid (line GS)"}
+SOLVER_ORDER = ["jacobi", "jacobi_0.67", "gs", "ssor", "sor_1.5", "linegs"]
 PAIRINGS = SOLVER_ORDER + ["mg"]
-POL_NAMES = {"classical": "Solver only", "hints25": "HINTS ($\\tau{=}25$)", "best": "Best fixed schedule", "oneshot": "One-shot schedule",
+HREF = "hints15"     # the published 2-D period of HINTS (proportion 1/15); tau = 25 is its 1-D period
+POL_NAMES = {"classical": "Solver only", "hints25": "HINTS ($\\tau{=}25$)", "hints15": "HINTS ($\\tau{=}15$)", "best": "Best fixed schedule",
+             "bestdecay": "Best residual-decay rule", "oneshot": "One-shot schedule",
              "hints5": "HINTS ($\\tau{=}5$)", "hints10": "HINTS ($\\tau{=}10$)",
              "hints50": "HINTS ($\\tau{=}50$)", "greedy": "Greedy oracle (Alg.~1)",
              "oracle": "Cost-aware oracle", "router": "Learned router (ours)"}
 EQS = ["Poisson", "ConvDiff", "AnisoDiff", "VarCoeff"]
 EQ_SUF = {"Poisson": "poisson", "ConvDiff": "conv", "AnisoDiff": "aniso", "VarCoeff": "var"}
 EQ_NAMES = {"Poisson": "Poisson", "ConvDiff": "Convection--diffusion", "AnisoDiff": "Anisotropic diffusion", "VarCoeff": "Variable-coefficient diffusion"}
-BASE_NAMES = {"mg": "Multigrid V(2,2) alone", "cg": "CG", "pcg_ssor": "PCG (SymGS)", "pcg_mg": "PCG (multigrid)",
+BASE_NAMES = {"mg": "Multigrid V(2,2) alone (point GS)", "mg_line": "Multigrid V(2,2) alone (line GS)", "cg": "CG", "pcg_ssor": "PCG (SymGS)", "pcg_mg": "PCG (multigrid)",
               "bicgstab": "BiCGSTAB", "bicgstab_mg": "BiCGSTAB (multigrid)", "gmres": "GMRES(20)",
               "fft": "FFT direct solve (exact; constant coefficients only)", "lu": "Sparse LU direct solve (cached factorisation)"}
-BASE_ORDER = ["mg", "cg", "bicgstab", "pcg_ssor", "pcg_mg", "bicgstab_mg", "gmres", "fft", "lu"]
+BASE_ORDER = ["mg", "mg_line", "cg", "bicgstab", "pcg_ssor", "pcg_mg", "bicgstab_mg", "gmres", "fft", "lu"]
 NS = [128, 256, 512]
 GRID_SUF = {128: "", 256: "B", 512: "C"}
 
@@ -142,12 +144,14 @@ def fmt_sp(sp):
 
 
 def wilcoxon_p(base, ours):
-    """One-sided paired Wilcoxon on log ratios (alternative: ours faster), censoring-aware."""
+    """Two-sided paired Wilcoxon signed-rank test on the log time ratios (the direction is reported
+    separately from the sign of the median ratio). Censored runs enter at their time-to-cap on both
+    sides (callers pass times_lb), so a router failure counts against the router instead of being dropped."""
     _, r = paired_speedup(base, ours)
     ok = np.isfinite(r) & (r > 0)
     if ok.sum() < 8 or np.allclose(r[ok], 1.0):
         return 1.0
-    return float(wilcoxon(np.log(r[ok]), alternative="greater").pvalue)
+    return float(wilcoxon(np.log(r[ok]), alternative="two-sided").pvalue)
 
 
 def ttest_p(base, ours):
@@ -158,11 +162,28 @@ def ttest_p(base, ours):
 
 
 def pstr(pv):
+    """p-value to one significant digit (never rounded down to a smaller power of ten)."""
     if pv < 1e-10:
         return "$<10^{-10}$"
     if pv < 1e-3:
-        return f"$10^{{{int(np.floor(np.log10(pv)))}}}$"
+        e = int(np.floor(np.log10(pv)))
+        mant = pv / 10 ** e
+        if round(mant) >= 10:
+            e += 1; mant = 1.0
+        return f"${mant:.0f}\\times10^{{{e}}}$" if round(mant) > 1 else f"$10^{{{e}}}$"
     return f"{pv:.3f}"
+
+
+def boot_ci(r, B=2000, seed=0):
+    """Bootstrap 95% interval of the paired median ratio (over instances)."""
+    r = np.asarray(r, dtype=float)
+    r = r[np.isfinite(r)]
+    if len(r) < 4:
+        return (np.nan, np.nan)
+    rng = np.random.default_rng(seed)
+    idx = rng.integers(0, len(r), size=(B, len(r)))
+    meds = np.median(r[idx], axis=1)
+    return (float(np.percentile(meds, 2.5)), float(np.percentile(meds, 97.5)))
 
 
 def time_cell(rows, key, bold=False, italic=False):
@@ -190,13 +211,34 @@ def sp_cell(base, ours, bold_thresh=1.10, bold=None):
     return f"\\textbf{{{s}}}" if (bold and sp >= 1.0) else s
 
 
-def sp_parts(base, ours):
-    sp, _ = paired_speedup(base, ours)
+def sp_parts(base, ours, ci=False, n_fail=0, lb=False):
+    """'speedup [CI] (p)' with the two-sided p-value; 'slower' marks a median ratio below one;
+    n_fail router runs that did not reach the tolerance are marked with a dagger (they enter the
+    ratio at the router's time-to-cap); lb marks a baseline that is censored on most instances
+    (the ratio is then a lower bound)."""
+    sp, r = paired_speedup(base, ours)
+    p = wilcoxon_p(base, ours)
+    s = fmt_sp(sp)
+    if lb:
+        s = "$\\geq$" + s
+    if ci:
+        lo, hi = boot_ci(r)
+        if np.isfinite(lo):
+            s += f" [{fmt_sp(lo)[:-8]}, {fmt_sp(hi)[:-8]}]"
+    if n_fail:
+        s += f"$^{{\\dagger {n_fail}}}$"
     if sp >= 1.0:
-        p = wilcoxon_p(base, ours)
-        return f"{fmt_sp(sp)} ({pstr(p)})", sp, p
-    p = wilcoxon_p(ours, base)
-    return f"{fmt_sp(sp)} (slower, {pstr(p)})", sp, p
+        return f"{s} ({pstr(p)})", sp, p
+    return f"{s} (slower, {pstr(p)})", sp, p
+
+
+def sp_rows(rows_b, rows_r, key, ci=True):
+    """sp_parts for two row lists at a tolerance key: censoring on both sides at the time-to-cap,
+    router failures counted and marked, majority-censored baselines marked as lower bounds."""
+    tb, tr = times_lb(rows_b, key), times_lb(rows_r, key)
+    n_fail = int(sum(1 for r in rows_r if r["tol"][key]["t_live"] is None))
+    n_cb = int(sum(1 for r in rows_b if r["tol"][key]["t_live"] is None))
+    return sp_parts(tb, tr, ci=ci, n_fail=n_fail, lb=(n_cb > len(rows_b) / 2))
 
 
 def rng_macro(out, name, vals):
@@ -222,9 +264,21 @@ def main():
     Rdev = load(pattern="results_dev/*.json")         # development runs (numpy kernels, test seed 72), archived
     out = []
     Bf = {}
-    for path in sorted(glob.glob(f"{RESULTS_DIR}/baselines_*.json")):
+    for path in sorted(glob.glob(f"{RESULTS_DIR}/baselines_*.json")):      # legacy separate-session files
         d = json.load(open(path))
         Bf[(d["args"]["equation"], d["args"]["N"])] = d
+    # classical baselines timed inside the pairwise sessions ('base:<method>' policies): the table
+    # rows come from one designated session per (equation, grid) -- the first pairing in PAIRINGS
+    # order -- and every paired comparison uses the baseline of the router's own session
+    BASE_SESSION = {}
+    for (eq_, N_, spec_, ens_), (d_, g_) in sorted(R.items(), key=lambda kv: (kv[0][0], kv[0][1], PAIRINGS.index(kv[0][2]) if kv[0][2] in PAIRINGS else 99)):
+        if ens_ or (eq_, N_) in BASE_SESSION:
+            continue
+        bl = {p_[5:]: rows for p_, rows in g_["policies"].items() if p_.startswith("base:") and rows}
+        if bl:
+            BASE_SESSION[(eq_, N_)] = spec_
+            Bf[(eq_, N_)] = {"h2": d_["h2"], "tols": d_["tols"], "methods": bl, "session": spec_,
+                             "lu_factorization_s": d_.get("lu_factorization_s")}
     Sf = {}
     for path in sorted(glob.glob(f"{RESULTS_DIR}/seeds_*.json")):
         d = json.load(open(path))
@@ -242,11 +296,27 @@ def main():
         d = Bf.get((eq, N))
         return [m for m in BASE_ORDER if d and m in d["methods"] and d["methods"][m]]
 
+    def bl_rows(g, db, m):
+        """Baseline rows for a paired comparison: the router's own session if it timed the baseline,
+        else the designated session's rows."""
+        rows = g["policies"].get("base:" + m)
+        if rows:
+            return rows
+        if db is not None and m in db["methods"] and db["methods"][m]:
+            return db["methods"][m]
+        return None
+
+    def best_decay(P, key):
+        cands = [p for p in P if p.startswith("decay")]
+        return min(cands, key=lambda p: np.median(times(P[p], key))) if cands else None
+
     SCHED_LABEL = {"oneshot": "one-shot"}
 
     def sched_label(p):
         if p == "oneshot":
             return "\\text{one-shot}"
+        if p.startswith("decay"):
+            return f"\\theta{{=}}{p[5:]}"
         if p.startswith("phints"):
             return f"\\tau{{=}}{p[6:]},\\,t_0{{=}}0"
         return f"\\tau{{=}}{p[5:]}"
@@ -282,7 +352,7 @@ def main():
             have = {N: cell(eq, N, spec) for N in Ns}
             if not any(have.values()):
                 continue
-            pols = ["classical", "hints25", "best", "oneshot", "greedy", "oracle", "router"]
+            pols = ["classical", HREF, "best", "bestdecay", "oneshot", "greedy", "oracle", "router"]
             for pi, pol in enumerate(pols):
                 row = [f"$\\{{\\mathrm{{NO}}, \\text{{{SOLVER_NAMES[spec]}}}\\}}$" if pi == 0 else "", POL_NAMES.get(pol, pol)]
                 for N in Ns:
@@ -297,9 +367,15 @@ def main():
                         if pol == "best":
                             bt = best_tau(P, key)
                             row.append(time_cell(P[bt], key) + f"$_{{{sched_label(bt)}}}$")
+                        elif pol == "bestdecay":
+                            bd = best_decay(P, key)
+                            row.append(time_cell(P[bd], key) + f"$_{{{sched_label(bd)}}}$" if bd else "--")
                         elif pol in P:
                             t_r = np.median(times(P["router"], key))
-                            comp = [np.median(times(P[p_], key)) for p_ in P if p_.startswith("hints") or p_ == "classical"]
+                            # bold: the router's median is the smallest among all deployable methods
+                            # (solver alone, every fixed schedule, the one-shot and residual-decay rules)
+                            comp = [np.median(times(P[p_], key)) for p_ in P
+                                    if p_ == "classical" or p_.startswith(("hints", "phints", "decay")) or p_ == "oneshot"]
                             bold = pol == "router" and all(t_r <= c_ for c_ in comp)
                             row.append(time_cell(P[pol], key, bold=bold, italic=(pol == "oracle")))
                         else:
@@ -326,7 +402,7 @@ def main():
 
         # ---------------------------------------------------------- speedups with p-values
         has_base = any((eq, N) in Bf for N in Ns)
-        nc = 6 if has_base else 3
+        nc = 7 if has_base else 4
         # pass 1: collect every comparison (speedup text, speedup, p); pass 2: Holm-corrected bolding
         comps = []   # (row_index, col_index, text, sp, p)
         rows_spec = []
@@ -345,18 +421,17 @@ def main():
                     P = g["policies"]
                     tol = d["h2"] if tol_f == "h2" else tol_f
                     key = tkey(d, tol)
-                    t_r = times(P["router"], key)
-                    bases = [times_lb(P["hints25"], key), times_lb(P[best_tau(P, key)], key),
-                             times_lb(P["oneshot"], key) if "oneshot" in P else None]
+                    bd = best_decay(P, key)
+                    bases = [P[HREF], P[best_tau(P, key)], P[bd] if bd else None, P["oneshot"] if "oneshot" in P else None]
                     if has_base:
                         db = Bf.get((eq, N))
-                        for m_ in ["mg", kry_name(eq), "fft"]:
-                            bases.append(base_times(db, m_, tol) if (db is not None and m_ in db["methods"] and db["methods"][m_]) else None)
+                        for m_ in ["mg", kry_name(eq), "fft" if eq != "VarCoeff" else "lu"]:
+                            bases.append(bl_rows(g, db, m_))
                     for b_ in bases:
                         if b_ is None:
                             row.append("--")
                         else:
-                            s, sp, p = sp_parts(b_, t_r)
+                            s, sp, p = sp_rows(b_, P["router"], key)
                             comps.append((len(rows_spec), len(row), s, sp, p))
                             row.append(s)
                 rows_spec.append(row)
@@ -368,7 +443,7 @@ def main():
         out.append("\\begin{tabular}{ll" + "c" * nc * len(Ns) + "}\n\\toprule")
         out.append("& & " + " & ".join(f"\\multicolumn{{{nc}}}{{c}}{{${N}\\times{N}$}}" for N in Ns) + " \\\\ "
                    + "".join(f"\\cmidrule(lr){{{3+nc*i}-{2+nc*(i+1)}}}" for i in range(len(Ns))))
-        out.append("Pairing & $\\varepsilon$ & " + " & ".join("vs.\\ HINTS-25 & vs.\\ best schedule & vs.\\ one-shot" + (" & vs.\\ multigrid & vs.\\ MG-Krylov & vs.\\ FFT solve" if has_base else "") for _ in Ns) + " \\\\ \\midrule")
+        out.append("Pairing & $\\varepsilon$ & " + " & ".join("vs.\\ HINTS-15 & vs.\\ best schedule & vs.\\ best decay rule & vs.\\ one-shot" + ((" & vs.\\ multigrid & vs.\\ MG-Krylov & vs.\\ " + ("sparse LU" if eq == "VarCoeff" else "FFT solve")) if has_base else "") for _ in Ns) + " \\\\ \\midrule")
         for row in rows_spec:
             out.append(" & ".join(row) + " \\\\")
         out.append("\\bottomrule\n\\end{tabular}}")
@@ -378,7 +453,7 @@ def main():
         out.append("\\begin{tabular}{l" + "ccc" * len(Ns) + "}\n\\toprule")
         out.append("& " + " & ".join(f"\\multicolumn{{3}}{{c}}{{${N}\\times{N}$}}" for N in Ns) + " \\\\ "
                    + "".join(f"\\cmidrule(lr){{{2+3*i}-{4+3*i}}}" for i in range(len(Ns))))
-        out.append("Pairing & " + " & ".join("HINTS-25 & oracle & router" for _ in Ns) + " \\\\ \\midrule")
+        out.append("Pairing & " + " & ".join("HINTS-15 & oracle & router" for _ in Ns) + " \\\\ \\midrule")
         for spec in PAIRINGS:
             have = {N: cell(eq, N, spec) for N in Ns}
             if not any(have.values()):
@@ -392,7 +467,7 @@ def main():
                 d, g = dg
                 key = tkey(d, d["h2"])
                 P = g["policies"]
-                for pol in ["hints25", "oracle", "router"]:
+                for pol in [HREF, "oracle", "router"]:
                     it = iters(P[pol], key)
                     nno = np.array([np.nan if r["tol"][key]["no_calls"] is None else r["tol"][key]["no_calls"] for r in P[pol]])
                     row.append(f"{np.median(it):.0f} ({np.nanmedian(nno):.0f})" if np.isfinite(np.median(it)) else "--")
@@ -435,19 +510,19 @@ def main():
             P = g["policies"]
             out.append(f"\\multicolumn{{3}}{{c}}{{$\\{{\\mathrm{{NO}}, \\text{{{SOLVER_NAMES[spec]}}}\\}}$}} \\\\ \\midrule")
             auc_r = np.array([r["auc_T"] for r in P["router"]])
-            for pol in ["classical", "hints25", "router", "oracle"]:
+            for pol in ["classical", HREF, "router", "oracle"]:
                 err = np.array([r["err_T"] for r in P[pol]])
                 auc = np.array([r["auc_T"] for r in P[pol]])
 
                 def ms(x):
                     return f"{np.mean(x):.2e} ({np.std(x, ddof=1) / math.sqrt(len(x)):.1e})"
                 cells = [ms(auc)]
-                if pol in ("classical", "hints25"):
+                if pol in ("classical", HREF):
                     p = ttest_p(auc, auc_r) if not np.allclose(auc, auc_r) else 1.0
                     cells.append(pstr(p))
                 else:
                     cells.append("-")
-                if pol == "router" and all(np.mean(auc) <= np.mean(np.array([r["auc_T"] for r in P[q]])) for q in ["classical", "hints25"]):
+                if pol == "router" and all(np.mean(auc) <= np.mean(np.array([r["auc_T"] for r in P[q]])) for q in ["classical", HREF]):
                     cells = [f"\\textbf{{{c}}}" for c in cells[:1]] + cells[1:]
                 if pol == "oracle":
                     cells = [f"\\textit{{{c}}}" for c in cells]
@@ -462,7 +537,7 @@ def main():
         if any((eq, N_) in Sf for N_ in NS):
             out.append(f"\\newcommand{{\\caseeds{suf}}}{{")
             out.append("\\begin{tabular}{llcccc}\n\\toprule")
-            out.append("$N$ & Pairing & time to $h^2$ over 5 seeds & identical decisions & speedup vs.\\ HINTS-25 & seeds with $p{<}0.01$ \\\\ \\midrule")
+            out.append("$N$ & Pairing & time to $h^2$ over 5 seeds & identical decisions & speedup vs.\\ HINTS-15 & seeds with $p{<}0.01$ \\\\ \\midrule")
             for N_ in NS:
                 sd = Sf.get((eq, N_))
                 if not sd:
@@ -476,7 +551,7 @@ def main():
                     key = tkey(d, d["h2"])
                     if not all("t_wu" in blk["rows"][0]["tol"][key] for blk in sd["groups"][spec].values()):
                         continue
-                    th = times(P["hints25"], key, field="t_wu")
+                    th = times(P[HREF], key, field="t_wu")
                     tb = times(P[best_tau(P, key)], key, field="t_wu")
                     it_main = iters(P["router"], key)
                     meds, sps, nsig, agree = [], [], 0, []
@@ -501,7 +576,7 @@ def main():
     out.append("\\begin{tabular}{ll" + "ccc" * len(NS) + "}\n\\toprule")
     out.append("& & " + " & ".join(f"\\multicolumn{{3}}{{c}}{{${N}\\times{N}$}}" for N in NS) + " \\\\ "
                + "".join(f"\\cmidrule(lr){{{3+3*i}-{5+3*i}}}" for i in range(len(NS))))
-    out.append("Equation & Pairing & " + " & ".join("HINTS-25 & best schedule & router (ours)" for _ in NS) + " \\\\ \\midrule")
+    out.append("Equation & Pairing & " + " & ".join("HINTS-15 & best schedule & router (ours)" for _ in NS) + " \\\\ \\midrule")
     for eq in EQS:
         first = True
         any_row = False
@@ -520,9 +595,9 @@ def main():
                 key = tkey(d, d["h2"])
                 t_r = times(P["router"], key)
                 bt = best_tau(P, key)
-                sp_h = paired_speedup(times(P["hints25"], key), t_r)[0]
-                sp_b = paired_speedup(times(P[bt], key), t_r)[0]
-                row.append(time_cell(P["hints25"], key))
+                sp_h = paired_speedup(times_lb(P[HREF], key), times_lb(P["router"], key))[0]
+                sp_b = paired_speedup(times_lb(P[bt], key), times_lb(P["router"], key))[0]
+                row.append(time_cell(P[HREF], key))
                 row.append(time_cell(P[bt], key) + f"$_{{{sched_label(bt)}}}$")
                 rc = time_cell(P["router"], key, bold=(sp_h >= 1 and sp_b >= 1))
                 row.append(rc + f" ({fmt_sp(sp_h)}\\,/\\,{fmt_sp(sp_b)})")
@@ -550,7 +625,7 @@ def main():
     # ================================================================ summary macros per grid
     for N_ in NS:
         SUF = GRID_SUF[N_]
-        summ = {"Solver": [], "Hints": [], "Best": [], "SolverDeep": [], "HintsDeep": [], "BestDeep": [], "OracleRatio": []}
+        summ = {"Solver": [], "Hints": [], "HintsTF": [], "Best": [], "Decay": [], "SolverDeep": [], "HintsDeep": [], "HintsTFDeep": [], "BestDeep": [], "DecayDeep": [], "OracleRatio": []}
         for eq in EQS:
             for spec in SOLVER_ORDER:
                 dg = cell(eq, N_, spec)
@@ -560,10 +635,14 @@ def main():
                 P = g["policies"]
                 for tol, suf_ in [(d["h2"], ""), (1e-8, "Deep")]:
                     key = tkey(d, tol)
-                    t_r = times(P["router"], key)
-                    summ["Solver" + suf_].append(paired_speedup(times(P["classical"], key), t_r)[0])
-                    summ["Hints" + suf_].append(paired_speedup(times(P["hints25"], key), t_r)[0])
-                    summ["Best" + suf_].append(paired_speedup(times(P[best_tau(P, key)], key), t_r)[0])
+                    t_r = times_lb(P["router"], key)
+                    summ["Solver" + suf_].append(paired_speedup(times_lb(P["classical"], key), t_r)[0])
+                    summ["Hints" + suf_].append(paired_speedup(times_lb(P[HREF], key), t_r)[0])
+                    summ["HintsTF" + suf_].append(paired_speedup(times_lb(P["hints25"], key), t_r)[0])
+                    summ["Best" + suf_].append(paired_speedup(times_lb(P[best_tau(P, key)], key), t_r)[0])
+                    bd_ = best_decay(P, key)
+                    if bd_:
+                        summ["Decay" + suf_].append(paired_speedup(times_lb(P[bd_], key), t_r)[0])
                 key = tkey(d, d["h2"])
                 summ["OracleRatio"].append(np.median(times(P["router"], key)) / np.median(times(P["oracle"], key)))
         if not summ["Solver"]:
@@ -576,6 +655,8 @@ def main():
         out.append(f"\\newcommand{{\\caCellsRouterBeatsBestDeep{SUF}}}{{{sum(v >= 1.0 for v in summ['BestDeep'])}}}")
         out.append(f"\\newcommand{{\\caCellsRouterBeatsHintsDeep{SUF}}}{{{sum(v >= 1.0 for v in summ['HintsDeep'])}}}")
         out.append(f"\\newcommand{{\\caCellsRouterWithinBest{SUF}}}{{{sum(v >= 0.9 for v in summ['Best'])}}}")
+        out.append(f"\\newcommand{{\\caCellsRouterBeatsDecay{SUF}}}{{{sum(v >= 1.0 for v in summ['Decay'])}}}")
+        out.append(f"\\newcommand{{\\caCellsRouterBeatsDecayDeep{SUF}}}{{{sum(v >= 1.0 for v in summ['DecayDeep'])}}}")
         # multigrid alone and MG-preconditioned Krylov, at h^2 and 1e-8, every stationary pairing of this grid
         vm, vmd, vk, vkd = [], [], [], []
         for eq in EQS:
@@ -589,12 +670,13 @@ def main():
                 d, g = dg
                 for tol, (lm, lk) in [(d["h2"], (vm, vk)), (1e-8, (vmd, vkd))]:
                     key = tkey(d, tol)
-                    t_r = times(g["policies"]["router"], key)
-                    if "mg" in db["methods"] and db["methods"]["mg"]:
-                        lm.append(paired_speedup(base_times(db, "mg", tol), t_r)[0])
-                    kn = kry_name(eq)
-                    if kn in db["methods"] and db["methods"][kn]:
-                        lk.append(paired_speedup(base_times(db, kn, tol), t_r)[0])
+                    t_r = times_lb(g["policies"]["router"], key)
+                    rm_ = bl_rows(g, db, "mg")
+                    if rm_:
+                        lm.append(paired_speedup(times_lb(rm_, key), t_r)[0])
+                    rk_ = bl_rows(g, db, kry_name(eq))
+                    if rk_:
+                        lk.append(paired_speedup(times_lb(rk_, key), t_r)[0])
         rng_macro(out, "caVsMgAll" + SUF, vm); rng_macro(out, "caVsMgDeep" + SUF, vmd)
         rng_macro(out, "caVsKrylovAll" + SUF, vk); rng_macro(out, "caVsKrylovDeep" + SUF, vkd)
         # the {NO, multigrid} router against multigrid alone
@@ -605,8 +687,9 @@ def main():
             if dg is None or db is None or "mg" not in db["methods"] or not db["methods"]["mg"]:
                 continue
             d, g = dg
-            vme.append(paired_speedup(base_times(db, "mg", d["h2"]), times(g["policies"]["router"], tkey(d, d["h2"])))[0])
-            vmed.append(paired_speedup(base_times(db, "mg", 1e-8), times(g["policies"]["router"], tkey(d, 1e-8)))[0])
+            rm_ = bl_rows(g, db, "mg")
+            vme.append(paired_speedup(times_lb(rm_, tkey(d, d["h2"])), times_lb(g["policies"]["router"], tkey(d, d["h2"])))[0])
+            vmed.append(paired_speedup(times_lb(rm_, tkey(d, 1e-8)), times_lb(g["policies"]["router"], tkey(d, 1e-8)))[0])
         rng_macro(out, "caVsMgEnsAll" + SUF, vme); rng_macro(out, "caVsMgEnsDeep" + SUF, vmed)
     # baselines at 128^2 for the text
     vs_mg, vs_kry, vs_mg_ens = [], [], []
@@ -618,11 +701,14 @@ def main():
             continue
         best_s = min(pw, key=lambda s_: np.median(times(pw[s_][1]["policies"]["router"], tkey(pw[s_][0], d["h2"]))))
         dd, g = pw[best_s]
-        t_r = times(g["policies"]["router"], tkey(dd, dd["h2"]))
-        if "mg" in d["methods"] and d["methods"]["mg"]:
-            vs_mg.append(paired_speedup(base_times(d, "mg", dd["h2"]), t_r)[0])
-        if kry_name(eq) in d["methods"] and d["methods"][kry_name(eq)]:
-            vs_kry.append(paired_speedup(base_times(d, kry_name(eq), dd["h2"]), t_r)[0])
+        kh = tkey(dd, dd["h2"])
+        t_r = times_lb(g["policies"]["router"], kh)
+        rm_ = bl_rows(g, d, "mg")
+        if rm_:
+            vs_mg.append(paired_speedup(times_lb(rm_, kh), t_r)[0])
+        rk_ = bl_rows(g, d, kry_name(eq))
+        if rk_:
+            vs_kry.append(paired_speedup(times_lb(rk_, kh), t_r)[0])
         mgp = cell(eq, N, "mg")
         if mgp:
             vs_mg_ens.append(paired_speedup(times(mgp[1]["policies"]["classical"], tkey(mgp[0], dd["h2"])),
@@ -636,8 +722,65 @@ def main():
             continue
         best_s = min(pw, key=lambda s_: np.median(times(pw[s_][1]["policies"]["router"], tkey(pw[s_][0], d["h2"]))))
         dd, g = pw[best_s]
-        fft_ratio.append(np.median(times(g["policies"]["router"], tkey(dd, dd["h2"]))) / np.median(base_times(d, "fft", dd["h2"])))
+        rf_ = bl_rows(g, d, "fft")
+        fft_ratio.append(paired_speedup(times_lb(g["policies"]["router"], tkey(dd, dd["h2"])), times_lb(rf_, tkey(dd, dd["h2"])))[0])
     rng_macro(out, "caFftRatio", fft_ratio)
+
+    # ================================================================ in-situ overheads, drift, charged fraction, live/WU, macro sizes
+    def num_macro(name, vals, fmt):
+        vals = [v for v in vals if v is not None and np.isfinite(v)]
+        out.append(f"\\newcommand{{\\{name}Min}}{{{(fmt % min(vals)) if vals else PENDING}}}")
+        out.append(f"\\newcommand{{\\{name}Max}}{{{(fmt % max(vals)) if vals else PENDING}}}")
+    dec_us, gap_us, dfrac, dfrac8, charged, livewu, drifts, waits, kchk, ndec = [], [], [], [], [], [], [], 0, [], []
+    for (eq_, N_, spec_, ens_), (d_, g_) in R.items():
+        if ens_:
+            continue
+        P = g_["policies"]
+        for tol_, lst in [(d_["h2"], dfrac), (1e-8, dfrac8)]:
+            key = tkey(d_, tol_)
+            rr = P["router"]
+            td = np.array([r["tol"][key].get("t_dec") if r["tol"][key].get("t_dec") is not None else np.nan for r in rr])
+            nd = np.array([r["tol"][key].get("n_dec") if r["tol"][key].get("n_dec") is not None else np.nan for r in rr], dtype=float)
+            tl = times(rr, key)
+            ok = np.isfinite(td) & np.isfinite(nd) & (nd > 0) & np.isfinite(tl)
+            if ok.any():
+                lst.append(float(np.median(td[ok] / tl[ok])) * 100)
+                if tol_ == d_["h2"]:
+                    dec_us.append(float(np.median(td[ok] / nd[ok])) * 1e6)
+                    ndec.append(float(np.median(nd[ok])))
+                    to = times(P["oracle"], key)
+                    both = ok & np.isfinite(to)
+                    gap_us.append(float(np.median(tl[both] - to[both])) * 1e6)
+                    tw = times(rr, key, field="t_wu")
+                    livewu.append(float(np.median(tl[ok] / tw[ok])))
+        ch = [r["t_total_live"] / r["t_outer_total"] for r in P["router"] if r.get("t_outer_total")]
+        if ch:
+            charged.append(float(np.median(ch)) * 100)
+        for dr in g_.get("drift", []):
+            drifts.append(abs(dr["ratio"] - 1.0) * 100); waits += int(dr["retries"])
+        for k_, v_ in g_.items():
+            if k_.startswith("krylov_check:"):
+                kchk.append(v_["max_ratio_timed_over_untimed_error"])
+    num_macro("caDecInSitu", dec_us, "%.0f")
+    num_macro("caRouterOracleGap", gap_us, "%.0f")
+    num_macro("caDecFrac", dfrac, "%.1f")
+    num_macro("caDecFracDeep", dfrac8, "%.1f")
+    num_macro("caChargedFrac", charged, "%.0f")
+    num_macro("caLiveWu", livewu, "%.2f")
+    num_macro("caNDec", ndec, "%.0f")
+    out.append(f"\\newcommand{{\\caDriftMax}}{{{('%.1f' % max(drifts)) if drifts else PENDING}}}")
+    out.append(f"\\newcommand{{\\caDriftWaits}}{{{waits}}}")
+    out.append(f"\\newcommand{{\\caKrylovCheckMax}}{{{('%.2f' % max(kchk)) if kchk else PENDING}}}")
+    for N_ in NS:
+        SUF = GRID_SUF[N_]
+        for spec_, nm_ in [("jacobi", "Jacobi"), ("gs", "Gs"), ("mg", "Mg"), ("ssor", "SymGs")]:
+            dg = cell("Poisson", N_, spec_) or next((cell(e_, N_, spec_) for e_ in EQS if cell(e_, N_, spec_)), None)
+            if dg:
+                out.append(f"\\newcommand{{\\caM{nm_}{SUF}}}{{{dg[1]['m'][0]}}}")
+                c_ = dg[1]["costs"]
+                out.append(f"\\newcommand{{\\caCost{nm_}{SUF}}}{{{fmt_time(c_[spec_])}}}")
+                out.append(f"\\newcommand{{\\caCostNo{SUF}}}{{{fmt_time(c_['no'])}}}")
+                out.append(f"\\newcommand{{\\caCostRes{SUF}}}{{{fmt_time(c_['_residual'])}}}")
 
     # ================================================================ ensembles
     ens_keys = [k for k in R if k[3]]
@@ -889,7 +1032,7 @@ def main():
         tr = O["training"]
         out.append("\\newcommand{\\caamort}{")
         out.append("\\begin{tabular}{llccccc}\n\\toprule")
-        out.append("Equation & $N$ & Corrector data + fit & Router training (GS pairing) & Saving per solve vs HINTS ($\\tau{=}25$) & Break-even solves (router) & Saving per solve vs solver only \\\\ \\midrule")
+        out.append("Equation & $N$ & Corrector data + fit & Router training (GS pairing) & Saving per solve vs HINTS ($\\tau{=}15$) & Break-even solves (router) & Saving per solve vs solver only \\\\ \\midrule")
         for eq in EQS:
             first = True
             for N in NS:
@@ -901,7 +1044,7 @@ def main():
                 d, g = dg
                 P = g["policies"]
                 key = tkey(d, d["h2"])
-                t_r = np.median(times(P["router"], key)); t_h = np.median(times(P["hints25"], key)); t_c = np.median(times(P["classical"], key))
+                t_r = np.median(times(P["router"], key)); t_h = np.median(times(P[HREF], key)); t_c = np.median(times(P["classical"], key))
                 sav_h = t_h - t_r; sav_c = t_c - t_r
                 be = (rt["train_s"] / sav_h) if (rt and sav_h > 0) else np.inf
                 out.append(" & ".join([EQ_NAMES[eq] if first else "", f"${N}^2$", f"{c['data_s'] + c['fit_s']:.0f}\\,s",
@@ -962,7 +1105,7 @@ def main():
         out[-1] = "\\bottomrule\n\\end{tabular}}"
         out.append("\\newcommand{\\caassumpB}{")
         out.append("\\begin{tabular}{llccccccc}\n\\toprule")
-        out.append("Equation & Ensemble & $T$ & $\\sum_i \\rho_{O_i}^2$ & $\\alpha(O)$ (Prop.~\\ref{th:weaklyalphasupermodular}) & $\\hat\\alpha$ max & $\\hat\\alpha$ median & $\\max_t\\max_j \\tilde c_j/\\|e^{(t)}\\|^2$ & $\\min_t\\max_j \\tilde c_j/\\|e^{(t)}\\|^2$ \\\\ \\midrule")
+        out.append("Equation & Ensemble & $T$ & $T - \\sum_i \\rho_{O_i}^2$ & $\\alpha(O)$ (Prop.~\\ref{th:weaklyalphasupermodular}): median [min, max] & $\\hat\\alpha$ max & $\\hat\\alpha$ median & $\\max_t\\max_j \\tilde c_j/\\|e^{(t)}\\|^2$ & $\\min_t\\max_j \\tilde c_j/\\|e^{(t)}\\|^2$ \\\\ \\midrule")
         for eq in EQS:
             for N in NS:
                 d = Af.get((eq, N))
@@ -990,9 +1133,12 @@ def main():
                     ab = [r["alpha_bound"] for r in rows]
                     n_inf = sum(1 for a in ab if not np.isfinite(a))
                     fin = [a for a in ab if np.isfinite(a)]
-                    ab_s = ("$\\infty$" if not fin else f"{np.median(fin):.0f}") + (f" ($\\infty$ on {n_inf}/{len(ab)})" if 0 < n_inf < len(ab) else "")
+                    def fa(x):
+                        return f"{x:.2f}" if x < 100 else f"{x:.0f}"
+                    ab_s = ("$\\infty$" if not fin else f"{fa(np.median(fin))} [{fa(min(fin))}, {fa(max(fin))}]") + (f" ($\\infty$ on {n_inf}/{len(ab)})" if 0 < n_inf < len(ab) else "")
+                    gap = [r["T"] - r["sum_rho2"] for r in rows]
                     out.append(" & ".join([f"{EQ_NAMES[eq]}, ${N}^2$" if first else "", wname(members),
-                                           f"{np.median(Ts):.0f}", f"{np.median([r['sum_rho2'] for r in rows]):.3f}", ab_s,
+                                           f"{np.median(Ts):.0f}", f"{np.median(gap):.3f}", ab_s,
                                            f"{max(r['alpha_hat_max'] or 0 for r in rows):.3f}",
                                            f"{np.median([r['alpha_hat_median'] or 0 for r in rows]):.3f}",
                                            f"{max(r['Ebar_rel'] for r in rows):.3f}", f"{min(r['Emin_rel'] for r in rows):.1e}"]) + " \\\\")
@@ -1033,8 +1179,8 @@ def main():
         Tf[(d["args"]["equation"], d["args"]["N"])] = d
     if Tf:
         out.append("\\newcommand{\\catheorem}{")
-        out.append("\\begin{tabular}{llcccccccc}\n\\toprule")
-        out.append("Equation & Ensemble & $K$ & $T$ & $\\mu$ & $\\alpha(O)$ greedy prefixes & $\\alpha(O)$ all $|S| < T$ & bound holds & $g(S^T)/g(O)$ med (max) & greedy $= O$ \\\\ \\midrule")
+        out.append("\\begin{tabular}{llcccccccccc}\n\\toprule")
+        out.append("Equation & Ensemble & $K$ & $T$ & $n$ & $\\mu$ & $\\alpha(O)$ greedy prefixes & $\\alpha(O)$ all $|S| < T$ & bound holds & $g(S^T)/g(O)$ med (max) & greedy $= O$ & $g(O)$ at floor / rule $=$ Alg.~1 / violations \\\\ \\midrule")
         for eq in EQS:
             for N in NS:
                 d = Tf.get((eq, N))
@@ -1044,20 +1190,26 @@ def main():
                 for key, G in d["groups"].items():
                     rows = G["rows"]
                     members = key.split("+")
-                    out.append(" & ".join([f"{EQ_NAMES[eq]}, ${N}^2$" if first else "", wname(members), str(rows[0]["K"]), str(rows[0]["T"]),
+                    out.append(" & ".join([f"{EQ_NAMES[eq]}, ${N}^2$" if first else "", wname(members), str(rows[0]["K"]), str(rows[0]["T"]), str(len(rows)),
                                            f"{max(r['mu'] for r in rows):.3f}", f"{max(r['alpha_greedy'] for r in rows):.3f}",
                                            f"{max(r['alpha_all'] for r in rows):.3f}", f"{sum(r['holds'] for r in rows)}/{len(rows)}",
                                            f"{np.median([r['greedy_over_opt'] for r in rows]):.3f} ({max(r['greedy_over_opt'] for r in rows):.2f})",
-                                           f"{sum(r['greedy'] == r['O'] for r in rows)}/{len(rows)}"]) + " \\\\")
+                                           f"{sum(r['greedy'] == r['O'] for r in rows)}/{len(rows)}",
+                                           f"{sum(r.get('opt_at_floor', False) for r in rows)} / {sum(r.get('deployed_eq_plain', True) for r in rows)} / {sum(r.get('viol_greedy', 0) + r.get('viol_all', 0) for r in rows)}"]) + " \\\\")
                     first = False
                 out.append("\\midrule")
         out[-1] = "\\bottomrule\n\\end{tabular}}"
         allrows = [r for d in Tf.values() for G in d["groups"].values() for r in G["rows"]]
         out.append(f"\\newcommand{{\\caThmMuMax}}{{{max(r['mu'] for r in allrows):.3f}}}")
         out.append(f"\\newcommand{{\\caThmHolds}}{{{sum(r['holds'] for r in allrows)}/{len(allrows)}}}")
+        out.append(f"\\newcommand{{\\caThmFloor}}{{{sum(r.get('opt_at_floor', False) for r in allrows)}}}")
+        out.append(f"\\newcommand{{\\caThmPlainDiff}}{{{sum(not r.get('deployed_eq_plain', True) for r in allrows)}}}")
+        out.append(f"\\newcommand{{\\caThmViol}}{{{sum(r.get('viol_greedy', 0) + r.get('viol_all', 0) for r in allrows)}}}")
+        out.append(f"\\newcommand{{\\caThmMaxRatio}}{{{max(r['greedy_over_opt'] for r in allrows):.1f}}}")
     else:
         pending(out, "catheorem")
-        out.append(f"\\newcommand{{\\caThmMuMax}}{{{PENDING}}}"); out.append(f"\\newcommand{{\\caThmHolds}}{{{PENDING}}}")
+        for nm_ in ["caThmMuMax", "caThmHolds", "caThmFloor", "caThmPlainDiff", "caThmViol", "caThmMaxRatio"]:
+            out.append(f"\\newcommand{{\\{nm_}}}{{{PENDING}}}")
 
     # ================================================================ decision-granularity ablation (unit = corrector / 4)
     Ru4 = load(tag="_u4")
@@ -1129,7 +1281,7 @@ def main():
     import hashlib
     man = {}
     for path in sorted(set(USED_FILES + glob.glob(f"{RESULTS_DIR}/baselines_*.json") + glob.glob(f"{RESULTS_DIR}/seeds_*.json")
-                          + glob.glob(f"{RESULTS_DIR}/assumptions_*.json") + glob.glob(f"{RESULTS_DIR}/screen_*.json")
+                          + glob.glob(f"{RESULTS_DIR}/assumptions_*.json") + glob.glob(f"{RESULTS_DIR}/screen_*.json") + glob.glob(f"{RESULTS_DIR}/theorem_*.json")
                           + glob.glob("results_ens_big/*.json") + [f"{RESULTS_DIR}/overheads.json", f"{RESULTS_DIR}/discretization_error.json"])):
         if os.path.exists(path):
             man[path] = hashlib.sha256(open(path, "rb").read()).hexdigest()

@@ -44,6 +44,7 @@ try:
         _LIB.jacobi.argtypes = [_dp, _dp, _dp, _ct.c_int, _ct.c_int, _ct.c_double, _ct.c_double, _ct.c_double, _ct.c_double, _ct.c_double]
         _LIB.sor_sweep.argtypes = [_dp, _dp, _ct.c_int, _ct.c_int, _ct.c_double, _ct.c_double, _ct.c_double, _ct.c_double, _ct.c_double, _ct.c_int]
         _LIB.ssor_sweep.argtypes = [_dp, _dp, _ct.c_int, _ct.c_int, _ct.c_double, _ct.c_double, _ct.c_double, _ct.c_double, _ct.c_double]
+        _LIB.line_gs_sweep.argtypes = [_dp, _dp, _ct.c_int, _ct.c_int, _ct.c_double, _ct.c_double, _ct.c_double, _ct.c_double, _ct.c_int]
         _LIB.apply_A_var.argtypes = [_dp, _dp, _ct.c_int, _ct.c_int, _dp, _dp, _dp, _dp, _dp]
         _LIB.residual_var.argtypes = [_dp, _dp, _dp, _ct.c_int, _ct.c_int, _dp, _dp, _dp, _dp, _dp]
         _LIB.residual_norm2_var.argtypes = [_dp, _dp, _dp, _ct.c_int, _ct.c_int, _dp, _dp, _dp, _dp, _dp]
@@ -401,6 +402,44 @@ class FastSSOR:
         return u + self._scale * y.T.reshape(r.shape)
 
 
+class FastLineGS:
+    """Lexicographic line Gauss-Seidel: u <- u + M^{-1} (f - A u) with M the block lower
+    triangle of A in the line (i-major) ordering, every line (all j for fixed i) solved
+    exactly. The line relaxation for anisotropic problems whose strong coupling is along
+    the second grid axis (the point smoothers cannot damp modes oscillatory in x_1 there).
+    Compiled kernel (cyclic Thomas per line); numpy fallback through a sparse LU of M."""
+
+    def __init__(self, pde: FastStencilPDE, forward=True):
+        self.pde = pde
+        self.forward = 1 if forward else 0
+        self.name = "linegs"
+        self.lu = None
+        if not COMPILED:
+            import scipy.sparse as sp
+            import scipy.sparse.linalg as spla
+            A = pde.sparse_A().tocoo()
+            N = pde.N
+            keep = (A.col // N) <= (A.row // N) if forward else (A.col // N) >= (A.row // N)
+            M = sp.csc_matrix((A.data[keep], (A.row[keep], A.col[keep])), shape=A.shape)
+            self.lu = spla.splu(M, permc_spec="NATURAL")
+
+    def step(self, u, f, r=None):
+        if COMPILED and u.dtype == np.float64 and u.ndim in (2, 3):
+            uc = _c64(u).copy()
+            if f is None:
+                f = self.pde.apply_A(u) + r
+            fc = _c64(f)
+            B = 1 if uc.ndim == 2 else uc.shape[0]
+            _LIB.line_gs_sweep(_ptr(uc), _ptr(fc), B, self.pde.N, self.pde.ax, self.pde.ay, self.pde.b1, self.pde.b2, self.forward)
+            return uc
+        if r is None:
+            r = self.pde.residual(u, f)
+        Bn = r.shape[0] if r.ndim == 3 else 1
+        N = self.pde.N
+        du = self.lu.solve(np.ascontiguousarray(r.reshape(Bn, N * N).T))
+        return u + du.T.reshape(r.shape)
+
+
 def make_solver(pde, spec):
     """spec strings as used by train_router.py: jacobi, jacobi_0.67, gs,
     sor_1.5, ssor (SymGS)."""
@@ -413,11 +452,13 @@ def make_solver(pde, spec):
         return FastSOR(pde, float(parts[1]) if len(parts) > 1 else 1.0)
     if parts[0] == "ssor":
         return FastSSOR(pde, float(parts[1]) if len(parts) > 1 else 1.0)
+    if parts[0] == "linegs":
+        return FastLineGS(pde)
     raise ValueError(f"unknown solver spec {spec}")
 
 
 SOLVER_NAMES = {"jacobi": "Jacobi", "jacobi_0.67": "Jacobi (0.67)", "gs": "GS",
-                "ssor": "SymGS", "sor_1.5": "SOR (1.5)", "mg": "Multigrid"}
+                "ssor": "SymGS", "sor_1.5": "SOR (1.5)", "mg": "Multigrid", "linegs": "Line GS", "mg_line": "Multigrid (line GS)"}
 
 
 # ---------------------------------------------------------------------------
@@ -550,13 +591,13 @@ class FastMultigrid:
         while N > n_coarsest:
             assert N % 2 == 0
             lp = level_pde(N, coef)
-            sm = FastGaussSeidel(lp) if smoother == "gs" else FastJacobi(lp, 0.8)
+            sm = FastGaussSeidel(lp) if smoother == "gs" else (FastLineGS(lp) if smoother == "linegs" else FastJacobi(lp, 0.8))
             self.levels.append((lp, sm))
             N //= 2
             if coef is not None:   # rediscretised coarse operator: block-averaged coefficient
                 coef = coef.reshape(N, 2, N, 2).mean(axis=(1, 3))
         self.coarse = level_pde(N, coef)
-        self.name = "mg"
+        self.name = "mg" if smoother == "gs" else f"mg_{smoother}"
         self.n_levels = len(self.levels) + 1
 
     def _vcycle(self, lvl, r):
@@ -599,6 +640,8 @@ _MAKE_SOLVER_BASIC = make_solver
 def make_solver(pde, spec):
     if spec == "mg":
         return FastMultigrid(pde)
+    if spec == "mg_line":
+        return FastMultigrid(pde, smoother="linegs")
     if spec.startswith("mg_"):           # e.g. mg_1_1 (nu1, nu2)
         _, a, b = spec.split("_")
         return FastMultigrid(pde, nu1=int(a), nu2=int(b))
@@ -607,4 +650,4 @@ def make_solver(pde, spec):
     return _MAKE_SOLVER_BASIC(pde, spec)
 
 
-SOLVER_NAMES.update({"mg": "Multigrid V(2,2)", "fft": "FFT direct"})
+SOLVER_NAMES.update({"mg": "Multigrid V(2,2)", "fft": "FFT direct", "mg_line": "Multigrid V(2,2), line GS"})

@@ -31,7 +31,7 @@ import numpy as np
 import scipy.sparse.linalg as spla
 import torch
 
-from fast_pde import FastStencilPDE, GRF2D, make_solver, FastJacobi, FastGaussSeidel, FastSOR, FastSSOR, FastMultigrid
+from fast_pde import FastStencilPDE, GRF2D, make_solver, FastJacobi, FastGaussSeidel, FastSOR, FastSSOR, FastMultigrid, FastLineGS
 from corrector import DeepONetCorrector
 from hybrid import Env
 
@@ -90,7 +90,7 @@ def C_apply_T(sv, r):
         return (sv.weight / sv.pde.diag) * r
     if isinstance(sv, MGmap):
         return sv.apply_T(r)
-    if isinstance(sv, (FastGaussSeidel, FastSOR)):
+    if isinstance(sv, (FastGaussSeidel, FastSOR, FastLineGS)):
         return sv.lu.solve(rr, trans="T").reshape(r.shape)
     if isinstance(sv, FastSSOR):
         y = sv._lu_up.solve(rr, trans="T")
