@@ -1,4 +1,10 @@
 {
+ "results/Poisson_128_gs.json": "52919563ff58668d5d840fbdc9a4c2f41a40e0bfd99aec46fd898bce50c3e661",
+ "results/Poisson_128_jacobi.json": "a6b663ada6d577965415081ecf7742e7a6a8d193c24a85335814e193f5b34a3f",
+ "results/Poisson_128_jacobi_0.67.json": "16b70d6b7151bf64ec705ed90688192b39e377b5bd1b48b49d21bde35ffc4805",
+ "results/Poisson_128_mg.json": "724150280705e3ee6a3075386348319bf457f666c3c948ee4b545cc47174bafc",
+ "results/Poisson_128_sor_1.5.json": "87d35c16f137e7a989ea4b7268abfdb4118e6a1a713950c7a9bf598f5ec0e2de",
+ "results/Poisson_128_ssor.json": "51a47fac8c2ca79dcd3dc2eb22d33dc7dbe7a3a2f6e99b6fd9b637a7a68e4e5a",
  "results_dev/AnisoDiff_128_ens_jacobi+gs+ssor+jacobi_0.67+sor_1.5.json": "16323f85fa7df61538a54705a1611c1c0f4187fdce4ba0bbe1e6fc94eb72d888",
  "results_dev/AnisoDiff_128_ens_jacobi+gs+ssor+jacobi_0.67.json": "5efe3697f93a35275461ef37960282d533ffd11f34ab59461fb41572af6fe4b2",
  "results_dev/AnisoDiff_128_ens_jacobi+gs+ssor.json": "8f74450a8a6661549c6b436631f8bda9257d92be8e248f4c2b1b3d6ad0c0fb1e",
