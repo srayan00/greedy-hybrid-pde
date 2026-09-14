@@ -698,7 +698,8 @@ def main():
                         tbh = times(bsh[1], tkey(bsh[3], bsh[3]["h2"]), field="t_wu")
                         nest_stats.append((eq, N, members, paired_speedup(tb, times(Rr, key8, field="t_wu"))[0],
                                            wilcoxon_p(tb, times(Rr, key8, field="t_wu")),
-                                           paired_speedup(tbh, times(Rr, keyh, field="t_wu"))[0]))
+                                           paired_speedup(tbh, times(Rr, keyh, field="t_wu"))[0],
+                                           paired_speedup(tbo, times(Ro, key8, field="t_wu"))[0]))
                     else:
                         row += ["(best single)" if members == best_single[0] else "--", "--"]
                     out.append(" & ".join(row) + " \\\\")
@@ -715,9 +716,12 @@ def main():
             out.append(f"\\newcommand{{\\caNestMaxRatio}}{{{fmt_sp(max(s[3] for s in nest_stats))}}}")
             out.append(f"\\newcommand{{\\caNestMinRatioH}}{{{fmt_sp(min(s[5] for s in nest_stats))}}}")
             out.append(f"\\newcommand{{\\caNestMaxRatioH}}{{{fmt_sp(max(s[5] for s in nest_stats))}}}")
+            out.append(f"\\newcommand{{\\caNestOrMinRatio}}{{{fmt_sp(min(s[6] for s in nest_stats))}}}")
+            out.append(f"\\newcommand{{\\caNestOrMaxRatio}}{{{fmt_sp(max(s[6] for s in nest_stats))}}}")
+            out.append(f"\\newcommand{{\\caNestOrWins}}{{{sum(1 for s in nest_stats if s[6] >= 1.05)}}}")
     else:
         pending(out, "caensnest")
-        for name, val in [("caNestNum", PENDING), ("caNestWins", PENDING), ("caNestLosses", PENDING), ("caNestSpMin", PENDING), ("caNestSpMax", PENDING), ("caNestMinRatio", PENDING), ("caNestMaxRatio", PENDING), ("caNestMinRatioH", PENDING), ("caNestMaxRatioH", PENDING)]:
+        for name, val in [("caNestNum", PENDING), ("caNestWins", PENDING), ("caNestLosses", PENDING), ("caNestSpMin", PENDING), ("caNestSpMax", PENDING), ("caNestMinRatio", PENDING), ("caNestMaxRatio", PENDING), ("caNestMinRatioH", PENDING), ("caNestMaxRatioH", PENDING), ("caNestOrMinRatio", PENDING), ("caNestOrMaxRatio", PENDING), ("caNestOrWins", PENDING)]:
             out.append(f"\\newcommand{{\\{name}}}{{{val}}}")
 
     # ---- oracle-level screening of all subsets (screen_ensembles.py)

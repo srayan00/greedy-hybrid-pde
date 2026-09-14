@@ -486,16 +486,61 @@ AnisoDiff & Jacobi & 1.27\,ms & 705\,$\mu$s$_{\tau{=}50,\,t_0{=}0}$ & 739\,$\mu$
 \newcommand{\caVsMgEnsMax}{1.00$\times$}
 \newcommand{\caFftRatioMin}{2.97$\times$}
 \newcommand{\caFftRatioMax}{3.12$\times$}
-\newcommand{\caensnest}{\begin{tabular}{c}\textbf{[results pending: confirmatory run in progress]}\end{tabular}}
-\newcommand{\caNestNum}{\textbf{[pending]}}
-\newcommand{\caNestWins}{\textbf{[pending]}}
-\newcommand{\caNestLosses}{\textbf{[pending]}}
-\newcommand{\caNestSpMin}{\textbf{[pending]}}
-\newcommand{\caNestSpMax}{\textbf{[pending]}}
-\newcommand{\caNestMinRatio}{\textbf{[pending]}}
-\newcommand{\caNestMaxRatio}{\textbf{[pending]}}
-\newcommand{\caNestMinRatioH}{\textbf{[pending]}}
-\newcommand{\caNestMaxRatioH}{\textbf{[pending]}}
+\newcommand{\caensnest}{
+\begin{tabular}{lllccccccccccc}
+\toprule
+& & & \multicolumn{3}{c}{$\varepsilon = h^2$} & \multicolumn{3}{c}{$\varepsilon = 10^{-6}$} & \multicolumn{3}{c}{$\varepsilon = 10^{-8}$} & \multicolumn{2}{c}{$\varepsilon = 10^{-8}$: vs.\ best single solver} \\
+\cmidrule(lr){4-6}\cmidrule(lr){7-9}\cmidrule(lr){10-12}\cmidrule(lr){13-14}
+Equation & $N$ & $\mathcal{W}$ & router & router (WU) & oracle (WU) & router & router (WU) & oracle (WU) & router & router (WU) & oracle (WU) & router & oracle \\ \midrule
+Poisson & $128^2$ & $\{Jacobi\}$ & 919\,$\mu$s & 624\,$\mu$s & \textit{614\,$\mu$s} & 1.16\,ms & 702\,$\mu$s & \textit{691\,$\mu$s} & 23.1\,ms & 15.6\,ms & \textit{15.4\,ms} & -- & -- \\
+ &  & $\{GS\}$ & 925\,$\mu$s & 624\,$\mu$s & \textit{614\,$\mu$s} & 1.16\,ms & 826\,$\mu$s & \textit{891\,$\mu$s} & 2.60\,ms & 1.84\,ms & \textit{1.82\,ms} & -- & -- \\
+ &  & $\{SymGS\}$ & 912\,$\mu$s & 625\,$\mu$s & \textit{614\,$\mu$s} & 1.11\,ms & 780\,$\mu$s & \textit{848\,$\mu$s} & 2.56\,ms & 1.86\,ms & \textit{1.84\,ms} & -- & -- \\
+ &  & $\{Jacobi (0.67)\}$ & 929\,$\mu$s & 625\,$\mu$s & \textit{615\,$\mu$s} & 1.11\,ms & 718\,$\mu$s & \textit{738\,$\mu$s} & 2.98\,ms & 1.84\,ms & \textit{1.82\,ms} & (best single) & -- \\
+ &  & $\{SOR (1.5)\}$ & 916\,$\mu$s & 624\,$\mu$s & \textit{614\,$\mu$s} & 1.34\,ms & 1.00\,ms & \textit{1.14\,ms} & 2.97\,ms & 2.23\,ms & \textit{2.21\,ms} & -- & -- \\
+ &  & $\{Jacobi, GS\}$ & 919\,$\mu$s & 624\,$\mu$s & \textit{614\,$\mu$s} & 1.07\,ms & 686\,$\mu$s & \textit{691\,$\mu$s} & 3.08\,ms & 1.89\,ms & \textit{1.87\,ms} & 0.97$\times$ (slower, $<10^{-10}$) & 0.97$\times$ (slower, $10^{-8}$) \\
+ &  & $\{Jacobi, Jacobi (0.67)\}$ & 974\,$\mu$s & 626\,$\mu$s & \textit{614\,$\mu$s} & 1.17\,ms & 734\,$\mu$s & \textit{738\,$\mu$s} & 3.19\,ms & 1.84\,ms & \textit{1.82\,ms} & 1.00$\times$ (slower, $10^{-9}$) & 1.00$\times$ (0.001) \\
+ &  & $\{Jacobi, GS, SymGS\}$ & 912\,$\mu$s & 624\,$\mu$s & \textit{614\,$\mu$s} & 1.06\,ms & 686\,$\mu$s & \textit{691\,$\mu$s} & 3.06\,ms & 1.92\,ms & \textit{1.86\,ms} & 0.96$\times$ (slower, $<10^{-10}$) & 0.98$\times$ (slower, $10^{-8}$) \\
+ &  & $\{Jacobi, Jacobi (0.67), GS\}$ & 899\,$\mu$s & 626\,$\mu$s & \textit{614\,$\mu$s} & 1.17\,ms & 827\,$\mu$s & \textit{738\,$\mu$s} & 2.70\,ms & 1.85\,ms & \textit{1.82\,ms} & 1.00$\times$ (slower, $10^{-9}$) & 1.00$\times$ (0.001) \\
+ &  & $\{Jacobi, GS, SymGS, Jacobi (0.67)\}$ & 888\,$\mu$s & 624\,$\mu$s & \textit{614\,$\mu$s} & 991\,$\mu$s & 694\,$\mu$s & \textit{738\,$\mu$s} & 2.89\,ms & 1.87\,ms & \textit{1.82\,ms} & 0.99$\times$ (slower, $10^{-10}$) & 1.00$\times$ (0.001) \\
+ &  & $\{Jacobi, GS, SymGS, Jacobi (0.67), SOR (1.5)\}$ & 922\,$\mu$s & 624\,$\mu$s & \textit{614\,$\mu$s} & 1.17\,ms & 778\,$\mu$s & \textit{753\,$\mu$s} & 2.73\,ms & 1.92\,ms & \textit{1.82\,ms} & 0.96$\times$ (slower, $<10^{-10}$) & 1.00$\times$ (0.739) \\
+\midrule
+Convection--diffusion & $128^2$ & $\{Jacobi\}$ & 922\,$\mu$s & 628\,$\mu$s & \textit{618\,$\mu$s} & 1.43\,ms & 1.23\,ms & \textit{1.22\,ms} & 42.1\,ms & 27.6\,ms & \textit{27.4\,ms} & -- & -- \\
+ &  & $\{GS\}$ & 919\,$\mu$s & 627\,$\mu$s & \textit{616\,$\mu$s} & 1.24\,ms & 907\,$\mu$s & \textit{1.22\,ms} & 2.53\,ms & 1.86\,ms & \textit{1.84\,ms} & -- & -- \\
+ &  & $\{SymGS\}$ & 918\,$\mu$s & 636\,$\mu$s & \textit{626\,$\mu$s} & 1.14\,ms & 877\,$\mu$s & \textit{1.24\,ms} & 2.56\,ms & 1.90\,ms & \textit{1.88\,ms} & -- & -- \\
+ &  & $\{Jacobi (0.67)\}$ & 934\,$\mu$s & 626\,$\mu$s & \textit{616\,$\mu$s} & 1.14\,ms & 756\,$\mu$s & \textit{787\,$\mu$s} & 2.71\,ms & 1.84\,ms & \textit{1.82\,ms} & (best single) & -- \\
+ &  & $\{SOR (1.5)\}$ & 910\,$\mu$s & 632\,$\mu$s & \textit{622\,$\mu$s} & 1.55\,ms & 1.20\,ms & \textit{1.23\,ms} & 2.81\,ms & 2.19\,ms & \textit{2.16\,ms} & -- & -- \\
+ &  & $\{Jacobi, GS\}$ & 927\,$\mu$s & 627\,$\mu$s & \textit{617\,$\mu$s} & 1.25\,ms & 908\,$\mu$s & \textit{1.22\,ms} & 2.96\,ms & 1.89\,ms & \textit{1.93\,ms} & 0.97$\times$ (slower, $<10^{-10}$) & 0.94$\times$ (slower, $10^{-10}$) \\
+ &  & $\{Jacobi, Jacobi (0.67)\}$ & 950\,$\mu$s & 628\,$\mu$s & \textit{617\,$\mu$s} & 1.26\,ms & 791\,$\mu$s & \textit{787\,$\mu$s} & 2.86\,ms & 1.84\,ms & \textit{1.83\,ms} & 1.00$\times$ (slower, $10^{-5}$) & 1.00$\times$ (slower, $<10^{-10}$) \\
+ &  & $\{Jacobi, GS, SymGS\}$ & 905\,$\mu$s & 631\,$\mu$s & \textit{620\,$\mu$s} & 1.19\,ms & 911\,$\mu$s & \textit{1.22\,ms} & 3.10\,ms & 1.95\,ms & \textit{1.90\,ms} & 0.94$\times$ (slower, $<10^{-10}$) & 0.96$\times$ (slower, $<10^{-10}$) \\
+ &  & $\{Jacobi, Jacobi (0.67), GS\}$ & 954\,$\mu$s & 628\,$\mu$s & \textit{617\,$\mu$s} & 1.26\,ms & 838\,$\mu$s & \textit{787\,$\mu$s} & 2.67\,ms & 1.86\,ms & \textit{1.82\,ms} & 0.99$\times$ (slower, $10^{-7}$) & 1.00$\times$ (slower, $<10^{-10}$) \\
+ &  & $\{Jacobi, GS, SymGS, Jacobi (0.67)\}$ & 894\,$\mu$s & 629\,$\mu$s & \textit{619\,$\mu$s} & 1.22\,ms & 910\,$\mu$s & \textit{790\,$\mu$s} & 2.99\,ms & 1.94\,ms & \textit{1.83\,ms} & 0.95$\times$ (slower, $<10^{-10}$) & 1.00$\times$ (slower, $<10^{-10}$) \\
+ &  & $\{Jacobi, GS, SymGS, Jacobi (0.67), SOR (1.5)\}$ & 917\,$\mu$s & 630\,$\mu$s & \textit{620\,$\mu$s} & 1.22\,ms & 862\,$\mu$s & \textit{798\,$\mu$s} & 2.68\,ms & 1.87\,ms & \textit{1.85\,ms} & 0.98$\times$ (slower, $<10^{-10}$) & 0.99$\times$ (slower, $<10^{-10}$) \\
+\midrule
+Anisotropic diffusion & $128^2$ & $\{Jacobi\}$ & 917\,$\mu$s & 629\,$\mu$s & \textit{619\,$\mu$s} & 1.14\,ms & 716\,$\mu$s & \textit{706\,$\mu$s} & 5.23\,ms & 3.07\,ms & \textit{3.05\,ms} & -- & -- \\
+ &  & $\{GS\}$ & 921\,$\mu$s & 632\,$\mu$s & \textit{622\,$\mu$s} & 1.33\,ms & 934\,$\mu$s & \textit{899\,$\mu$s} & 2.78\,ms & 2.06\,ms & \textit{1.99\,ms} & -- & -- \\
+ &  & $\{SymGS\}$ & 950\,$\mu$s & 629\,$\mu$s & \textit{619\,$\mu$s} & 1.28\,ms & 864\,$\mu$s & \textit{853\,$\mu$s} & 2.67\,ms & 1.91\,ms & \textit{1.85\,ms} & -- & -- \\
+ &  & $\{Jacobi (0.67)\}$ & 923\,$\mu$s & 630\,$\mu$s & \textit{620\,$\mu$s} & 1.20\,ms & 780\,$\mu$s & \textit{755\,$\mu$s} & 2.69\,ms & 1.86\,ms & \textit{1.85\,ms} & (best single) & -- \\
+ &  & $\{SOR (1.5)\}$ & 911\,$\mu$s & 630\,$\mu$s & \textit{620\,$\mu$s} & 1.45\,ms & 1.03\,ms & \textit{972\,$\mu$s} & 3.37\,ms & 2.46\,ms & \textit{2.31\,ms} & -- & -- \\
+ &  & $\{Jacobi, GS\}$ & 919\,$\mu$s & 630\,$\mu$s & \textit{620\,$\mu$s} & 1.20\,ms & 776\,$\mu$s & \textit{708\,$\mu$s} & 3.03\,ms & 1.97\,ms & \textit{1.90\,ms} & 0.88$\times$ (slower, $<10^{-10}$) & 0.98$\times$ (slower, $10^{-5}$) \\
+ &  & $\{Jacobi, Jacobi (0.67)\}$ & 925\,$\mu$s & 630\,$\mu$s & \textit{619\,$\mu$s} & 1.11\,ms & 749\,$\mu$s & \textit{707\,$\mu$s} & 2.85\,ms & 1.86\,ms & \textit{1.84\,ms} & 1.00$\times$ (slower, 0.104) & 1.00$\times$ (0.095) \\
+ &  & $\{Jacobi, GS, SymGS\}$ & 924\,$\mu$s & 630\,$\mu$s & \textit{620\,$\mu$s} & 1.14\,ms & 725\,$\mu$s & \textit{707\,$\mu$s} & 3.27\,ms & 1.97\,ms & \textit{1.89\,ms} & 0.85$\times$ (slower, $<10^{-10}$) & 0.98$\times$ (slower, $10^{-5}$) \\
+ &  & $\{Jacobi, Jacobi (0.67), GS\}$ & 926\,$\mu$s & 631\,$\mu$s & \textit{620\,$\mu$s} & 1.11\,ms & 719\,$\mu$s & \textit{708\,$\mu$s} & 2.92\,ms & 1.87\,ms & \textit{1.85\,ms} & 0.97$\times$ (slower, $10^{-9}$) & 1.00$\times$ (slower, 0.005) \\
+ &  & $\{Jacobi, GS, SymGS, Jacobi (0.67)\}$ & 966\,$\mu$s & 630\,$\mu$s & \textit{620\,$\mu$s} & 1.19\,ms & 754\,$\mu$s & \textit{707\,$\mu$s} & 3.22\,ms & 1.88\,ms & \textit{1.85\,ms} & 0.98$\times$ (slower, $10^{-10}$) & 1.00$\times$ (0.366) \\
+ &  & $\{Jacobi, GS, SymGS, Jacobi (0.67), SOR (1.5)\}$ & 913\,$\mu$s & 630\,$\mu$s & \textit{620\,$\mu$s} & 1.28\,ms & 882\,$\mu$s & \textit{729\,$\mu$s} & 2.81\,ms & 1.95\,ms & \textit{1.85\,ms} & 0.80$\times$ (slower, $<10^{-10}$) & 1.00$\times$ (0.964) \\
+\bottomrule
+\end{tabular}}
+\newcommand{\caNestNum}{18}
+\newcommand{\caNestWins}{0}
+\newcommand{\caNestLosses}{5}
+\newcommand{\caNestSpMin}{0.80$\times$}
+\newcommand{\caNestSpMax}{1.00$\times$}
+\newcommand{\caNestMinRatio}{0.80$\times$}
+\newcommand{\caNestMaxRatio}{1.00$\times$}
+\newcommand{\caNestMinRatioH}{0.99$\times$}
+\newcommand{\caNestMaxRatioH}{1.00$\times$}
+\newcommand{\caNestOrMinRatio}{0.94$\times$}
+\newcommand{\caNestOrMaxRatio}{1.00$\times$}
+\newcommand{\caNestOrWins}{0}
 \newcommand{\caensscreen}{
 \begin{tabular}{llcccccccc}
 \toprule
@@ -700,6 +745,12 @@ Poisson & $128^2$ & $\{\mathrm{NO}, \text{Jacobi}\}$ & \textbf{2.68$\times$ ($<1
  & $128^2$ & $\{\mathrm{NO}, \text{SymGS}\}$ & \textbf{9.21$\times$ ($<10^{-10}$)} & \textbf{2.34$\times$ ($<10^{-10}$)} & \textbf{3.90$\times$ ($<10^{-10}$)} & 0.96$\times$ (slower, $10^{-5}$) \\
  & $128^2$ & $\{\mathrm{NO}, \text{SOR (1.5)}\}$ & \textbf{10.3$\times$ ($<10^{-10}$)} & \textbf{3.22$\times$ ($<10^{-10}$)} & \textbf{4.70$\times$ ($<10^{-10}$)} & 0.96$\times$ (slower, $10^{-8}$) \\
  & $128^2$ & $\{\mathrm{NO}, \text{Multigrid}\}$ & \textbf{1.96$\times$ ($<10^{-10}$)} & \textbf{1.88$\times$ ($<10^{-10}$)} & 1.00$\times$ (0.138) & 0.97$\times$ (slower, $<10^{-10}$) \\
+ & $128^2$ & $\{Jacobi, GS\}$ ($10^{-8}$, work units) & -- & 0.99$\times$ (slower, $<10^{-10}$) & 1.00$\times$ (slower, 0.020) & 0.99$\times$ (slower, $10^{-6}$) \\
+ & $128^2$ & $\{Jacobi, GS, SymGS\}$ ($10^{-8}$, work units) & -- & 0.99$\times$ (slower, 0.006) & 0.99$\times$ (slower, $10^{-6}$) & 0.80$\times$ (slower, $10^{-9}$) \\
+ & $128^2$ & $\{Jacobi, Jacobi (0.67)\}$ ($10^{-8}$, work units) & 1.00$\times$ (0.903) & 0.99$\times$ (slower, $<10^{-10}$) & 1.00$\times$ (slower, $10^{-9}$) & 0.99$\times$ (slower, $10^{-10}$) \\
+ & $128^2$ & $\{Jacobi, Jacobi (0.67), GS\}$ ($10^{-8}$, work units) & 0.92$\times$ (slower, $10^{-7}$) & 0.98$\times$ (slower, $10^{-8}$) & 1.00$\times$ (slower, $10^{-9}$) & 0.98$\times$ (slower, $10^{-10}$) \\
+ & $128^2$ & $\{Jacobi, GS, SymGS, Jacobi (0.67)\}$ ($10^{-8}$, work units) & -- & 0.91$\times$ (slower, $<10^{-10}$) & 0.98$\times$ (slower, $10^{-10}$) & 0.94$\times$ (slower, $<10^{-10}$) \\
+ & $128^2$ & $\{Jacobi, GS, SymGS, Jacobi (0.67), SOR (1.5)\}$ ($10^{-8}$, work units) & -- & 0.79$\times$ (slower, $<10^{-10}$) & 0.96$\times$ (slower, $<10^{-10}$) & 0.73$\times$ (slower, $<10^{-10}$) \\
 \midrule
 Convection--diffusion & $128^2$ & $\{\mathrm{NO}, \text{Jacobi}\}$ & \textbf{2.95$\times$ ($<10^{-10}$)} & \textbf{1.34$\times$ ($<10^{-10}$)} & \textbf{1.75$\times$ ($<10^{-10}$)} & 0.97$\times$ (slower, 0.187) \\
  & $128^2$ & $\{\mathrm{NO}, \text{Jacobi (0.67)}\}$ & \textbf{3.14$\times$ ($<10^{-10}$)} & \textbf{1.32$\times$ ($10^{-10}$)} & \textbf{1.69$\times$ ($<10^{-10}$)} & 0.96$\times$ (slower, $10^{-10}$) \\
@@ -707,12 +758,24 @@ Convection--diffusion & $128^2$ & $\{\mathrm{NO}, \text{Jacobi}\}$ & \textbf{2.9
  & $128^2$ & $\{\mathrm{NO}, \text{SymGS}\}$ & \textbf{8.70$\times$ ($<10^{-10}$)} & \textbf{2.40$\times$ ($<10^{-10}$)} & \textbf{4.09$\times$ ($<10^{-10}$)} & 0.95$\times$ (slower, $<10^{-10}$) \\
  & $128^2$ & $\{\mathrm{NO}, \text{SOR (1.5)}\}$ & \textbf{8.89$\times$ ($<10^{-10}$)} & \textbf{2.40$\times$ ($<10^{-10}$)} & \textbf{5.94$\times$ ($<10^{-10}$)} & 0.97$\times$ (slower, 0.122) \\
  & $128^2$ & $\{\mathrm{NO}, \text{Multigrid}\}$ & \textbf{2.07$\times$ ($<10^{-10}$)} & \textbf{2.01$\times$ ($<10^{-10}$)} & 0.99$\times$ (slower, 0.671) & 0.97$\times$ (slower, $10^{-10}$) \\
+ & $128^2$ & $\{Jacobi, GS\}$ ($10^{-8}$, work units) & -- & 0.78$\times$ (slower, $<10^{-10}$) & 1.00$\times$ (0.037) & 0.99$\times$ (slower, 0.002) \\
+ & $128^2$ & $\{Jacobi, GS, SymGS\}$ ($10^{-8}$, work units) & -- & 0.96$\times$ (slower, $10^{-8}$) & 0.99$\times$ (slower, 0.194) & 0.99$\times$ (slower, $10^{-8}$) \\
+ & $128^2$ & $\{Jacobi, Jacobi (0.67)\}$ ($10^{-8}$, work units) & 1.08$\times$ ($<10^{-10}$) & 0.99$\times$ (slower, $<10^{-10}$) & 1.00$\times$ (slower, $10^{-5}$) & 0.99$\times$ (slower, $10^{-8}$) \\
+ & $128^2$ & $\{Jacobi, Jacobi (0.67), GS\}$ ($10^{-8}$, work units) & 0.99$\times$ (slower, 0.155) & 0.90$\times$ (slower, $<10^{-10}$) & 0.99$\times$ (slower, $10^{-7}$) & 0.98$\times$ (slower, $<10^{-10}$) \\
+ & $128^2$ & $\{Jacobi, GS, SymGS, Jacobi (0.67)\}$ ($10^{-8}$, work units) & -- & 0.82$\times$ (slower, $<10^{-10}$) & 0.95$\times$ (slower, $<10^{-10}$) & 0.90$\times$ (slower, $<10^{-10}$) \\
+ & $128^2$ & $\{Jacobi, GS, SymGS, Jacobi (0.67), SOR (1.5)\}$ ($10^{-8}$, work units) & -- & 0.93$\times$ (slower, $10^{-10}$) & 0.98$\times$ (slower, $<10^{-10}$) & 0.96$\times$ (slower, $<10^{-10}$) \\
 \midrule
 Anisotropic diffusion & $128^2$ & $\{\mathrm{NO}, \text{Jacobi}\}$ & \textbf{3.16$\times$ ($<10^{-10}$)} & \textbf{1.25$\times$ ($10^{-9}$)} & \textbf{1.74$\times$ ($<10^{-10}$)} & 0.96$\times$ (slower, $10^{-7}$) \\
  & $128^2$ & $\{\mathrm{NO}, \text{Jacobi (0.67)}\}$ & \textbf{3.31$\times$ ($<10^{-10}$)} & \textbf{1.34$\times$ ($<10^{-10}$)} & \textbf{1.77$\times$ ($<10^{-10}$)} & 0.96$\times$ (slower, $10^{-9}$) \\
  & $128^2$ & $\{\mathrm{NO}, \text{GS}\}$ & \textbf{7.61$\times$ ($<10^{-10}$)} & \textbf{1.99$\times$ ($<10^{-10}$)} & \textbf{2.95$\times$ ($<10^{-10}$)} & 0.96$\times$ (slower, $10^{-7}$) \\
  & $128^2$ & $\{\mathrm{NO}, \text{SymGS}\}$ & \textbf{11.8$\times$ ($<10^{-10}$)} & \textbf{2.72$\times$ ($<10^{-10}$)} & \textbf{3.91$\times$ ($<10^{-10}$)} & 0.93$\times$ (slower, $10^{-8}$) \\
  & $128^2$ & $\{\mathrm{NO}, \text{SOR (1.5)}\}$ & \textbf{7.36$\times$ ($<10^{-10}$)} & \textbf{2.04$\times$ ($<10^{-10}$)} & \textbf{3.08$\times$ ($<10^{-10}$)} & 0.95$\times$ (slower, $10^{-8}$) \\
+ & $128^2$ & $\{Jacobi, GS\}$ ($10^{-8}$, work units) & -- & 0.99$\times$ (slower, $10^{-4}$) & 1.00$\times$ (0.001) & 0.95$\times$ (slower, $<10^{-10}$) \\
+ & $128^2$ & $\{Jacobi, GS, SymGS\}$ ($10^{-8}$, work units) & -- & 0.99$\times$ (slower, 0.001) & 0.97$\times$ (slower, $10^{-5}$) & 0.92$\times$ (slower, $<10^{-10}$) \\
+ & $128^2$ & $\{Jacobi, Jacobi (0.67)\}$ ($10^{-8}$, work units) & \textbf{1.14$\times$ ($<10^{-10}$)} & 0.99$\times$ (slower, $<10^{-10}$) & 1.00$\times$ (slower, 0.104) & 0.99$\times$ (slower, 0.024) \\
+ & $128^2$ & $\{Jacobi, Jacobi (0.67), GS\}$ ($10^{-8}$, work units) & \textbf{1.15$\times$ ($<10^{-10}$)} & 0.99$\times$ (slower, $10^{-6}$) & 0.97$\times$ (slower, $10^{-9}$) & 0.99$\times$ (slower, $10^{-9}$) \\
+ & $128^2$ & $\{Jacobi, GS, SymGS, Jacobi (0.67)\}$ ($10^{-8}$, work units) & -- & 0.95$\times$ (slower, $10^{-9}$) & 0.98$\times$ (slower, $10^{-10}$) & 0.99$\times$ (slower, $10^{-10}$) \\
+ & $128^2$ & $\{Jacobi, GS, SymGS, Jacobi (0.67), SOR (1.5)\}$ ($10^{-8}$, work units) & -- & 0.95$\times$ (slower, $10^{-9}$) & 0.80$\times$ (slower, $<10^{-10}$) & 0.90$\times$ (slower, $<10^{-10}$) \\
 \bottomrule
 \end{tabular}}
 \newcommand{\caLstmMs}{\textbf{[pending]}}
