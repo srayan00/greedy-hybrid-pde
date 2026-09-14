@@ -57,32 +57,51 @@ the original code; nothing above this section is needed for it.
 
 ### What is measured
 
-Three linear PDEs on the periodic unit square with the paper's hierarchical
-GRF forcing, discretised by the same 5-point stencil as `pde.py`:
-Poisson, convection--diffusion (velocity (20, 20)), anisotropic diffusion and variable-coefficient diffusion (a fixed smooth coefficient field of contrast 10, `FastStencilPDE(..., equation="VarCoeff")`, no Fourier diagonalisation; reference solutions by sparse LU)
-(`-0.01 u_xx - u_yy = f`). Grids 128x128 (all experiments), 256x256 and
-512x512 (scaling). For each classical solver (Jacobi, damped Jacobi 0.67, GS,
-SymGS, SOR 1.5, and geometric multigrid V(2,2)) the ensemble is
-{solver, DeepONet corrector}; policies compared:
+Four linear PDEs on the periodic unit square with the paper's hierarchical
+GRF forcing (real white noise filtered in Fourier space, Nyquist modes
+excluded; instances drawn sequentially so that seed + count reproduce a
+prefix), discretised by the same 5-point stencil as `pde.py`: Poisson,
+convection--diffusion (velocity (20, 20)), anisotropic diffusion
+(`-0.01 u_xx - u_yy = f`) and variable-coefficient diffusion (a fixed smooth
+coefficient field of contrast 10, grid-independent, reference solutions by
+sparse LU). Grids 128x128 (all experiments), 256x256 and 512x512 (isotropic
+equations only at 512^2). For each classical solver (Jacobi, damped Jacobi
+0.67, GS, SymGS, SOR 1.5, geometric multigrid V(2,2); line GS for anisotropic
+diffusion) the ensemble is {solver, DeepONet corrector}; policies compared:
 
-* `classical`  solver alone
-* `hints<tau>` HINTS: corrector every tau-th iteration (tau in {5, 10, 25, 50})
-* `greedy`     paper's Algorithm 1 on single iterations (cost-agnostic oracle)
-* `oracle`     Algorithm 1 on cost-equalised macro-actions (cost-aware oracle)
-* `router`     the learned cost-aware router (deployable; pays for its decisions)
+* `classical`   solver alone
+* `hints<tau>`  HINTS: corrector every tau-th iteration, first at tau
+                (tau in {2, 5, 10, 15, 25, 50}; 15 is the 2-D period of the HINTS paper)
+* `phints<tau>` phase-shifted HINTS: first call at iteration 0 (tau in {5, 10, 15, 25, 50})
+* `oneshot`     corrector once at iteration 0, then the solver only
+* `decay<th>`   residual-decay rule at the router's granularity (th in {0.9, 0.95, 0.98})
+* `greedy`      paper's Algorithm 1 on single iterations (cost-agnostic oracle)
+* `oracle`      Algorithm 1 on cost-equalised macro-actions (cost-aware oracle)
+* `router`      the learned cost-aware router (deployable; pays for its decisions)
+* `base:<m>`    classical baselines without corrector, timed in the same replay
+                loop: fft, mg (and mg_line for anisotropic diffusion), lu
+                (variable coefficients), cg, pcg_ssor, pcg_mg, bicgstab,
+                bicgstab_mg, gmres
 
-plus strong classical baselines (FFT direct solve, multigrid alone, CG,
-PCG-SymGS, PCG-multigrid, BiCGSTAB, BiCGSTAB-multigrid, GMRES(20)), solver
-ensembles, per-operation overheads, training-cost amortisation, and paired
-significance tests with five router-training seeds.
+plus solver ensembles (nested and larger sets, with every member's pairwise
+router evaluated in the same session), per-operation overheads,
+training-cost amortisation, five router-training seeds, an exhaustive
+short-horizon check of Theorem 4.1, numerical checks of the theory
+assumptions and a discretisation-error study on the confirmatory instances.
 
 Metric: for every test instance the true relative error is recorded after
 every iteration (untimed pass), then the decision sequence is replayed in a
-timed pass that executes only the chosen operations (the router re-decides
-live and its feature/decision costs are charged). We report the median
-wall-clock time at which the error first drops below a tolerance, mainly
-eps = h^2 (truncation level), paired per-instance speedups, one-sided
-Wilcoxon / paired t-tests on log times, and the paper's iteration-based AUC.
+timed pass that executes only the chosen operations (residual + norm, update;
+the router re-decides live and its feature/decision costs are charged). Three
+timed replays per instance in a random order over policies and baselines,
+each after an untimed warm-up; a drift guard re-times a reference operation
+before every instance and waits while it deviates by more than 10%. We
+report the median wall-clock time at which the error first drops below a
+tolerance, mainly eps = h^2, paired per-instance speedups with bootstrap 95%
+intervals, two-sided Wilcoxon tests on log ratios with a Holm correction
+(censored runs enter at their time-to-cap on either side), paired t-tests
+on log AUC, and work units (measured per-iteration costs x executed
+operations) wherever sessions must be compared.
 
 ### Environment
 
@@ -107,20 +126,21 @@ Wilcoxon / paired t-tests on log times, and the paper's iteration-based AUC.
 | `hybrid.py` | cost-equalised macro-actions (`Env`), router features (`FeatureState`), untimed rollouts, timed replay, work-unit accounting |
 | `router.py` | numpy MLP router, batched oracle-labelled data collection, paper's cost-weighted surrogate loss, DAgger training (`fit_router`) |
 | `bench.py` | pairwise / ensemble benchmark driver (costs -> routers -> untimed + timed passes -> `results/<eq>_<N>_<solver>.json`) |
-| `baselines.py`, `bench_baselines.py` | Krylov / multigrid / FFT baselines -> `results/baselines_<eq>_<N>.json` |
+| `baselines.py` | Krylov / multigrid / FFT / sparse-LU baselines as replayable methods (`make_baseline`), timed by `bench.py` inside the same loop as the policies (`base:<m>` entries of the pairwise result files); `bench_baselines.py` is the earlier separate-session driver, no longer used |
 | `bench_overheads.py` | per-operation costs vs N (incl. the paper's LSTM router) and training times -> `results/overheads.json` |
 | `bench_seeds.py` | five-seed router retraining trials -> `results/seeds_<eq>_<N>.json` |
 | `make_usage_data.py` | untimed decision traces of all test instances (usage figures) -> `results/usage_<eq>_<N>.json` |
 | `make_tables.py`, `make_figures.py` | LaTeX tables (`paper/costaware_tables.tex`, one macro per table plus summary macros used in the text; also writes `paper/manifest.json` with the sha256 of every result file used) and figures (`paper/neurips_images/ca_*.png`) |
 | `discretization_error.py` | empirical discretisation error of the test instances (exact discrete solution vs. a 4x finer grid) -> `results/discretization_error.json` |
 | `screen_ensembles.py` | oracle-level screening of every ensemble of up to three members (work units) -> `results/screen_<eq>_<N>.json` |
-| `check_assumptions.py` | numerical verification of the theory assumptions (Lipschitz constants in the Euclidean and energy norms, spectral radii, invertibility, zero preservation, commutators, alpha(O), Thm 5.1 bounds) -> `results/assumptions_<eq>_<N>.json` |
-| `run_correctors.sh`, `run_correctors_large.sh`, `run_all.sh`, `run_phase6.sh`, `run_aniso.sh`, `run_phase7.sh`, `run_usage_large.sh`, `run_screen.sh`, `run_assumptions.sh`, `run_ens_nested.sh`, `run_retime.sh`, `run_paths.sh`, `run_paths_h2.sh` | the exact sequence of commands that produced the reported results |
+| `check_theorem.py` | exhaustive short-horizon check of Theorem 4.1 for the deployed rule (mu, alpha(O), bound, clipped optima, violations) -> `results/theorem_<eq>_<N>.json` |
+| `check_assumptions.py` | numerical checks of the theory assumptions (Lipschitz constants in the Euclidean and energy norms, spectral radii, invertibility, zero preservation, commutators, alpha(O), Thm 5.1 bounds) -> `results/assumptions_<eq>_<N>.json` |
+| `run_final.sh`, `run_varcoeff.sh`, `run_granularity.sh`, `run_all.sh` | the exact sequence of commands that produces the reported results (revision 2); the older `run_*.sh` scripts produced the development runs |
 
 ### Step-by-step replication
 
 ```
-# 0. build the compiled stencil kernels (all classical sweeps, residual, multigrid transfers) and check them
+# 0. build the compiled stencil kernels (all sweeps incl. line GS, residual + norm, multigrid transfers) and check them
 cc -O3 -shared -fPIC -o libstencil.so stencil.c     # STENCIL_NUMPY=1 forces the numpy/scipy fallback
 python validate_fast_pde.py                        # asserts against the dense reference at N=31 (rel. tol. 1e-6)
 
@@ -134,34 +154,21 @@ python corrector.py --equation Poisson   --N 512 --coarsen 8 --n_train 32000 --n
 python corrector.py --equation ConvDiff  --N 512 --coarsen 8 --n_train 32000 --n_val 1000
 python corrector.py --equation AnisoDiff --N 128 --coarsen_x 1 --coarsen_y 4
 python corrector.py --equation AnisoDiff --N 256 --coarsen_x 1 --coarsen_y 4 --n_train 48000 --n_val 1000
+#    (the variable-coefficient correctors are trained by run_varcoeff.sh)
 #    -> checkpoints/deeponet_<eq>_<N>_best.pth (validation relative error ~2e-6 is expected)
 
-# 2. everything at 128^2 for Poisson/ConvDiff (pairwise incl. multigrid pairing,
-#    ensembles, usage traces), then 256^2, 512^2, overheads and seed trials:
-./run_all.sh            # ~10 h sequential on an M4 Pro
-# 3. strong classical baselines at 128^2 (256^2 / 512^2 are inside run_all.sh)
-python bench_baselines.py --equation Poisson  --N 128 --n_test 64
-python bench_baselines.py --equation ConvDiff --N 128 --n_test 64
-# 4. larger-capacity ensemble routers (hyperparameter variant; optional)
-./run_phase6.sh
-# 5. anisotropic diffusion (correctors, pairwise, ensembles, usage, 256^2, seeds; no multigrid/Krylov
-#    baselines: point-smoothed multigrid is not competitive on this equation)
-./run_aniso.sh          # ~8 h
-# 5b. (optional) retrain the one 512^2 router that misses h^2 with more oracle rollouts
-./run_phase7.sh
-# 6. usage traces on the larger grids, ensemble screening, nested ensembles
-#    ({J} < {J, dJ} < {J, dJ, GS} with same-session pairwise baselines), theory assumptions
-./run_usage_large.sh     # ~1 h
-./run_screen.sh          # ~1.5 h
-./run_ens_nested.sh      # ~6 h (training + benchmark; live times may be inflated if other jobs run)
-./run_retime.sh          # ~3.5 h: re-time every nested cell on an idle machine (no retraining)
-./run_assumptions.sh     # ~1 h
-./run_varcoeff.sh        # ~6 h (after run_final.sh): the variable-coefficient problem, same protocol
-./run_final.sh           # ~20 h: the confirmatory study reported in the paper (compiled kernels, test seed 73,
-                         #  frozen recipes, full fixed-schedule family, 3 timed replays); results_dev/ holds the
-                         #  development runs (numpy kernels, seed 72) on which every configuration was chosen
-# 7. tables, figures, paper
-python make_tables.py   # -> paper/costaware_tables.tex
+# 2. the confirmatory study reported in the paper (~1-2 days on an M4 Pro, sequential, idle machine):
+#    run_final.sh (128^2 pairwise + same-session baselines, 128^2 ensembles, 256^2, 512^2, usage traces,
+#    seed trials, overheads, assumption / screening / theorem checks, discretisation study), then
+#    run_varcoeff.sh (variable-coefficient diffusion), then run_granularity.sh (unit = corrector / 4).
+#    Solver lists per equation are read from config/solvers_<eq> at the start of each stage; every
+#    script is fail-fast (a failing command writes logs/*.failed and stops the chain).
+nohup ./run_all.sh > logs/run_all.out 2>&1 &
+#    Development runs (numpy kernels, seed 72, earlier sampler) on which every configuration was chosen
+#    are archived in results_dev/; the first confirmatory run (before the protocol revision) in results_conf1/.
+
+# 3. tables, figures, paper
+python make_tables.py   # -> paper/costaware_tables.tex (+ paper/manifest.json with the sha256 of every result file used)
 python make_figures.py  # -> paper/neurips_images/ca_*.png
 paper/build.sh          # -> paper/neurips_2026.pdf (plain pdflatex/bibtex in a scratch dir)
 ```
@@ -183,15 +190,25 @@ runs that hit it are reported as lower bounds), `--retrain_router`,
 ### Conventions and pitfalls
 
 * The unit of cost is one corrector call; operation j is applied
-  `m_j = max(1, round(u / c_j))` times per decision; an operation dearer than
-  the unit (a multigrid cycle) is applied once and compared per unit of cost
-  (`Env.macro_score`). Costs are measured once per (equation, grid) with a
-  min-over-blocks estimator and cached in `checkpoints/costs_<eq>_<N>.json`;
-  delete the cache to re-measure on a new machine.
-* Test instances are seed 72 (same for every policy and baseline), router
-  training instances seed 555 (+ per-seed offsets in `bench_seeds.py`),
-  corrector training seed 1234. Nothing is tuned on the test set except the
-  "best fixed tau" HINTS baseline, which is deliberately optimistic.
+  `m_j = max(1, round(u / c_j))` times per decision and these macro-actions
+  are compared by their plain error (Algorithm 1; exponent 1 for every action
+  not dearer than the unit); only an operation dearer than the unit (a
+  multigrid cycle at 512^2, or the corrector in the granularity ablation) is
+  applied once and compared per unit of cost (`Env.macro_score`). Costs are
+  measured once per (equation, grid) in the exact form the replay charges
+  (update + residual + norm; median over blocks) and cached in
+  `checkpoints/costs_<eq>_<N>.json`; delete the cache to re-measure on a new
+  machine (all routers must then be retrained).
+* Confirmatory test instances are seed 73 (same for every policy and
+  baseline); every configuration choice was made on the development set,
+  seed 72. Router training instances use seed 555 (+ per-seed offsets in
+  `bench_seeds.py`), corrector training seed 1234. Two baselines are
+  deliberately optimistic and labelled as such: the "best fixed schedule" and
+  the "best residual-decay rule", both selected per cell on the test set.
+* Every result file records its provenance (git commit and dirty flag,
+  compiled-kernel and router checkpoint hashes, package versions, per-instance
+  drift ratios and load averages); `paper/manifest.json` lists the sha256 of
+  every file the tables were built from.
 * Live times include the residual evaluation of the stopping test in every
   iteration for every method. `t_wu` in the result files is a timer-free
   cross-check (measured per-iteration costs x executed operations).

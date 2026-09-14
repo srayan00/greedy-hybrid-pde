@@ -1277,6 +1277,20 @@ def main():
     else:
         pending(out, "caheldout")
 
+    # ================================================================ discretisation-error study (confirmatory instances)
+    dpath = f"{RESULTS_DIR}/discretization_error.json"
+    if os.path.exists(dpath):
+        D = json.load(open(dpath))
+        meds = [v["median"] / v["h2"] for v in D.values()]
+        mins = [min(v["rel"]) / v["h2"] for v in D.values()]
+        out.append(f"\\newcommand{{\\caDiscMedMin}}{{{min(meds):.1f}}}")
+        out.append(f"\\newcommand{{\\caDiscMedMax}}{{{max(meds):.0f}}}")
+        out.append(f"\\newcommand{{\\caDiscMinHsq}}{{{min(mins):.1f}}}")
+        out.append(f"\\newcommand{{\\caDiscN}}{{{sum(len(v['rel']) for v in D.values())}}}")
+    else:
+        for nm_ in ["caDiscMedMin", "caDiscMedMax", "caDiscMinHsq", "caDiscN"]:
+            out.append(f"\\newcommand{{\\{nm_}}}{{{PENDING}}}")
+
     # ================================================================ manifest of every artifact used
     import hashlib
     man = {}
@@ -1306,12 +1320,14 @@ def main():
         for name in ["caEnsVsPairMin", "caEnsVsPairMax", "caEnsVsSolverMin", "caEnsVsSolverMax", "caNumEns"]:
             out.append(f"\\newcommand{{\\{name}}}{{{PENDING}}}")
     for SUF in ["", "B", "C"]:
-        for name in ["caSpSolver", "caSpHints", "caSpBest", "caSpSolverDeep", "caSpHintsDeep", "caSpBestDeep", "caSpOracleRatio",
+        for name in ["caSpSolver", "caSpHints", "caSpHintsTF", "caSpBest", "caSpDecay", "caSpSolverDeep", "caSpHintsDeep", "caSpHintsTFDeep", "caSpBestDeep", "caSpDecayDeep", "caSpOracleRatio",
                      "caVsMgAll", "caVsMgDeep", "caVsKrylovAll", "caVsKrylovDeep", "caVsMgEnsAll", "caVsMgEnsDeep"]:
             for mm in ["Min", "Max"]:
                 if name + SUF + mm not in defined:
                     out.append(f"\\newcommand{{\\{name}{SUF}{mm}}}{{{PENDING}}}")
-        for name in ["caNumCells", "caCellsRouterBeatsBest", "caCellsRouterBeatsHints", "caCellsRouterBeatsBestDeep", "caCellsRouterBeatsHintsDeep", "caCellsRouterWithinBest"]:
+        for name in ["caNumCells", "caCellsRouterBeatsBest", "caCellsRouterBeatsHints", "caCellsRouterBeatsBestDeep", "caCellsRouterBeatsHintsDeep", "caCellsRouterWithinBest",
+                     "caCellsRouterBeatsDecay", "caCellsRouterBeatsDecayDeep",
+                     "caMJacobi", "caMGs", "caMMg", "caMSymGs", "caCostJacobi", "caCostGs", "caCostMg", "caCostSymGs", "caCostNo", "caCostRes"]:
             if name + SUF not in defined:
                 out.append(f"\\newcommand{{\\{name}{SUF}}}{{{PENDING}}}")
 
