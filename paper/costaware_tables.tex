@@ -296,6 +296,38 @@ $\{\mathrm{NO}, \text{Jacobi}\}$ & Solver only & $>$1.41\,s$^{\dagger 64}$ & $>$
  & Greedy oracle (Alg.~1) & 704\,$\mu$s & 705\,$\mu$s & 4.55\,ms \\
  & Cost-aware oracle & \textit{705\,$\mu$s} & \textit{715\,$\mu$s} & \textit{4.39\,ms} \\
  & Learned router (ours) & \textbf{730\,$\mu$s} & 739\,$\mu$s & 4.54\,ms \\
+\midrule
+$\{\mathrm{NO}, \text{Jacobi (0.67)}\}$ & Solver only & $>$1.41\,s$^{\dagger 64}$ & $>$1.41\,s$^{\dagger 64}$ & $>$1.41\,s$^{\dagger 64}$ \\
+ & HINTS ($\tau{=}25$) & 1.29\,ms & 1.29\,ms & 2.55\,ms \\
+ & Best fixed schedule & 704\,$\mu$s$_{\tau{=}50,\,t_0{=}0}$ & 716\,$\mu$s$_{\tau{=}50,\,t_0{=}0}$ & 2.05\,ms$_{\tau{=}10}$ \\
+ & One-shot schedule & 717\,$\mu$s & 725\,$\mu$s & $>$1.41\,s$^{\dagger 60}$ \\
+ & Greedy oracle (Alg.~1) & 711\,$\mu$s & 718\,$\mu$s & 1.97\,ms \\
+ & Cost-aware oracle & \textit{704\,$\mu$s} & \textit{710\,$\mu$s} & \textit{2.30\,ms} \\
+ & Learned router (ours) & \textbf{728\,$\mu$s} & \textbf{735\,$\mu$s} & 2.35\,ms \\
+\midrule
+$\{\mathrm{NO}, \text{GS}\}$ & Solver only & $>$3.62\,s$^{\dagger 64}$ & $>$3.62\,s$^{\dagger 64}$ & $>$3.62\,s$^{\dagger 64}$ \\
+ & HINTS ($\tau{=}25$) & 2.34\,ms & 2.34\,ms & 7.97\,ms \\
+ & Best fixed schedule & 743\,$\mu$s$_{\tau{=}10,\,t_0{=}0}$ & 749\,$\mu$s$_{\tau{=}10,\,t_0{=}0}$ & 2.43\,ms$_{\tau{=}10,\,t_0{=}0}$ \\
+ & One-shot schedule & 775\,$\mu$s & 782\,$\mu$s & 3.18\,s$^{\dagger 27}$ \\
+ & Greedy oracle (Alg.~1) & 754\,$\mu$s & 762\,$\mu$s & 3.15\,ms \\
+ & Cost-aware oracle & \textit{750\,$\mu$s} & \textit{761\,$\mu$s} & \textit{2.49\,ms} \\
+ & Learned router (ours) & \textbf{777\,$\mu$s} & \textbf{792\,$\mu$s} & \textbf{2.58\,ms} \\
+\midrule
+$\{\mathrm{NO}, \text{SymGS}\}$ & Solver only & $>$5.31\,s$^{\dagger 64}$ & $>$5.31\,s$^{\dagger 64}$ & $>$5.31\,s$^{\dagger 64}$ \\
+ & HINTS ($\tau{=}25$) & 3.08\,ms & 3.08\,ms & 6.12\,ms \\
+ & Best fixed schedule & 733\,$\mu$s$_{\tau{=}25,\,t_0{=}0}$ & 742\,$\mu$s$_{\tau{=}25,\,t_0{=}0}$ & 2.39\,ms$_{\tau{=}10,\,t_0{=}0}$ \\
+ & One-shot schedule & 755\,$\mu$s & 764\,$\mu$s & 2.68\,s$^{\dagger 5}$ \\
+ & Greedy oracle (Alg.~1) & 741\,$\mu$s & 750\,$\mu$s & 2.87\,ms \\
+ & Cost-aware oracle & \textit{742\,$\mu$s} & \textit{750\,$\mu$s} & \textit{2.23\,ms} \\
+ & Learned router (ours) & \textbf{778\,$\mu$s} & \textbf{787\,$\mu$s} & \textbf{2.39\,ms} \\
+\midrule
+$\{\mathrm{NO}, \text{SOR (1.5)}\}$ & Solver only & $>$3.57\,s$^{\dagger 64}$ & $>$3.57\,s$^{\dagger 64}$ & $>$3.57\,s$^{\dagger 64}$ \\
+ & HINTS ($\tau{=}25$) & 2.24\,ms & 2.24\,ms & 5.53\,ms \\
+ & Best fixed schedule & 679\,$\mu$s$_{\tau{=}25,\,t_0{=}0}$ & 689\,$\mu$s$_{\tau{=}25,\,t_0{=}0}$ & 2.94\,ms$_{\tau{=}25,\,t_0{=}0}$ \\
+ & One-shot schedule & 718\,$\mu$s & 726\,$\mu$s & 1.35\,s$^{\dagger 4}$ \\
+ & Greedy oracle (Alg.~1) & 690\,$\mu$s & 703\,$\mu$s & 3.38\,ms \\
+ & Cost-aware oracle & \textit{698\,$\mu$s} & \textit{701\,$\mu$s} & \textit{2.75\,ms} \\
+ & Learned router (ours) & \textbf{725\,$\mu$s} & \textbf{730\,$\mu$s} & \textbf{2.95\,ms} \\
 \bottomrule
 \end{tabular}}
 \newcommand{\caspeedaniso}{
@@ -305,6 +337,14 @@ $\{\mathrm{NO}, \text{Jacobi}\}$ & Solver only & $>$1.41\,s$^{\dagger 64}$ & $>$
 Pairing & $\varepsilon$ & vs.\ HINTS-25 & vs.\ best schedule & vs.\ one-shot \\ \midrule
 $\{\mathrm{NO}, \text{Jacobi}\}$ & $h^2$ & \textbf{1.74$\times$ ($<10^{-10}$)} & 0.96$\times$ (slower, $10^{-7}$) & 0.96$\times$ (slower, $10^{-4}$) \\
  & $10^{-8}$ & \textbf{1.73$\times$ ($<10^{-10}$)} & \textbf{1.58$\times$ ($<10^{-10}$)} & \textbf{311$\times$ ($<10^{-10}$)} \\
+$\{\mathrm{NO}, \text{Jacobi (0.67)}\}$ & $h^2$ & \textbf{1.77$\times$ ($<10^{-10}$)} & 0.96$\times$ (slower, $10^{-9}$) & 0.97$\times$ (slower, $10^{-4}$) \\
+ & $10^{-8}$ & \textbf{1.10$\times$ ($<10^{-10}$)} & \textbf{1.14$\times$ ($10^{-5}$)} & \textbf{603$\times$ ($<10^{-10}$)} \\
+$\{\mathrm{NO}, \text{GS}\}$ & $h^2$ & \textbf{2.95$\times$ ($<10^{-10}$)} & 0.96$\times$ (slower, $10^{-7}$) & 0.99$\times$ (slower, 0.032) \\
+ & $10^{-8}$ & \textbf{3.18$\times$ ($<10^{-10}$)} & 0.99$\times$ (slower, 0.892) & \textbf{1078$\times$ ($<10^{-10}$)} \\
+$\{\mathrm{NO}, \text{SymGS}\}$ & $h^2$ & \textbf{3.91$\times$ ($<10^{-10}$)} & 0.93$\times$ (slower, $10^{-8}$) & 0.96$\times$ (slower, $10^{-4}$) \\
+ & $10^{-8}$ & \textbf{2.56$\times$ ($<10^{-10}$)} & 1.03$\times$ (0.055) & \textbf{1217$\times$ ($<10^{-10}$)} \\
+$\{\mathrm{NO}, \text{SOR (1.5)}\}$ & $h^2$ & \textbf{3.08$\times$ ($<10^{-10}$)} & 0.95$\times$ (slower, $10^{-8}$) & 0.99$\times$ (slower, 0.021) \\
+ & $10^{-8}$ & \textbf{2.03$\times$ ($<10^{-10}$)} & 1.01$\times$ (0.035) & \textbf{496$\times$ ($<10^{-10}$)} \\
 \bottomrule
 \end{tabular}}
 \newcommand{\causageaniso}{
@@ -313,6 +353,10 @@ $\{\mathrm{NO}, \text{Jacobi}\}$ & $h^2$ & \textbf{1.74$\times$ ($<10^{-10}$)} &
 & \multicolumn{3}{c}{$128\times128$} \\ \cmidrule(lr){2-4}
 Pairing & HINTS-25 & oracle & router \\ \midrule
 $\{\mathrm{NO}, \text{Jacobi}\}$ & 25 (1) & 1 (1) & 1 (1) \\
+$\{\mathrm{NO}, \text{Jacobi (0.67)}\}$ & 25 (1) & 1 (1) & 1 (1) \\
+$\{\mathrm{NO}, \text{GS}\}$ & 25 (1) & 1 (1) & 1 (1) \\
+$\{\mathrm{NO}, \text{SymGS}\}$ & 25 (1) & 1 (1) & 1 (1) \\
+$\{\mathrm{NO}, \text{SOR (1.5)}\}$ & 25 (1) & 1 (1) & 1 (1) \\
 \bottomrule
 \end{tabular}}
 \newcommand{\cacostsaniso}{
@@ -321,6 +365,10 @@ $\{\mathrm{NO}, \text{Jacobi}\}$ & 25 (1) & 1 (1) & 1 (1) \\
 & \multicolumn{3}{c}{$128\times128$} \\ \cmidrule(lr){2-4}
 Pairing & $c_{\text{solver}}$ & $c_{\mathrm{NO}}$ & $m_{\text{solver}}$ \\ \midrule
 $\{\mathrm{NO}, \text{Jacobi}\}$ & 15\,$\mu$s & 610\,$\mu$s & 42 \\
+$\{\mathrm{NO}, \text{Jacobi (0.67)}\}$ & 15\,$\mu$s & 611\,$\mu$s & 41 \\
+$\{\mathrm{NO}, \text{GS}\}$ & 50\,$\mu$s & 613\,$\mu$s & 12 \\
+$\{\mathrm{NO}, \text{SymGS}\}$ & 78\,$\mu$s & 610\,$\mu$s & 8 \\
+$\{\mathrm{NO}, \text{SOR (1.5)}\}$ & 50\,$\mu$s & 611\,$\mu$s & 12 \\
 \bottomrule
 \end{tabular}}
 \newcommand{\caaucaniso}{
@@ -332,6 +380,30 @@ Solver only & 2.99e+02 (3.9e-02) & $<10^{-10}$ \\
 HINTS ($\tau{=}25$) & 2.40e+01 (2.9e-04) & $<10^{-10}$ \\
 Learned router (ours) & \textbf{4.43e-04 (1.7e-04)} & - \\
 Cost-aware oracle & \textit{4.45e-04 (1.7e-04)} & \textit{-} \\
+\midrule
+\multicolumn{3}{c}{$\{\mathrm{NO}, \text{Jacobi (0.67)}\}$} \\ \midrule
+Solver only & 3.00e+02 (2.7e-02) & $<10^{-10}$ \\
+HINTS ($\tau{=}25$) & 2.40e+01 (2.0e-04) & $<10^{-10}$ \\
+Learned router (ours) & \textbf{1.92e-04 (6.2e-05)} & - \\
+Cost-aware oracle & \textit{1.94e-04 (6.2e-05)} & \textit{-} \\
+\midrule
+\multicolumn{3}{c}{$\{\mathrm{NO}, \text{GS}\}$} \\ \midrule
+Solver only & 2.99e+02 (7.2e-02) & $<10^{-10}$ \\
+HINTS ($\tau{=}25$) & 2.40e+01 (5.7e-04) & $<10^{-10}$ \\
+Learned router (ours) & \textbf{1.30e-04 (4.4e-05)} & - \\
+Cost-aware oracle & \textit{1.30e-04 (4.4e-05)} & \textit{-} \\
+\midrule
+\multicolumn{3}{c}{$\{\mathrm{NO}, \text{SymGS}\}$} \\ \midrule
+Solver only & 2.97e+02 (1.3e-01) & $<10^{-10}$ \\
+HINTS ($\tau{=}25$) & 2.40e+01 (1.1e-03) & $<10^{-10}$ \\
+Learned router (ours) & \textbf{8.34e-05 (2.8e-05)} & - \\
+Cost-aware oracle & \textit{8.37e-05 (2.8e-05)} & \textit{-} \\
+\midrule
+\multicolumn{3}{c}{$\{\mathrm{NO}, \text{SOR (1.5)}\}$} \\ \midrule
+Solver only & 2.96e+02 (1.8e-01) & $<10^{-10}$ \\
+HINTS ($\tau{=}25$) & 2.40e+01 (1.6e-03) & $<10^{-10}$ \\
+Learned router (ours) & \textbf{1.87e-04 (6.4e-05)} & - \\
+Cost-aware oracle & \textit{1.94e-04 (6.8e-05)} & \textit{-} \\
 \bottomrule
 \end{tabular}}
 \newcommand{\caseedsaniso}{\begin{tabular}{c}\textbf{[results pending: confirmatory run in progress]}\end{tabular}}
@@ -367,6 +439,10 @@ ConvDiff & Jacobi & 1.33\,ms & 727\,$\mu$s$_{\tau{=}10,\,t_0{=}0}$ & 766\,$\mu$s
  & FFT direct solve (exact) &  &  & 250\,$\mu$s & -- & -- & -- & -- & -- & -- \\
 \midrule
 AnisoDiff & Jacobi & 1.27\,ms & 705\,$\mu$s$_{\tau{=}50,\,t_0{=}0}$ & 739\,$\mu$s (1.74$\times$\,/\,0.96$\times$) & -- & -- & -- & -- & -- & -- \\
+ & Jacobi (0.67) & 1.29\,ms & 716\,$\mu$s$_{\tau{=}50,\,t_0{=}0}$ & 735\,$\mu$s (1.77$\times$\,/\,0.96$\times$) & -- & -- & -- & -- & -- & -- \\
+ & GS & 2.34\,ms & 749\,$\mu$s$_{\tau{=}10,\,t_0{=}0}$ & 792\,$\mu$s (2.95$\times$\,/\,0.96$\times$) & -- & -- & -- & -- & -- & -- \\
+ & SymGS & 3.08\,ms & 742\,$\mu$s$_{\tau{=}25,\,t_0{=}0}$ & 787\,$\mu$s (3.91$\times$\,/\,0.93$\times$) & -- & -- & -- & -- & -- & -- \\
+ & SOR (1.5) & 2.24\,ms & 689\,$\mu$s$_{\tau{=}25,\,t_0{=}0}$ & 730\,$\mu$s (3.08$\times$\,/\,0.95$\times$) & -- & -- & -- & -- & -- & -- \\
 \midrule
 \bottomrule
 \end{tabular}}
@@ -374,22 +450,22 @@ AnisoDiff & Jacobi & 1.27\,ms & 705\,$\mu$s$_{\tau{=}50,\,t_0{=}0}$ & 739\,$\mu$
 \newcommand{\caSpSolverMax}{707$\times$}
 \newcommand{\caSpHintsMin}{1.69$\times$}
 \newcommand{\caSpHintsMax}{5.94$\times$}
-\newcommand{\caSpBestMin}{0.95$\times$}
+\newcommand{\caSpBestMin}{0.93$\times$}
 \newcommand{\caSpBestMax}{0.97$\times$}
 \newcommand{\caSpSolverDeepMin}{17.0$\times$}
 \newcommand{\caSpSolverDeepMax}{452$\times$}
 \newcommand{\caSpHintsDeepMin}{1.07$\times$}
-\newcommand{\caSpHintsDeepMax}{3.00$\times$}
+\newcommand{\caSpHintsDeepMax}{3.18$\times$}
 \newcommand{\caSpBestDeepMin}{0.77$\times$}
 \newcommand{\caSpBestDeepMax}{1.58$\times$}
 \newcommand{\caSpOracleRatioMin}{1.00$\times$}
 \newcommand{\caSpOracleRatioMax}{1.05$\times$}
-\newcommand{\caNumCells}{11}
+\newcommand{\caNumCells}{15}
 \newcommand{\caCellsRouterBeatsBest}{0}
-\newcommand{\caCellsRouterBeatsHints}{11}
-\newcommand{\caCellsRouterBeatsBestDeep}{4}
-\newcommand{\caCellsRouterBeatsHintsDeep}{11}
-\newcommand{\caCellsRouterWithinBest}{11}
+\newcommand{\caCellsRouterBeatsHints}{15}
+\newcommand{\caCellsRouterBeatsBestDeep}{7}
+\newcommand{\caCellsRouterBeatsHintsDeep}{15}
+\newcommand{\caCellsRouterWithinBest}{15}
 \newcommand{\caVsMgAllMin}{0.94$\times$}
 \newcommand{\caVsMgAllMax}{1.17$\times$}
 \newcommand{\caVsMgDeepMin}{0.05$\times$}
@@ -633,6 +709,10 @@ Convection--diffusion & $128^2$ & $\{\mathrm{NO}, \text{Jacobi}\}$ & \textbf{2.9
  & $128^2$ & $\{\mathrm{NO}, \text{Multigrid}\}$ & \textbf{2.07$\times$ ($<10^{-10}$)} & \textbf{2.01$\times$ ($<10^{-10}$)} & 0.99$\times$ (slower, 0.671) & 0.97$\times$ (slower, $10^{-10}$) \\
 \midrule
 Anisotropic diffusion & $128^2$ & $\{\mathrm{NO}, \text{Jacobi}\}$ & \textbf{3.16$\times$ ($<10^{-10}$)} & \textbf{1.25$\times$ ($10^{-9}$)} & \textbf{1.74$\times$ ($<10^{-10}$)} & 0.96$\times$ (slower, $10^{-7}$) \\
+ & $128^2$ & $\{\mathrm{NO}, \text{Jacobi (0.67)}\}$ & \textbf{3.31$\times$ ($<10^{-10}$)} & \textbf{1.34$\times$ ($<10^{-10}$)} & \textbf{1.77$\times$ ($<10^{-10}$)} & 0.96$\times$ (slower, $10^{-9}$) \\
+ & $128^2$ & $\{\mathrm{NO}, \text{GS}\}$ & \textbf{7.61$\times$ ($<10^{-10}$)} & \textbf{1.99$\times$ ($<10^{-10}$)} & \textbf{2.95$\times$ ($<10^{-10}$)} & 0.96$\times$ (slower, $10^{-7}$) \\
+ & $128^2$ & $\{\mathrm{NO}, \text{SymGS}\}$ & \textbf{11.8$\times$ ($<10^{-10}$)} & \textbf{2.72$\times$ ($<10^{-10}$)} & \textbf{3.91$\times$ ($<10^{-10}$)} & 0.93$\times$ (slower, $10^{-8}$) \\
+ & $128^2$ & $\{\mathrm{NO}, \text{SOR (1.5)}\}$ & \textbf{7.36$\times$ ($<10^{-10}$)} & \textbf{2.04$\times$ ($<10^{-10}$)} & \textbf{3.08$\times$ ($<10^{-10}$)} & 0.95$\times$ (slower, $10^{-8}$) \\
 \bottomrule
 \end{tabular}}
 \newcommand{\caLstmMs}{\textbf{[pending]}}
