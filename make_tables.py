@@ -784,8 +784,9 @@ def main():
                 out.append(f"\\newcommand{{\\caM{nm_}{SUF}}}{{{dg[1]['m'][0]}}}")
                 c_ = dg[1]["costs"]
                 out.append(f"\\newcommand{{\\caCost{nm_}{SUF}}}{{{fmt_time(c_[spec_])}}}")
-                out.append(f"\\newcommand{{\\caCostNo{SUF}}}{{{fmt_time(c_['no'])}}}")
-                out.append(f"\\newcommand{{\\caCostRes{SUF}}}{{{fmt_time(c_['_residual'])}}}")
+                if f"caCostNo{SUF}" not in "\n".join(out[-400:]):
+                    out.append(f"\\newcommand{{\\caCostNo{SUF}}}{{{fmt_time(c_['no'])}}}")
+                    out.append(f"\\newcommand{{\\caCostRes{SUF}}}{{{fmt_time(c_['_residual'])}}}")
 
     # ================================================================ ensembles
     ens_keys = [k for k in R if k[3]]
