@@ -138,6 +138,7 @@ results = {"args": vars(args), "tols": tols, "h2": h2, "groups": {}, "provenance
            "test_params": {k: v.tolist() for k, v in params.items()}, "baselines": base_names,
            "lu_factorization_s": (baselines["lu"].factor_s if "lu" in baselines else None)}
 
+measured_all = False
 for group in groups:
     gkey = "+".join(group)
     print(f"\n=== {args.equation} N={args.N} ensemble {gkey} ===", flush=True)
@@ -159,10 +160,27 @@ for group in groups:
         json.dump(cached, open(cost_path, "w"), indent=1)
         print(f"  ensemble costs assembled from the pairwise cache {cost_path}")
     else:
-        gc.collect()
-        gc.disable()
-        costs = measure_costs(env, f_test)
-        gc.enable()
+        # one shared measurement per (equation, grid): every operation of this invocation is timed in
+        # the same interleaved session (11 blocks of 100 repetitions), so that every pairing and
+        # ensemble uses the same corrector cost and consistent macro-action sizes (the corrector's
+        # 64 MB matrix--vector product is memory-bound and its cost is the noisiest of all)
+        call = cached.get("__all__")
+        if call is None or any(s_ not in call for s_ in group) or (args.remeasure_costs and not measured_all):
+            env_all = Env(pde, specs, corrector)
+            for j_ in range(len(specs)):
+                _ = env_all.solvers[j_].step(np.zeros_like(f_test[:1]), f_test[:1])
+            gc.collect()
+            gc.disable()
+            call = measure_costs(env_all, f_test, reps=100, blocks=11)
+            gc.enable()
+            cached["__all__"] = call
+            measured_all = True
+            print("  shared per-iteration costs: " + ", ".join(f"{k} {v*1e6:.0f}us" for k, v in call.items() if not isinstance(v, dict))
+                  + f" | spread {call.get('_spread')}", flush=True)
+        costs = {s_: call[s_] for s_ in group}
+        costs.update({"no": call["no"], "_residual": call["_residual"],
+                      "_min": {k: call["_min"][k] for k in list(group) + ["no", "_residual"]},
+                      "_spread": {k: call["_spread"][k] for k in list(group) + ["no", "_residual"]}})
         cached[gkey] = costs
         json.dump(cached, open(cost_path, "w"), indent=1)
     env.costs = costs
