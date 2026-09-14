@@ -16,6 +16,7 @@ import gc
 import json
 import os
 import time
+import hashlib as _hl
 
 import numpy as np
 import torch
@@ -38,6 +39,7 @@ parser.add_argument("--b_vel", type=float, default=20.0)
 parser.add_argument("--policies", default="classical,hints2,hints5,hints10,hints15,hints25,hints50,phints5,phints10,phints15,phints25,phints50,oneshot,decay0.9,decay0.95,decay0.98,greedy,oracle,router")
 parser.add_argument("--baselines", default="auto", help="classical methods without corrector timed in the same replay loop (comma list, 'auto' = per-equation default, 'none')")
 parser.add_argument("--max_iter_baseline", type=int, default=5000, help="iteration cap of the classical baselines (units of work)")
+parser.add_argument("--retime_only", action="store_true", help="re-time the drift-flagged instances of an existing result file (same routers and costs) and re-save it")
 parser.add_argument("--drift_tol", type=float, default=0.10, help="drift guard: re-time a reference operation before every instance and wait while it deviates by more than this fraction")
 parser.add_argument("--tols", default="1e-2,1e-3,h2,1e-5,1e-6,1e-8")
 parser.add_argument("--T", type=int, default=300, help="horizon for AUC / final error")
@@ -229,7 +231,6 @@ for group in groups:
 
     if args.train_only:
         continue
-    import hashlib as _hl
     gres = {"costs": costs, "m": env.m, "ops": env.ops, "macro_exp": env.macro_exp, "router_decision_cost": t_dec,
             "router_sha256": (_hl.sha256(open(rpath, "rb").read()).hexdigest()[:16] if os.path.exists(rpath) else None),
             "policies": {p: [] for p in pol_list}, "curves": {p: [] for p in pol_list}, "drift": []}
@@ -265,7 +266,9 @@ for group in groups:
     all_names = names + bnames
     ref0 = ref_time(25)
     t_start = time.time()
-    for i in range(args.n_test):
+    def time_instance(i, max_wait_s=300):
+        """Untimed traces, drift guard and timed replays of test instance i; returns the result
+        rows of every policy and baseline, the stored curves and the drift record."""
         f1, u1 = f_test[i:i + 1], u_truth[i:i + 1]
         traces = {}
         for p in names:
@@ -275,12 +278,13 @@ for group in groups:
         for bn in base_names:
             traces[f"base:{bn}"] = baselines[bn].untimed(f1, u1)
         # drift guard: the reference operation must be within drift_tol of its start-of-session time
-        ratio, retries = drift_guard(ref0, args.drift_tol)
+        ratio, retries = drift_guard(ref0, args.drift_tol, max_wait_s=max_wait_s)
         try:
             load1 = float(os.getloadavg()[0])
         except (AttributeError, OSError):
             load1 = None
-        gres["drift"].append({"instance": i, "ratio": ratio, "retries": retries, "loadavg": load1, "t_wall": time.time()})
+        drift_rec = {"instance": i, "ratio": ratio, "retries": retries, "loadavg": load1, "t_wall": time.time()}
+        rows, curves = {}, {}
         # timed replays: random order over policies and baselines per (instance, replay), and an
         # untimed warm-up (one corrector call and one sweep, or the baseline's own operation)
         # before every replay so that every method starts from the same cache state (the
@@ -323,7 +327,7 @@ for group in groups:
                 tl, il = tt_live[tol]
                 row["tol"][f"{tol:.6g}"] = {"iters": None if not np.isfinite(il) else int(il),
                                             "t_live": None if not np.isfinite(tl) else float(tl), "t_wu": None}
-            gres["policies"][p].append(row)
+            rows[p] = row
         for p in names:
             env, router, base_, t_dec_ = runs[p]
             tr = traces[p]
@@ -365,19 +369,55 @@ for group in groups:
                                             "no_calls": nno,
                                             "t_dec": None if not np.isfinite(il) else float(t_dec_live[int(il)]),
                                             "n_dec": None if not np.isfinite(il) else int((starts < max(int(il), 1)).sum())}
-            gres["policies"][p].append(row)
+            rows[p] = row
             if i < args.keep_curves:
-                gres["curves"][p].append({"rel_err": e[:min(len(e), 5000)].tolist(),
-                                          "op": tr["op"][:5000].tolist(),
-                                          "t_live": t_live[:5001].tolist()})
-        env, router = runs[pol_list[0]][0], runs[pol_list[0]][1]
-        if (i + 1) % 8 == 0 or i == args.n_test - 1:
-            msg = " | ".join(
-                f"{p}: {np.median([r['tol'][f'{h2:.6g}']['t_live'] or np.inf for r in gres['policies'][p]])*1e3:.1f}ms"
-                for p in all_names)
-            dr = gres["drift"][-1]
-            msg += f" | drift {dr['ratio']:.3f} ({dr['retries']} waits)"
-            print(f"  [{i+1:3d}/{args.n_test}] median time-to-h2  {msg}   ({time.time()-t_start:.0f}s)", flush=True)
+                curves[p] = {"rel_err": e[:min(len(e), 5000)].tolist(),
+                             "op": tr["op"][:5000].tolist(),
+                             "t_live": t_live[:5001].tolist()}
+        return rows, curves, drift_rec
+
+    if args.retime_only:
+        # re-time the instances of an existing result file that were timed under a machine slowdown
+        out = f"{args.out_dir}/{args.equation}_{args.N}_{'ens_' if args.ensemble else ''}{gkey}{args.tag}.json"
+        d_old = json.load(open(out))
+        gres = d_old["groups"][gkey]
+        if gres.get("router_sha256") != (_hl.sha256(open(rpath, "rb").read()).hexdigest()[:16] if os.path.exists(rpath) else None):
+            raise RuntimeError("router checkpoint differs from the one of the stored results; cannot re-time")
+        if abs(gres["costs"]["no"] - costs["no"]) > 1e-12:
+            raise RuntimeError("cost cache differs from the one of the stored results; cannot re-time")
+        results["provenance"] = d_old["provenance"]
+        results["retime_provenance"] = provenance(ckp)
+    else:
+        for i in range(args.n_test):
+            rows, curves, drift_rec = time_instance(i)
+            gres["drift"].append(drift_rec)
+            for p, row in rows.items():
+                gres["policies"][p].append(row)
+            for p, cv in curves.items():
+                gres["curves"][p].append(cv)
+            if (i + 1) % 8 == 0 or i == args.n_test - 1:
+                msg = " | ".join(
+                    f"{p}: {np.median([r['tol'][f'{h2:.6g}']['t_live'] or np.inf for r in gres['policies'][p]])*1e3:.1f}ms"
+                    for p in all_names)
+                dr = gres["drift"][-1]
+                msg += f" | drift {dr['ratio']:.3f} ({dr['retries']} waits)"
+                print(f"  [{i+1:3d}/{args.n_test}] median time-to-h2  {msg}   ({time.time()-t_start:.0f}s)", flush=True)
+    # re-timing pass: instances whose drift guard gave up (reference still more than drift_tol slower
+    # than at the start of the session) are timed again once the machine has calmed down (the guard
+    # then waits up to 15 min); the first-pass ratio is kept in the record
+    flagged = [dr["instance"] for dr in gres["drift"] if dr["ratio"] > 1.0 + args.drift_tol]
+    if flagged:
+        print(f"  re-timing {len(flagged)} instance(s) timed under a machine slowdown: {flagged}", flush=True)
+    for i in flagged:
+        rows, curves, drift_rec = time_instance(i, max_wait_s=900)
+        rec = gres["drift"][i]
+        rec.update({"retimed": True, "ratio_first": rec.get("ratio_first", rec["ratio"]), "retries_first": rec.get("retries_first", rec["retries"]),
+                    "ratio": drift_rec["ratio"], "retries": drift_rec["retries"], "loadavg": drift_rec["loadavg"], "t_wall": drift_rec["t_wall"]})
+        for p, row in rows.items():
+            gres["policies"][p][i] = row
+        for p, cv in curves.items():
+            gres["curves"][p][i] = cv
+        print(f"    instance {i}: reference ratio {rec['ratio_first']:.2f} -> {rec['ratio']:.2f} ({drift_rec['retries']} waits)", flush=True)
     for bn, bl in baselines.items():
         chk = getattr(bl, "err_end_check", None)
         if chk:

@@ -732,6 +732,7 @@ def main():
         out.append(f"\\newcommand{{\\{name}Min}}{{{(fmt % min(vals)) if vals else PENDING}}}")
         out.append(f"\\newcommand{{\\{name}Max}}{{{(fmt % max(vals)) if vals else PENDING}}}")
     dec_us, gap_us, dfrac, dfrac8, charged, livewu, drifts, waits, kchk, ndec = [], [], [], [], [], [], [], 0, [], []
+    n_retimed, n_flagged = 0, 0
     for (eq_, N_, spec_, ens_), (d_, g_) in R.items():
         if ens_:
             continue
@@ -757,7 +758,8 @@ def main():
         if ch:
             charged.append(float(np.median(ch)) * 100)
         for dr in g_.get("drift", []):
-            drifts.append(abs(dr["ratio"] - 1.0) * 100); waits += int(dr["retries"])
+            drifts.append(abs(dr["ratio"] - 1.0) * 100); waits += int(dr["retries"]) + int(dr.get("retries_first", 0))
+            n_retimed += int(bool(dr.get("retimed"))); n_flagged += int(dr["ratio"] > 1.10)
         for k_, v_ in g_.items():
             if k_.startswith("krylov_check:"):
                 kchk.append(v_["max_ratio_timed_over_untimed_error"])
@@ -770,6 +772,9 @@ def main():
     num_macro("caNDec", ndec, "%.0f")
     out.append(f"\\newcommand{{\\caDriftMax}}{{{('%.1f' % max(drifts)) if drifts else PENDING}}}")
     out.append(f"\\newcommand{{\\caDriftWaits}}{{{waits}}}")
+    out.append(f"\\newcommand{{\\caDriftRetimed}}{{{n_retimed}}}")
+    out.append(f"\\newcommand{{\\caDriftFlagged}}{{{n_flagged}}}")
+    out.append(f"\\newcommand{{\\caDriftN}}{{{len(drifts)}}}")
     out.append(f"\\newcommand{{\\caKrylovCheckMax}}{{{('%.2f' % max(kchk)) if kchk else PENDING}}}")
     for N_ in NS:
         SUF = GRID_SUF[N_]
