@@ -105,6 +105,7 @@ def ref_time(n=5):
     return float(np.median(ts))
 
 
+from drift import final_reference_us, slow_instances
 ref_hist = []
 
 
@@ -285,6 +286,11 @@ for group in groups:
     bnames = [f"base:{bn}" for bn in base_names]
     all_names = names + bnames
     ref_hist.clear()
+    # seed the session reference only after 10 s of running the reference operation: right after router training
+    # or any pause the process can still be on the efficiency cores, and the reference would start slow
+    t_warm = time.perf_counter() + 10.0
+    while time.perf_counter() < t_warm:
+        ref_time(1)
     for _ in range(5):
         ref_hist.append(ref_time(9))
     t_start = time.time()
@@ -414,6 +420,8 @@ for group in groups:
         out = f"{args.out_dir}/{args.equation}_{args.N}_{'ens_' if args.ensemble else ''}{gkey}{args.tag}.json"
         d_old = json.load(open(out))
         gres = d_old["groups"][gkey]
+        # anchor the re-timing session to the reference readings under which the stored instances were timed
+        ref_hist.extend(dr["ref_us"] * 1e3 for dr in gres["drift"] if dr.get("ref_us"))
         if gres.get("router_sha256") != (_hl.sha256(open(rpath, "rb").read()).hexdigest()[:16] if os.path.exists(rpath) else None):
             raise RuntimeError("router checkpoint differs from the one of the stored results; cannot re-time")
         if abs(gres["costs"]["no"] - costs["no"]) > 1e-12:
@@ -435,10 +443,11 @@ for group in groups:
                 dr = gres["drift"][-1]
                 msg += f" | drift {dr['ratio']:.3f} ({dr['retries']} waits)"
                 print(f"  [{i+1:3d}/{args.n_test}] median time-to-h2  {msg}   ({time.time()-t_start:.0f}s)", flush=True)
-    # re-timing pass: instances whose drift guard gave up (reference still more than drift_tol slower
-    # than at the start of the session) are timed again once the machine has calmed down (the guard
-    # then waits up to 15 min); the first-pass ratio is kept in the record
-    flagged = [dr["instance"] for dr in gres["drift"] if dr["ratio"] > 1.0 + args.drift_tol or args.retime_all]
+    # re-timing pass: instances timed while the reference was more than drift_tol slower than the session reference
+    # at the check (the guard gave up) or than the cell's final reference (a session that started in a slow state)
+    # are timed again at the end of the cell (the guard then waits up to 2.5 drift_wait); the first-pass values are
+    # kept in the record
+    flagged = [dr["instance"] for dr in gres["drift"]] if args.retime_all else slow_instances(gres["drift"], args.drift_tol)
     if flagged:
         print(f"  re-timing {len(flagged)} instance(s) timed under a machine slowdown: {flagged}", flush=True)
     for i in flagged:
@@ -453,6 +462,7 @@ for group in groups:
         for p, cv in curves.items():
             gres["curves"][p][i] = cv
         print(f"    instance {i}: reference ratio {rec['ratio_first']:.2f} -> {rec['ratio']:.2f} ({drift_rec['retries']} waits)", flush=True)
+    gres["drift_ref_final_us"] = final_reference_us(gres["drift"])
     for bn, bl in baselines.items():
         chk = getattr(bl, "err_end_check", None)
         if chk:

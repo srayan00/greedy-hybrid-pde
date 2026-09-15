@@ -100,8 +100,9 @@ each after an untimed warm-up; a drift guard re-times a reference operation
 before every instance and waits (up to 2 min, running the reference operation
 meanwhile, since macOS moves a sleeping process to the efficiency cores) while it is more than 15%
 slower than the session's reference (the 10th percentile of the reference
-measurements so far), re-times the instances that were still too slow at the
-end of the cell (waiting up to 5 min), and `bench.py --retime_only
+measurements so far, seeded after 10 s of running the reference operation),
+re-times at the end of the cell (waiting up to 5 min) the instances that were
+still too slow or more than 15% slower than the cell's final reference, and `bench.py --retime_only
 [--retime_all]` re-times an existing cell (the 128^2 pairwise cells
 of Poisson and convection-diffusion, produced before the current driver, are
 re-timed this way once the other 128^2 cells are complete). We
