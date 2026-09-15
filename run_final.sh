@@ -6,7 +6,7 @@
 #   classical baselines timed inside the same replay loop as the policies; drift guard per instance;
 #   fresh test seed 73 (all configuration choices were made on seed 72, archived in results_dev/);
 #   three timed replays in random order with warm-up. Fail-fast: any failing command stops the chain.
-# Phases: ONLY_N=<N> restricts every stage to that grid (the grid-spanning overhead and discretisation studies
+# Phases: ONLY_N=<N> restricts every stage to that grid, ONLY_EQ=<equation> to that equation (the grid-spanning overhead and discretisation studies
 #   then do not run) and SKIP_AUX=1 skips the auxiliary stage; run_all.sh uses both to complete every 128^2
 #   result before the larger grids. Every step whose output already exists is skipped (the result files of the
 #   benchmark cells, the closing "saved" line of the log for the auxiliary scripts), so the script resumes after
@@ -21,11 +21,13 @@ run() { "$@" || { echo "$(date '+%F %T') FAILED (exit $?): $*" >> logs/final_pro
 solvers() { cat config/solvers_$1; }
 rm -f logs/final.failed
 want() { [ -z "${ONLY_N:-}" ] || [ "$ONLY_N" = "$1" ]; }    # grid filter
+wanteq() { [ -z "${ONLY_EQ:-}" ] || [ "$ONLY_EQ" = "$1" ]; }  # equation filter (ONLY_EQ=<equation>)
 fin() { tail -n 3 "$1" 2>/dev/null | grep -q "^saved"; }       # an auxiliary step is complete once its log ends with the saved-output line
 # ---------------------------------------------------------------- 128^2 (pairwise + same-session baselines)
 done_cells() { for s in $(echo $2 | tr , ' '); do [ -f results/${1}_${3}_${s}.json ] || return 1; done; return 0; }
 if want 128; then
 for EQ in Poisson ConvDiff AnisoDiff; do
+  wanteq $EQ || continue
   S=$(solvers $EQ)
   done_cells $EQ $S 128 && continue
   [ -f checkpoints/costs_${EQ}_128.json ] || run $PY bench.py --equation $EQ --N 128 --solvers $S --measure_only --remeasure_costs > logs/final_costs_${EQ}_128.log 2>&1
@@ -38,6 +40,7 @@ done
 echo done > logs/final_128.done
 # ---------------------------------------------------------------- ensembles at 128^2 (nested + the four original sets)
 for EQ in Poisson ConvDiff AnisoDiff; do
+  wanteq $EQ || continue
   new=0
   for W in jacobi,jacobi_0.67 jacobi,jacobi_0.67,gs; do
     [ -f results/${EQ}_128_ens_${W//,/+}.json ] && continue
@@ -56,6 +59,7 @@ fi
 # ---------------------------------------------------------------- 256^2
 if want 256; then
 for EQ in Poisson ConvDiff AnisoDiff; do
+  wanteq $EQ || continue
   S=$(solvers $EQ); NT=32; [ "$EQ" = "AnisoDiff" ] && NT=16; new=0
   if ! done_cells $EQ $S 256; then
     [ -f checkpoints/costs_${EQ}_256.json ] || run $PY bench.py --equation $EQ --N 256 --solvers $S --measure_only --remeasure_costs > logs/final_costs_${EQ}_256.log 2>&1
@@ -76,6 +80,7 @@ fi
 # ---------------------------------------------------------------- 512^2 (isotropic equations)
 if want 512; then
 for EQ in Poisson ConvDiff; do
+  wanteq $EQ || continue
   S=$(solvers $EQ)
   done_cells $EQ $S 512 && continue
   [ -f checkpoints/costs_${EQ}_512.json ] || run $PY bench.py --equation $EQ --N 512 --solvers $S --measure_only --remeasure_costs > logs/final_costs_${EQ}_512.log 2>&1
@@ -93,6 +98,7 @@ fi
 if [ -z "${SKIP_AUX:-}" ]; then
 export OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2 VECLIB_MAXIMUM_THREADS=2 MKL_NUM_THREADS=2
 for EQ in Poisson ConvDiff AnisoDiff; do
+  wanteq $EQ || continue
   S=$(solvers $EQ)
   if want 128 && ! fin logs/final_usage_${EQ}_128.log; then run $PY make_usage_data.py --equation $EQ --N 128 --solvers $S --n_test 64 --seed 73 > logs/final_usage_${EQ}_128.log 2>&1; fi
   NT=32; [ "$EQ" = "AnisoDiff" ] && NT=16
@@ -101,6 +107,7 @@ for EQ in Poisson ConvDiff AnisoDiff; do
 done
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 MKL_NUM_THREADS=1
 for EQ in Poisson ConvDiff AnisoDiff; do
+  wanteq $EQ || continue
   S=$(solvers $EQ)
   if want 128 && ! fin logs/final_seeds_${EQ}_128.log; then run $PY bench_seeds.py --equation $EQ --N 128 --solvers $S --seed 73 > logs/final_seeds_${EQ}_128.log 2>&1; fi
   NT=32; [ "$EQ" = "AnisoDiff" ] && NT=16
@@ -108,6 +115,7 @@ for EQ in Poisson ConvDiff AnisoDiff; do
 done
 if [ -z "${ONLY_N:-}" ] && ! fin logs/final_overheads.log; then run $PY bench_overheads.py > logs/final_overheads.log 2>&1; fi
 for N in 128 256 512; do want $N || continue; for EQ in Poisson ConvDiff AnisoDiff; do
+  wanteq $EQ || continue
   [ -f checkpoints/costs_${EQ}_${N}.json ] || continue
   M=$(solvers $EQ)
   # the assumption checker needs the transposes of the triangular sweeps, which the numpy/scipy
