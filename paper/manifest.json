@@ -232,6 +232,9 @@
   "git_commit": "64116504712f7ef9e707c3bb7dd29dcb2f817767",
   "git_dirty": true
  },
+ "results/seeds_Poisson_128.json": {
+  "sha256": "b5b43a7d9b3cb720664c06b9246b42caff442a3e16832d88289f2335a14db857"
+ },
  "results_dev/AnisoDiff_128_ens_jacobi+gs+ssor+jacobi_0.67+sor_1.5.json": {
   "sha256": "16323f85fa7df61538a54705a1611c1c0f4187fdce4ba0bbe1e6fc94eb72d888"
  },

@@ -844,7 +844,7 @@ def main():
         out.append(f"\\newcommand{{\\caCellsRouterBeatsOneshotDeep{SUF}}}{{{sum(v > 1.0 for v in summ['OneshotDeep'])}}}")
         out.append(f"\\newcommand{{\\caCellsRouterBeatsHintsTFDeep{SUF}}}{{{sum(v > 1.0 for v in summ['HintsTFDeep'])}}}")
         # best fixed schedule at 1e-8 per pairing (labels), for the text
-        bl_ = []
+        bl_, short_ = [], []
         for eq in EQS:
             for spec in PAIRINGS:
                 dg = cell(eq, N_, spec)
@@ -852,6 +852,17 @@ def main():
                     continue
                 d, g = dg
                 bl_.append(best_tau(g["policies"], tkey(d, 1e-8)))
+                # does the best schedule at 1e-8 call the corrector more often than one macro-action of the paired
+                # solver allows the router to (period shorter than the macro size)?
+                m_ = re.match(r"p?hints(\d+)$", bl_[-1])
+                short_.append(int(m_.group(1)) < int(g["m"][0]) if m_ else False)
+        # the router's ratio against the best schedule at 1e-8, split by that criterion (same cell order as summ)
+        for flag_, nm_ in [(True, "caShortPeriod"), (False, "caLongPeriod")]:
+            vals_ = [v for v, s_ in zip(summ["BestDeep"], short_) if s_ == flag_]
+            out.append(f"\\newcommand{{\\{nm_}Cells{SUF}}}{{{len(vals_) if vals_ else PENDING}}}")
+            out.append(f"\\newcommand{{\\{nm_}Wins{SUF}}}{{{sum(v > 1.0 for v in vals_) if vals_ else PENDING}}}")
+            out.append(f"\\newcommand{{\\{nm_}Med{SUF}}}{{{fmt_sp(float(np.median(vals_))) if vals_ else PENDING}}}")
+            rng_macro(out, nm_ + SUF, vals_)
         lab_ = {"oneshot": "one-shot"}
         def _lab(p):
             if p == "oneshot":

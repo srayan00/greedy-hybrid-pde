@@ -147,7 +147,13 @@ Cost-aware oracle & \textit{2.80e-03 (6.7e-04)} & \textit{-} \\
 \end{tabular}}
 \newcommand{\caT}{300}
 \newcommand{\caN}{128}
-\newcommand{\caseedspoisson}{\begin{tabular}{c}\textbf{[results pending: confirmatory run in progress]}\end{tabular}}
+\newcommand{\caseedspoisson}{
+\begin{tabular}{llcccc}
+\toprule
+$N$ & Pairing & time to $h^2$ over 5 seeds & identical decisions & speedup vs.\ HINTS-15 & seeds with $p{<}0.01$ \\ \midrule
+$128^2$ & $\{\mathrm{NO}, \text{Jacobi}\}$ & 0.71 $\pm$ 0.00\,ms & 100\% & 1.41--1.41$\times$ & 0/2 \\
+\bottomrule
+\end{tabular}}
 \newcommand{\catimeconv}{
 \begin{tabular}{llccc}
 \toprule
@@ -683,6 +689,16 @@ VarCoeff & Jacobi & 1.24\,ms & 730\,$\mu$s$_{\tau{=}5,\,t_0{=}0}$ & 784\,$\mu$s 
 \newcommand{\caBestHTwoSchedList}{$\tau{=}10$ (first call at $0$) (7), $\tau{=}50$ (first call at $0$) (5), one-shot (5), $\tau{=}15$ (first call at $0$) (4), $\tau{=}25$ (first call at $0$) (2), $\tau{=}5$ (first call at $0$) (1)}
 \newcommand{\caCellsRouterBeatsOneshotDeep}{21}
 \newcommand{\caCellsRouterBeatsHintsTFDeep}{24}
+\newcommand{\caShortPeriodCells}{8}
+\newcommand{\caShortPeriodWins}{0}
+\newcommand{\caShortPeriodMed}{0.85$\times$}
+\newcommand{\caShortPeriodMin}{0.83$\times$}
+\newcommand{\caShortPeriodMax}{0.98$\times$}
+\newcommand{\caLongPeriodCells}{16}
+\newcommand{\caLongPeriodWins}{8}
+\newcommand{\caLongPeriodMed}{1.01$\times$}
+\newcommand{\caLongPeriodMin}{0.95$\times$}
+\newcommand{\caLongPeriodMax}{1.69$\times$}
 \newcommand{\caBestDeepSchedList}{$\tau{=}15$ (first call at $0$) (9), one-shot (4), $\tau{=}5$ (first call at $0$) (4), $\tau{=}10$ (first call at $0$) (3), $\tau{=}25$ (first call at $0$) (2), $\tau{=}50$ (1), $\tau{=}10$ (1)}
 \newcommand{\caNumCells}{24}
 \newcommand{\caCellsRouterBeatsBest}{0}
