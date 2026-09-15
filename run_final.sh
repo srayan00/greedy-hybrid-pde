@@ -16,20 +16,26 @@ run() { "$@" || { echo "$(date '+%F %T') FAILED (exit $?): $*" >> logs/final_pro
 solvers() { cat config/solvers_$1; }
 rm -f logs/final.failed
 # ---------------------------------------------------------------- 128^2 (pairwise + same-session baselines)
+done_cells() { for s in $(echo $2 | tr , ' '); do [ -f results/${1}_${3}_${s}.json ] || return 1; done; return 0; }
 for EQ in Poisson ConvDiff AnisoDiff; do
   S=$(solvers $EQ)
+  done_cells $EQ $S 128 && continue
   [ -f checkpoints/costs_${EQ}_128.json ] || run $PY bench.py --equation $EQ --N 128 --solvers $S --measure_only --remeasure_costs > logs/final_costs_${EQ}_128.log 2>&1
   [ -f checkpoints/router_${EQ}_128_sor_1.5.pth ] && [ checkpoints/router_${EQ}_128_sor_1.5.pth -nt libstencil.so ] || run $PY bench.py --equation $EQ --N 128 --solvers $S --train_only --retrain_router > logs/final_routers_${EQ}_128.log 2>&1
-  run $PY bench.py --equation $EQ --N 128 --solvers $S --n_test 64 --max_ops 60000 --policies $POL ${=SEED} > logs/final_bench_${EQ}_128.log 2>&1
+  # pairings whose result file exists are skipped (resumable after an interruption)
+  TODO=$(for s in $(echo $S | tr , ' '); do [ -f results/${EQ}_128_${s}.json ] || printf "%s," $s; done); TODO=${TODO%,}
+  run $PY bench.py --equation $EQ --N 128 --solvers $TODO --n_test 64 --max_ops 60000 --policies $POL ${=SEED} > logs/final_bench_${EQ}_128.log 2>&1
   stage "128 $EQ pairwise done"
 done
 echo done > logs/final_128.done
 # ---------------------------------------------------------------- ensembles at 128^2 (nested + the four original sets)
 for EQ in Poisson ConvDiff AnisoDiff; do
   for W in jacobi,jacobi_0.67 jacobi,jacobi_0.67,gs; do
+    [ -f results/${EQ}_128_ens_${W//,/+}.json ] && continue
     run $PY bench.py --equation $EQ --N 128 --solvers $W --ensemble --retrain_router --router_inst 256 --router_max_epochs 600 --router_err_stop 1e-9 --dagger_rounds 6 --router_hidden 128 --router_epochs 300 --n_test 64 --max_ops 4000 --policies greedy,oracle,router --with_pairwise ${=SEED} > logs/final_nest_${EQ}_128_${W//,/+}.log 2>&1
   done
   for W in jacobi,gs jacobi,gs,ssor jacobi,gs,ssor,jacobi_0.67 jacobi,gs,ssor,jacobi_0.67,sor_1.5; do
+    [ -f results/${EQ}_128_ens_${W//,/+}.json ] && continue
     run $PY bench.py --equation $EQ --N 128 --solvers $W --ensemble --retrain_router --dagger_rounds 4 --router_inst 256 --n_test 64 --policies greedy,oracle,router --with_pairwise ${=SEED} > logs/final_ens_${EQ}_128_${W//,/+}.log 2>&1
   done
   stage "128 $EQ ensembles done"
@@ -38,10 +44,14 @@ echo done > logs/final_ens128.done
 # ---------------------------------------------------------------- 256^2
 for EQ in Poisson ConvDiff AnisoDiff; do
   S=$(solvers $EQ); NT=32; [ "$EQ" = "AnisoDiff" ] && NT=16
-  [ -f checkpoints/costs_${EQ}_256.json ] || run $PY bench.py --equation $EQ --N 256 --solvers $S --measure_only --remeasure_costs > logs/final_costs_${EQ}_256.log 2>&1
-  run $PY bench.py --equation $EQ --N 256 --solvers $S --train_only --retrain_router --router_inst 64 --router_max_epochs 1500 > logs/final_routers_${EQ}_256.log 2>&1
-  run $PY bench.py --equation $EQ --N 256 --solvers $S --n_test $NT --max_ops 40000 --policies $POL ${=SEED} > logs/final_bench_${EQ}_256.log 2>&1
+  if ! done_cells $EQ $S 256; then
+    [ -f checkpoints/costs_${EQ}_256.json ] || run $PY bench.py --equation $EQ --N 256 --solvers $S --measure_only --remeasure_costs > logs/final_costs_${EQ}_256.log 2>&1
+    [ -f checkpoints/router_${EQ}_256_sor_1.5.pth ] && [ checkpoints/router_${EQ}_256_sor_1.5.pth -nt libstencil.so ] || run $PY bench.py --equation $EQ --N 256 --solvers $S --train_only --retrain_router --router_inst 64 --router_max_epochs 1500 > logs/final_routers_${EQ}_256.log 2>&1
+    TODO=$(for s in $(echo $S | tr , ' '); do [ -f results/${EQ}_256_${s}.json ] || printf "%s," $s; done); TODO=${TODO%,}
+    run $PY bench.py --equation $EQ --N 256 --solvers $TODO --n_test $NT --max_ops 40000 --policies $POL ${=SEED} > logs/final_bench_${EQ}_256.log 2>&1
+  fi
   for W in jacobi,jacobi_0.67 jacobi,jacobi_0.67,gs; do
+    [ -f results/${EQ}_256_ens_${W//,/+}.json ] && continue
     run $PY bench.py --equation $EQ --N 256 --solvers $W --ensemble --retrain_router --router_inst 128 --router_max_epochs 600 --router_err_stop 1e-9 --dagger_rounds 6 --router_hidden 128 --router_epochs 300 --n_test $NT --max_ops 3000 --policies greedy,oracle,router --with_pairwise ${=SEED} > logs/final_nest_${EQ}_256_${W//,/+}.log 2>&1
   done
   stage "256 $EQ done"
@@ -50,12 +60,14 @@ echo done > logs/final_256.done
 # ---------------------------------------------------------------- 512^2 (isotropic equations)
 for EQ in Poisson ConvDiff; do
   S=$(solvers $EQ)
+  done_cells $EQ $S 512 && continue
   [ -f checkpoints/costs_${EQ}_512.json ] || run $PY bench.py --equation $EQ --N 512 --solvers $S --measure_only --remeasure_costs > logs/final_costs_${EQ}_512.log 2>&1
-  run $PY bench.py --equation $EQ --N 512 --solvers $S --train_only --retrain_router --router_inst 32 --router_max_epochs 400 --router_err_stop 1e-8 > logs/final_routers_${EQ}_512.log 2>&1
+  [ -f checkpoints/router_${EQ}_512_sor_1.5.pth ] && [ checkpoints/router_${EQ}_512_sor_1.5.pth -nt libstencil.so ] || run $PY bench.py --equation $EQ --N 512 --solvers $S --train_only --retrain_router --router_inst 32 --router_max_epochs 400 --router_err_stop 1e-8 > logs/final_routers_${EQ}_512.log 2>&1
   if [ "$EQ" = "ConvDiff" ]; then   # frozen per-cell exception of the development phase
     run $PY bench.py --equation $EQ --N 512 --solvers jacobi --train_only --retrain_router --router_inst 64 --router_max_epochs 800 --router_err_stop 1e-8 > logs/final_routers_${EQ}_512_jacobi.log 2>&1
   fi
-  run $PY bench.py --equation $EQ --N 512 --solvers $S --n_test 16 --max_ops 8000 --max_iter_baseline 3000 --baselines fft,mg,$([ "$EQ" = "Poisson" ] && echo cg,pcg_ssor,pcg_mg || echo bicgstab,bicgstab_mg) --policies $POL ${=SEED} > logs/final_bench_${EQ}_512.log 2>&1
+  TODO=$(for s in $(echo $S | tr , ' '); do [ -f results/${EQ}_512_${s}.json ] || printf "%s," $s; done); TODO=${TODO%,}
+  run $PY bench.py --equation $EQ --N 512 --solvers $TODO --n_test 16 --max_ops 8000 --max_iter_baseline 3000 --baselines fft,mg,$([ "$EQ" = "Poisson" ] && echo cg,pcg_ssor,pcg_mg || echo bicgstab,bicgstab_mg) --policies $POL ${=SEED} > logs/final_bench_${EQ}_512.log 2>&1
   stage "512 $EQ done"
 done
 echo done > logs/final_512.done

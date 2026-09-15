@@ -41,7 +41,8 @@ parser.add_argument("--baselines", default="auto", help="classical methods witho
 parser.add_argument("--max_iter_baseline", type=int, default=5000, help="iteration cap of the classical baselines (units of work)")
 parser.add_argument("--retime_all", action="store_true", help="with --retime_only: re-time every instance, not only the drift-flagged ones")
 parser.add_argument("--retime_only", action="store_true", help="re-time the drift-flagged instances of an existing result file (same routers and costs) and re-save it")
-parser.add_argument("--drift_tol", type=float, default=0.10, help="drift guard: re-time a reference operation before every instance and wait while it deviates by more than this fraction")
+parser.add_argument("--drift_tol", type=float, default=0.15, help="drift guard: re-time a reference operation before every instance and wait while it is more than this fraction slower than the session's reference (10th percentile of the measurements so far)")
+parser.add_argument("--drift_wait", type=float, default=120.0, help="drift guard: maximum wait per instance in the main pass (seconds); the end-of-cell re-timing pass waits up to 2.5x longer")
 parser.add_argument("--tols", default="1e-2,1e-3,h2,1e-5,1e-6,1e-8")
 parser.add_argument("--T", type=int, default=300, help="horizon for AUC / final error")
 parser.add_argument("--max_ops", type=int, default=60000)
@@ -104,16 +105,29 @@ def ref_time(n=5):
     return float(np.median(ts))
 
 
-def drift_guard(ref0, tol, max_wait_s=300):
+ref_hist = []
+
+
+def drift_reference():
+    """The session's reference time: the 10th percentile of all reference measurements so far
+    (robust to noise, unlike a running minimum, and tightening only as genuinely faster states
+    are observed)."""
+    return float(np.percentile(ref_hist, 10)) if len(ref_hist) >= 5 else float(np.median(ref_hist))
+
+
+def drift_guard(tol, max_wait_s):
     """Waits (in 5 s steps, at most max_wait_s) while the reference operation is more than `tol`
-    slower than at the start of the session (a transient load); a faster machine is not waited
-    for (paired comparisons are within an instance). Returns (ratio, retries); the ratio is
-    stored per instance so that any drift is visible in the results."""
+    slower than the session's reference (a transient load); a faster machine is not waited for
+    (paired comparisons are within an instance). Returns (ratio, retries, ref_cmp, ref_abs) in ns;
+    every measurement enters the reference history."""
     retries = 0
     while True:
-        ratio = ref_time(9) / ref0
+        ref_cmp = drift_reference()
+        ref_abs = ref_time(9)
+        ratio = ref_abs / ref_cmp
         if ratio <= 1.0 + tol or retries * 5 >= max_wait_s:
-            return ratio, retries
+            ref_hist.append(ref_abs)
+            return ratio, retries, ref_cmp, ref_abs
         retries += 1
         time.sleep(5)
 
@@ -266,9 +280,11 @@ for group in groups:
     names = list(runs.keys())
     bnames = [f"base:{bn}" for bn in base_names]
     all_names = names + bnames
-    ref0 = ref_time(25)
+    ref_hist.clear()
+    for _ in range(5):
+        ref_hist.append(ref_time(9))
     t_start = time.time()
-    def time_instance(i, max_wait_s=300):
+    def time_instance(i, max_wait_s=None):
         """Untimed traces, drift guard and timed replays of test instance i; returns the result
         rows of every policy and baseline, the stored curves and the drift record."""
         f1, u1 = f_test[i:i + 1], u_truth[i:i + 1]
@@ -280,17 +296,13 @@ for group in groups:
         for bn in base_names:
             traces[f"base:{bn}"] = baselines[bn].untimed(f1, u1)
         # drift guard: the reference operation must be within drift_tol of its start-of-session time
-        global ref0
-        ref_cmp = ref0                       # the reference the ratio is computed against (fastest state so far)
-        ratio, retries = drift_guard(ref0, args.drift_tol, max_wait_s=max_wait_s)
-        ref_abs = ratio * ref_cmp
-        ref0 = min(ref0, ref_abs)          # the reference is the fastest state observed in the session
+        ratio, retries, ref_cmp, ref_abs = drift_guard(args.drift_tol, args.drift_wait if max_wait_s is None else max_wait_s)
         try:
             load1 = float(os.getloadavg()[0])
         except (AttributeError, OSError):
             load1 = None
         drift_rec = {"instance": i, "ratio": ratio, "retries": retries, "loadavg": load1, "t_wall": time.time(),
-                     "ref_us": ref_abs * 1e-3, "ref_cmp_us": ref_cmp * 1e-3, "ref0_us": ref0 * 1e-3}   # ns -> us
+                     "ref_us": ref_abs * 1e-3, "ref_cmp_us": ref_cmp * 1e-3, "ref0_us": drift_reference() * 1e-3}   # ns -> us
         rows, curves = {}, {}
         # timed replays: random order over policies and baselines per (instance, replay), and an
         # untimed warm-up (one corrector call and one sweep, or the baseline's own operation)
@@ -426,7 +438,7 @@ for group in groups:
     if flagged:
         print(f"  re-timing {len(flagged)} instance(s) timed under a machine slowdown: {flagged}", flush=True)
     for i in flagged:
-        rows, curves, drift_rec = time_instance(i, max_wait_s=900)
+        rows, curves, drift_rec = time_instance(i, max_wait_s=2.5 * args.drift_wait)
         rec = gres["drift"][i]
         rec.update({"retimed": True, "ratio_first": rec.get("ratio_first", rec["ratio"]), "retries_first": rec.get("retries_first", rec["retries"]),
                     "ref_us_first": rec.get("ref_us_first", rec.get("ref_us")), "ref0_us_first": rec.get("ref0_us_first", rec.get("ref0_us")),
