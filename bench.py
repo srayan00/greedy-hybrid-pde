@@ -281,15 +281,16 @@ for group in groups:
             traces[f"base:{bn}"] = baselines[bn].untimed(f1, u1)
         # drift guard: the reference operation must be within drift_tol of its start-of-session time
         global ref0
+        ref_cmp = ref0                       # the reference the ratio is computed against (fastest state so far)
         ratio, retries = drift_guard(ref0, args.drift_tol, max_wait_s=max_wait_s)
-        ref_abs = ratio * ref0
+        ref_abs = ratio * ref_cmp
         ref0 = min(ref0, ref_abs)          # the reference is the fastest state observed in the session
         try:
             load1 = float(os.getloadavg()[0])
         except (AttributeError, OSError):
             load1 = None
         drift_rec = {"instance": i, "ratio": ratio, "retries": retries, "loadavg": load1, "t_wall": time.time(),
-                     "ref_us": ref_abs * 1e-6, "ref0_us": ref0 * 1e-6}
+                     "ref_us": ref_abs * 1e-3, "ref_cmp_us": ref_cmp * 1e-3, "ref0_us": ref0 * 1e-3}   # ns -> us
         rows, curves = {}, {}
         # timed replays: random order over policies and baselines per (instance, replay), and an
         # untimed warm-up (one corrector call and one sweep, or the baseline's own operation)
@@ -430,7 +431,7 @@ for group in groups:
         rec.update({"retimed": True, "ratio_first": rec.get("ratio_first", rec["ratio"]), "retries_first": rec.get("retries_first", rec["retries"]),
                     "ref_us_first": rec.get("ref_us_first", rec.get("ref_us")), "ref0_us_first": rec.get("ref0_us_first", rec.get("ref0_us")),
                     "ratio": drift_rec["ratio"], "retries": drift_rec["retries"], "loadavg": drift_rec["loadavg"], "t_wall": drift_rec["t_wall"],
-                    "ref_us": drift_rec.get("ref_us"), "ref0_us": drift_rec.get("ref0_us")})
+                    "ref_us": drift_rec.get("ref_us"), "ref_cmp_us": drift_rec.get("ref_cmp_us"), "ref0_us": drift_rec.get("ref0_us")})
         for p, row in rows.items():
             gres["policies"][p][i] = row
         for p, cv in curves.items():

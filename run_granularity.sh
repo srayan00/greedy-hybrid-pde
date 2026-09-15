@@ -16,8 +16,8 @@ for EQ in Poisson ConvDiff AnisoDiff VarCoeff; do
   stage "granularity $EQ done"
 done
 # re-timing pass for the 128^2 Poisson, ConvDiff and AnisoDiff pairwise cells, which were produced before the
-# in-run re-timing of drift-flagged instances existed (same routers and cost caches; only the flagged
-# instances are timed again, with the drift guard waiting up to 15 min)
+# current driver (live decay rule, Krylov validation, stored decision sequences, in-cell re-timing) existed:
+# same routers and cost caches; every instance is timed again (--retime_all), the drift guard waiting up to 15 min
 POLF=classical,hints2,hints5,hints10,hints15,hints25,hints50,phints5,phints10,phints15,phints25,phints50,oneshot,decay0.9,decay0.95,decay0.98,greedy,oracle,router
 for EQ in Poisson ConvDiff AnisoDiff; do for S in $(cat config/solvers_$EQ | tr , ' '); do
   run $PY bench.py --equation $EQ --N 128 --solvers $S --n_test 64 --max_ops 60000 --policies $POLF --seed 73 --timed_reps 3 --retime_only --retime_all > logs/final_retime_${EQ}_128_$S.log 2>&1

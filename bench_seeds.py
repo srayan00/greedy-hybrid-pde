@@ -71,7 +71,14 @@ for spec in args.solvers.split(","):
             tt = time_to_tol(tr, t, tols)
             t_wu = work_units(env, tr, "router", router_cost=5e-6)
             tw = time_to_tol(tr, t_wu, tols)
-            rows.append({"n_ops": int(len(tr["op"])), "n_no": int(tr["n_no"]),
+            ops_ = np.asarray(tr["op"], dtype=int)
+            if len(ops_):
+                brk_ = np.flatnonzero(np.diff(ops_)) + 1
+                starts_ = np.concatenate([[0], brk_]); ends_ = np.concatenate([brk_, [len(ops_)]])
+                op_rle = [[int(ops_[s_]), int(e_ - s_)] for s_, e_ in zip(starts_, ends_)]
+            else:
+                op_rle = []
+            rows.append({"n_ops": int(len(tr["op"])), "n_no": int(tr["n_no"]), "op_rle": op_rle,
                          "tol": {f"{tol:.6g}": {"iters": None if not np.isfinite(tt[tol][1]) else int(tt[tol][1]),
                                                 "t_live": None if not np.isfinite(tt[tol][0]) else float(tt[tol][0]),
                                                 "t_wu": None if not np.isfinite(tw[tol][0]) else float(tw[tol][0])}

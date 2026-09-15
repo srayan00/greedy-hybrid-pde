@@ -107,12 +107,22 @@ def iters(rows, key):
     return np.array([np.inf if r["tol"][key]["iters"] is None else r["tol"][key]["iters"] for r in rows])
 
 
+def _lab2(p):
+    if p == "oneshot":
+        return "one-shot"
+    if p.startswith("phints"):
+        return f"$\\tau{{=}}{p[6:]}$ (first call at $0$)"
+    if p.startswith("decay"):
+        return f"$\\theta{{=}}{p[5:]}$"
+    return f"$\\tau{{=}}{p[5:]}$"
+
+
 def seq_agree(rows_a, rows_b, key):
     """Percentage of instances on which two policies executed the same operation sequence up to the
     tolerance crossing (same crossing iteration and identical operations before it). Instances on which
     both are censored are skipped; one censored counts as disagreement. nan if the rows carry no
     operation sequences (cells produced before they were stored)."""
-    if not rows_a or not rows_b or "op_rle" not in rows_a[0] or "op_rle" not in rows_b[0]:
+    if not rows_a or not rows_b or any("op_rle" not in r for r in rows_a) or any("op_rle" not in r for r in rows_b):
         return np.nan
     agree, n = 0, 0
     for ra, rb in zip(rows_a, rows_b):
@@ -226,19 +236,22 @@ def boot_ci(r, B=2000, seed=0):
     return (float(np.percentile(meds, 2.5)), float(np.percentile(meds, 97.5)))
 
 
-def time_cell(rows, key, bold=False, italic=False):
-    """Median time with censoring marks; majority-censored -> lower bound."""
-    ts = times(rows, key)
+def time_cell(rows, key, bold=False, italic=False, field="t_live"):
+    """Median time with censoring marks: with any censored run the median of the mixed vector
+    (reached times, and the time spent up to the cap for the censored runs) is reported, a lower
+    bound marked >=; invalid runs are dropped and counted (times mark)."""
+    ts = times(rows, key, field)
+    n_inv = int(np.isnan(ts).sum())
     ts = ts[~np.isnan(ts)]
     cens = int(np.isinf(ts).sum())
     if cens > 0:
-        # with any censored run the median of the mixed vector (reached times, and the time spent up
-        # to the cap for the censored runs) is reported: a lower bound on the median time to the tolerance
-        lb = times_lb(rows, key)
+        lb = times_lb(rows, key, field)
         lb = lb[~np.isnan(lb)]
         s = f"$\\geq${fmt_time(np.median(lb))}$^{{\\dagger {cens}}}$" if len(lb) else "--"
     else:
         s = fmt_time(np.median(ts)) if len(ts) else "--"
+    if n_inv:
+        s += f"$^{{\\times {n_inv}}}$"
     if bold:
         s = f"\\textbf{{{s}}}"
     if italic:
@@ -302,6 +315,9 @@ def pair_ratios(rows_b, rows_r, key, field="t_live"):
             r[i] = tb_lb[i] / tr_f[i]; cls.append("base")
         else:
             r[i] = tb_f[i] / tr_f[i]; cls.append("ok")
+    # both-censored ties carry no information: they are excluded from the median and from the test
+    both_ = np.array([c_ == "both" for c_ in cls], dtype=bool)
+    r[both_] = np.nan
     ok = ~np.isnan(r)
     d = np.full(n, np.nan)
     fin = ok & (r > 0) & np.isfinite(r)
@@ -310,6 +326,7 @@ def pair_ratios(rows_b, rows_r, key, field="t_live"):
     ext = (np.abs(d[fin]).max() if fin.any() else 0.0) + 1.0
     d[ok & (r == 0)] = -ext
     counts = {c: cls.count(c) for c in ("ok", "base", "router", "both", "invalid")}
+    counts["informative"] = int(ok.sum())
     return r, d, counts
 
 
@@ -338,24 +355,52 @@ def sp_rows(rows_b, rows_r, key, ci=True, field="t_live"):
     failure), a dagger counts router failures (ratio 0), a double dagger counts both-censored ties."""
     r, d, c = pair_ratios(rows_b, rows_r, key, field)
     rr = r[~np.isnan(r)]
-    sp = float(np.median(rr)) if len(rr) else np.nan
+    if len(rr) < 4:
+        return "--" + class_marks(c), np.nan, 1.0
+    sp = float(np.median(rr))
     p = wilcoxon_d(d)
     s = fmt_sp(sp)
-    if c["base"] > len(rows_b) / 2 and c["router"] == 0:
+    # the median ratio is a lower bound on the true ratio only when every substitution pushed it
+    # downwards: baseline caps present, no router failure (ratio 0) and no both-censored tie in play
+    if c["base"] > 0 and c["router"] == 0 and c["both"] == 0:
         s = "$\\geq$" + s
-    if ci and len(rr) >= 4:
+    if ci:
         lo, hi = boot_ci(rr)
         if np.isfinite(lo) and np.isfinite(hi):
             s += f" [{fmt_sp(lo)[:-8]}, {fmt_sp(hi)[:-8]}]"
         elif np.isfinite(lo):
             s += f" [{fmt_sp(lo)[:-8]}, $>10^{{3}}$]"
-    if c["router"]:
-        s += f"$^{{\\dagger {c['router']}}}$"
-    if c["both"]:
-        s += f"$^{{\\ddagger {c['both']}}}$"
-    if np.isnan(sp):
-        return "--", np.nan, 1.0
+    s += class_marks(c)
     return (f"{s} ({pstr(p)})" if sp >= 1.0 else f"{s} (slower, {pstr(p)})"), sp, p
+
+
+def class_marks(c):
+    """Superscript counts of the censoring classes: dagger = router-only failures (ratio 0), double
+    dagger = both censored (excluded ties), section = baseline-only censored (entered at the cap),
+    times = invalid pairs (dropped)."""
+    s = ""
+    if c.get("router"):
+        s += f"$^{{\\dagger {c['router']}}}$"
+    if c.get("both"):
+        s += f"$^{{\\ddagger {c['both']}}}$"
+    if c.get("base"):
+        s += f"$^{{\\S {c['base']}}}$"
+    if c.get("invalid"):
+        s += f"$^{{\\times {c['invalid']}}}$"
+    return s
+
+
+def ratio_marks(rows_b, rows_r, key, field="t_live"):
+    """Compact 'ratio + class marks' for descriptive tables (no interval, no test)."""
+    r, d, c = pair_ratios(rows_b, rows_r, key, field)
+    rr = r[~np.isnan(r)]
+    if len(rr) < 4:
+        return "--" + class_marks(c), np.nan
+    sp = float(np.median(rr))
+    s = fmt_sp(sp)
+    if c["base"] > 0 and c["router"] == 0 and c["both"] == 0:
+        s = "$\\geq$" + s
+    return s + class_marks(c), sp
 
 
 def rng_macro(out, name, vals):
@@ -510,9 +555,7 @@ def main():
                         row += ["--"] * 3
                         continue
                     for tol in [1e-3, d["h2"], 1e-8]:
-                        ts = base_times(d, m, tol)
-                        cens = int((~np.isfinite(ts)).sum())
-                        row.append(fmt_time(np.median(ts)) + (f"$^{{\\dagger {cens}}}$" if cens else ""))
+                        row.append(time_cell(d["methods"][m], tkey(d, tol)))
                 out.append(" & ".join(row) + " \\\\")
             out.append("\\midrule")
         out[-1] = "\\bottomrule\n\\end{tabular}}"
@@ -679,12 +722,12 @@ def main():
                         sp_h_ = ratio_rows(P[HREF], blk["rows"], key, field="t_wu")
                         sp_b_ = ratio_rows(P[best_tau(P, key)], blk["rows"], key, field="t_wu")
                         sps.append(sp_h_)
-                        agree.append(float(np.mean(it_s == it_main)))
+                        agree.append(seq_agree(blk["rows"], P["router"], key))
                         if sp_h_ > 1.0 and p_rows(P[HREF], blk["rows"], key, field="t_wu") < 0.01 and sp_b_ > 1.0 and p_rows(P[best_tau(P, key)], blk["rows"], key, field="t_wu") < 0.01:
                             nsig += 1
                     out.append(" & ".join([f"${N_}^2$", f"$\\{{\\mathrm{{NO}}, \\text{{{SOLVER_NAMES[spec]}}}\\}}$",
                                            f"{np.mean(meds)*1e3:.2f} $\\pm$ {np.std(meds)*1e3:.2f}\\,ms",
-                                           f"{100*np.mean(agree):.0f}\\%", f"{min(sps):.2f}--{max(sps):.2f}$\\times$",
+                                           (f"{np.mean(agree):.0f}\\%" if all(np.isfinite(agree)) else PENDING), f"{min(sps):.2f}--{max(sps):.2f}$\\times$",
                                            f"{nsig}/{len(meds)}"]) + " \\\\")
             out.append("\\bottomrule\n\\end{tabular}}")
         else:
@@ -714,12 +757,12 @@ def main():
                 key = tkey(d, d["h2"])
                 t_r = times(P["router"], key)
                 bt = best_tau(P, key)
-                sp_h = ratio_rows(P[HREF], P["router"], key)
-                sp_b = ratio_rows(P[bt], P["router"], key)
+                s_h, sp_h = ratio_marks(P[HREF], P["router"], key)
+                s_b, sp_b = ratio_marks(P[bt], P["router"], key)
                 row.append(time_cell(P[HREF], key))
                 row.append(time_cell(P[bt], key) + f"$_{{{sched_label(bt)}}}$")
                 rc = time_cell(P["router"], key, bold=(sp_h >= 1 and sp_b >= 1))
-                row.append(rc + f" ({fmt_sp(sp_h)}\\,/\\,{fmt_sp(sp_b)})")
+                row.append(rc + f" ({s_h}\\,/\\,{s_b})")
             out.append(" & ".join(row) + " \\\\")
             first = False
             any_row = True
@@ -733,17 +776,18 @@ def main():
                 if d is None or m not in d["methods"] or not d["methods"][m]:
                     row += ["--"] * 3
                     continue
-                ts = base_times(d, m, d["h2"])
-                cens = int((~np.isfinite(ts)).sum())
-                row += ["", "", fmt_time(np.median(ts)) + (f"$^{{\\dagger {cens}}}$" if cens else "")]
+                row += ["", "", time_cell(d["methods"][m], tkey(d, d["h2"]))]
             out.append(" & ".join(row) + " \\\\")
         if any_row and eq != EQS[-1]:
             out.append("\\midrule")
     out.append("\\bottomrule\n\\end{tabular}}")
 
     # ================================================================ summary macros per grid
+    agree_incomplete = set()
     for N_ in NS:
         SUF = GRID_SUF[N_]
+        best_h2_sched = []
+        summ_specs = []
         summ = {"Solver": [], "Hints": [], "HintsTF": [], "Best": [], "Decay": [], "Oneshot": [], "SolverDeep": [], "HintsDeep": [], "HintsTFDeep": [], "BestDeep": [], "DecayDeep": [], "OneshotDeep": [], "OracleRatio": [],
                 "AgreeOracle": [], "AgreeBest": [], "AgreeOracleDeep": [], "OneCall": []}
         for eq in EQS:
@@ -753,6 +797,7 @@ def main():
                     continue
                 d, g = dg
                 P = g["policies"]
+                summ_specs.append(spec)
                 for tol, suf_ in [(d["h2"], ""), (1e-8, "Deep")]:
                     key = tkey(d, tol)
                     t_r = times(P["router"], key)
@@ -774,6 +819,9 @@ def main():
                 for nm_, v_ in [("AgreeOracle", a_o), ("AgreeBest", a_b), ("AgreeOracleDeep", a_o8)]:
                     if np.isfinite(v_):
                         summ[nm_].append(v_)
+                    else:
+                        agree_incomplete.add(SUF)     # a cell without stored sequences: the range stays pending
+                best_h2_sched.append(best_tau(P, key))
                 # instances on which the router makes exactly one corrector call to h^2
                 nc_ = np.array([r["tol"][key]["no_calls"] if r["tol"][key]["no_calls"] is not None else -1 for r in P["router"]])
                 summ["OneCall"].append(100 * float(np.mean(nc_ == 1)))
@@ -781,10 +829,18 @@ def main():
             continue
         for name, vals in summ.items():
             if name.startswith("Agree") or name == "OneCall":
-                out.append(f"\\newcommand{{\\ca{name}{SUF}Min}}{{{(f'{min(vals):.0f}' if vals else PENDING)}}}")
-                out.append(f"\\newcommand{{\\ca{name}{SUF}Max}}{{{(f'{max(vals):.0f}' if vals else PENDING)}}}")
+                ok_ = bool(vals) and not (name.startswith("Agree") and SUF in agree_incomplete)
+                out.append(f"\\newcommand{{\\ca{name}{SUF}Min}}{{{(f'{min(vals):.0f}' if ok_ else PENDING)}}}")
+                out.append(f"\\newcommand{{\\ca{name}{SUF}Max}}{{{(f'{max(vals):.0f}' if ok_ else PENDING)}}}")
             else:
                 rng_macro(out, "caSp" + name + SUF, vals)
+        # the pairing with the smallest solver-alone ratio, and the best fixed schedules at h^2
+        sol_pairs = [(v, spec) for v, spec in zip(summ["Solver"], summ_specs)]
+        out.append(f"\\newcommand{{\\caSpSolverMinPairing{SUF}}}{{{SOLVER_NAMES[min(sol_pairs)[1]] if sol_pairs else PENDING}}}")
+        cnt_h = {}
+        for p in best_h2_sched:
+            cnt_h[p] = cnt_h.get(p, 0) + 1
+        out.append(f"\\newcommand{{\\caBestHTwoSchedList{SUF}}}{{{', '.join(f'{_lab2(p)} ({n})' for p, n in sorted(cnt_h.items(), key=lambda kv: -kv[1])) if cnt_h else PENDING}}}")
         out.append(f"\\newcommand{{\\caCellsRouterBeatsOneshotDeep{SUF}}}{{{sum(v > 1.0 for v in summ['OneshotDeep'])}}}")
         out.append(f"\\newcommand{{\\caCellsRouterBeatsHintsTFDeep{SUF}}}{{{sum(v > 1.0 for v in summ['HintsTFDeep'])}}}")
         # best fixed schedule at 1e-8 per pairing (labels), for the text
@@ -869,12 +925,13 @@ def main():
             vs_kry.append(ratio_rows(rk_, g["policies"]["router"], kh))
         mgp = cell(eq, N, "mg")
         if mgp:
-            vs_mg_ens.append(paired_speedup(times(mgp[1]["policies"]["classical"], tkey(mgp[0], dd["h2"])),
-                                            times(mgp[1]["policies"]["router"], tkey(mgp[0], dd["h2"])))[0])
+            vs_mg_ens.append(ratio_rows(mgp[1]["policies"]["classical"], mgp[1]["policies"]["router"], tkey(mgp[0], dd["h2"])))
     for name, vals in [("caVsMg", vs_mg), ("caVsKrylov", vs_kry), ("caVsMgEns", vs_mg_ens)]:
         rng_macro(out, name, vals)
     fft_ratio = []
     for (eq, N), d in Bf.items():
+        if N != MAIN_N:
+            continue
         pw = {s_: cell(eq, N, s_) for s_ in PAIRINGS if cell(eq, N, s_)}
         if not pw or "fft" not in d["methods"] or not d["methods"]["fft"]:
             continue
@@ -1038,11 +1095,8 @@ def main():
                     for tol in [dd["h2"], 1e-6, 1e-8]:
                         key = tkey(dd, tol)
                         row.append(time_cell(Rr, key))
-                        tw = times(Rr, key, field="t_wu")
-                        cens = int((~np.isfinite(tw)).sum())
-                        row.append(fmt_time(np.median(tw)) + (f"$^{{\\dagger {cens}}}$" if cens else ""))
-                        two = times(Ro, key, field="t_wu")
-                        row.append("\\textit{" + fmt_time(np.median(two)) + "}")
+                        row.append(time_cell(Rr, key, field="t_wu"))
+                        row.append(time_cell(Ro, key, field="t_wu", italic=True))
                     tb = times(best_single[1], tkey(best_single[3], 1e-8), field="t_wu")
                     tbo = times(best_single[2], tkey(best_single[3], 1e-8), field="t_wu")
                     if len(members) > 1:
@@ -1271,7 +1325,7 @@ def main():
                 sav_h = t_h - t_r; sav_c = t_c - t_r
                 be = (rt["train_s"] / sav_h) if (rt and sav_h > 0) else np.inf
                 be_list.append(be)
-                be_kind.append("ok" if (rt and sav_h > 0) else ("notrain" if not rt else "nosaving"))
+                be_kind.append("nosaving" if sav_h <= 0 else ("notrain" if not rt else "ok"))
                 out.append(" & ".join([EQ_NAMES[eq] if first else "", f"${N}^2$", f"{c['data_s'] + c['fit_s']:.0f}\\,s",
                                        f"{rt['train_s']:.0f}\\,s" if rt else "--", fmt_time(sav_h) if sav_h > 0 else "--",
                                        f"{be:.0f}" if np.isfinite(be) else "--", fmt_time(sav_c)]) + " \\\\")
@@ -1436,7 +1490,9 @@ def main():
         out.append(f"\\newcommand{{\\caThmPlainDiff}}{{{sum(not r.get('deployed_eq_plain', True) for r in allrows)}}}")
         out.append(f"\\newcommand{{\\caThmViol}}{{{sum(r.get('viol_greedy', 0) for r in allrows)}}}")
         out.append(f"\\newcommand{{\\caThmViolAll}}{{{sum(r.get('viol_all', 0) for r in allrows)}}}")
-        out.append(f"\\newcommand{{\\caThmMaxRatio}}{{{math.ceil(10 * max(r['greedy_over_opt'] for r in allrows)) / 10:.1f}}}")
+        res_rows = [r for r in allrows if not r.get('opt_at_floor', False)] or allrows
+        out.append(f"\\newcommand{{\\caThmMaxRatio}}{{{math.ceil(10 * max(r['greedy_over_opt'] for r in res_rows)) / 10:.1f}}}")
+        out.append(f"\\newcommand{{\\caThmResolved}}{{{len([r for r in allrows if not r.get('opt_at_floor', False)])}}}")
         out.append(f"\\newcommand{{\\caThmAlphaGreedyMax}}{{{max(r['alpha_greedy'] for r in allrows):.3f}}}")
         out.append(f"\\newcommand{{\\caThmAlphaAllMax}}{{{max(r['alpha_all'] for r in allrows):.3f}}}")
         out.append(f"\\newcommand{{\\caThmPremises}}{{{sum(r.get('premises_verified', False) for r in allrows)}/{len(allrows)}}}")
@@ -1446,7 +1502,7 @@ def main():
         out.append(f"\\newcommand{{\\caThmN}}{{{len(allrows)}}}")
     else:
         pending(out, "catheorem")
-        for nm_ in ["caThmMuMax", "caThmHolds", "caThmFloor", "caThmPlainDiff", "caThmViol", "caThmViolAll", "caThmMaxRatio", "caThmAlphaGreedyMax", "caThmAlphaAllMax", "caThmPremises", "caThmExpand", "caThmExpandAll", "caThmClip", "caThmN"]:
+        for nm_ in ["caThmMuMax", "caThmHolds", "caThmFloor", "caThmPlainDiff", "caThmViol", "caThmViolAll", "caThmMaxRatio", "caThmResolved", "caThmAlphaGreedyMax", "caThmAlphaAllMax", "caThmPremises", "caThmExpand", "caThmExpandAll", "caThmClip", "caThmN"]:
             out.append(f"\\newcommand{{\\{nm_}}}{{{PENDING}}}")
 
     # ================================================================ decision-granularity ablation (unit = corrector / 4)
@@ -1601,7 +1657,7 @@ def main():
                 if name + SUF + mm not in defined:
                     out.append(f"\\newcommand{{\\{name}{SUF}{mm}}}{{{PENDING}}}")
         for name in ["caNumCells", "caCellsRouterBeatsBest", "caCellsRouterBeatsHints", "caCellsRouterBeatsBestDeep", "caCellsRouterBeatsHintsDeep", "caCellsRouterWithinBest",
-                     "caCellsRouterBeatsDecay", "caCellsRouterBeatsDecayDeep", "caCellsRouterBeatsOneshotDeep", "caCellsRouterBeatsHintsTFDeep", "caBestDeepSchedList",
+                     "caCellsRouterBeatsDecay", "caCellsRouterBeatsDecayDeep", "caCellsRouterBeatsOneshotDeep", "caCellsRouterBeatsHintsTFDeep", "caBestDeepSchedList", "caBestHTwoSchedList", "caSpSolverMinPairing",
                      "caMJacobi", "caMGs", "caMMg", "caMSymGs", "caCostJacobi", "caCostGs", "caCostMg", "caCostSymGs", "caCostNo", "caCostRes"]:
             if name + SUF not in defined:
                 out.append(f"\\newcommand{{\\{name}{SUF}}}{{{PENDING}}}")

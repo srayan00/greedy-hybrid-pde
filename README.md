@@ -100,12 +100,13 @@ each after an untimed warm-up; a drift guard re-times a reference operation
 before every instance and waits (up to 5 min) while it is more than 10%
 slower than the fastest state seen so far in the session, re-times the
 instances that were still too slow at the end of the cell, and `bench.py
---retime_only [--retime_all]` re-times an existing cell (all 128^2 pairwise
-cells are re-timed this way at the end of the chain). We
+--retime_only [--retime_all]` re-times an existing cell (the 128^2 pairwise cells
+of the three periodic equations, produced before the current driver, are
+re-timed this way at the end of the chain). We
 report the median wall-clock time at which the error first drops below a
 tolerance, mainly eps = h^2, paired per-instance speedups with bootstrap 95%
 intervals, two-sided Wilcoxon tests on log ratios with a Holm correction
-(a censored baseline enters at its time-to-cap as a lower bound, a censored router run as a ratio of 0 counted against the router, both censored as a tie), paired t-tests
+(a censored baseline enters at its time-to-cap as a lower bound; a censored router run as a ratio of 0 and the most extreme negative rank, a failure penalty counted against the router; both censored is an uninformative tie excluded from the median and the test; the tests and intervals refer to this capped-time-with-failure-penalty convention, not to ordinary completion-time ratios), paired t-tests
 on log AUC, and work units (measured per-iteration costs x executed
 operations) wherever sessions must be compared.
 
