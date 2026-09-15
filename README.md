@@ -102,8 +102,8 @@ slower than the session's reference (the 10th percentile of the reference
 measurements so far), re-times the instances that were still too slow at the
 end of the cell (waiting up to 5 min), and `bench.py --retime_only
 [--retime_all]` re-times an existing cell (the 128^2 pairwise cells
-of the three periodic equations, produced before the current driver, are
-re-timed this way at the end of the chain). We
+of Poisson and convection-diffusion, produced before the current driver, are
+re-timed this way once the other 128^2 cells are complete). We
 report the median wall-clock time at which the error first drops below a
 tolerance, mainly eps = h^2, paired per-instance speedups with bootstrap 95%
 intervals, two-sided Wilcoxon tests on log ratios with a Holm correction
@@ -143,7 +143,7 @@ operations) wherever sessions must be compared.
 | `screen_ensembles.py` | oracle-level screening of every ensemble of up to three members (work units) -> `results/screen_<eq>_<N>.json` |
 | `check_theorem.py` | exhaustive short-horizon check of Theorem 4.1 for the deployed rule (mu, alpha(O), bound, clipped optima, violations) -> `results/theorem_<eq>_<N>.json` |
 | `check_assumptions.py` | numerical checks of the theory assumptions (Lipschitz constants in the Euclidean and energy norms, spectral radii, invertibility, zero preservation, commutators, alpha(O), Thm 5.1 bounds) -> `results/assumptions_<eq>_<N>.json` |
-| `run_final.sh`, `run_varcoeff.sh`, `run_granularity.sh`, `run_all.sh` | the exact sequence of commands that produces the reported results (revision 2); the older `run_*.sh` scripts produced the development runs |
+| `run_all.sh`, `run_final.sh`, `run_varcoeff.sh`, `run_retime128.sh`, `run_granularity.sh` | the exact sequence of commands that produces the reported results (revision 2; `run_all.sh` sets the order); the older `run_*.sh` scripts produced the development runs |
 
 ### Step-by-step replication
 
@@ -165,12 +165,18 @@ python corrector.py --equation AnisoDiff --N 256 --coarsen_x 1 --coarsen_y 4 --n
 #    (the variable-coefficient correctors are trained by run_varcoeff.sh)
 #    -> checkpoints/deeponet_<eq>_<N>_best.pth (validation relative error ~2e-6 is expected)
 
-# 2. the confirmatory study reported in the paper (~1-2 days on an M4 Pro, sequential, idle machine):
-#    run_final.sh (128^2 pairwise + same-session baselines, 128^2 ensembles, 256^2, 512^2, usage traces,
-#    seed trials, overheads, assumption / screening / theorem checks, discretisation study), then
-#    run_varcoeff.sh (variable-coefficient diffusion), then run_granularity.sh (unit = corrector / 4).
-#    Solver lists per equation are read from config/solvers_<eq> at the start of each stage; every
-#    script is fail-fast (a failing command writes logs/*.failed and stops the chain).
+# 2. the confirmatory study reported in the paper (~3-4 days on an M4 Pro, sequential, idle machine).
+#    run_all.sh completes every 128^2 result before any larger grid:
+#      ONLY_N=128 SKIP_AUX=1 run_final.sh     128^2 pairwise cells (+ same-session baselines) and ensembles
+#      ONLY_N=128 SKIP_AUX=1 run_varcoeff.sh  variable-coefficient diffusion: corrector, pairwise cells, nested ensembles
+#      run_retime128.sh                       re-times the 128^2 cells written by an earlier driver revision
+#      ONLY_N=128 run_final.sh, run_varcoeff.sh  128^2 usage traces, seed trials, assumption / screening / theorem checks
+#      run_granularity.sh                     decision-granularity ablation (unit = corrector / 4)
+#      run_final.sh, run_varcoeff.sh          256^2 and 512^2 cells and checks, overheads, discretisation study
+#    ONLY_N=<N> restricts a script to one grid and SKIP_AUX=1 skips its auxiliary stage. Every step whose
+#    output exists is skipped, so the chain resumes after an interruption. Solver lists per equation are
+#    read from config/solvers_<eq> at the start of each stage; every script is fail-fast (a failing
+#    command writes logs/*.failed and stops the chain).
 mkdir -p logs && PY=$(which python) nohup ./run_all.sh > logs/run_all.out 2>&1 &
 #    Development runs (numpy kernels, seed 72, earlier sampler) on which every configuration was chosen
 #    are archived in results_dev/; the first confirmatory run (before the protocol revision) in results_conf1/.
