@@ -488,6 +488,20 @@ def main():
         cands = [p for p in P if p.startswith("hints") or p.startswith("phints") or p == "oneshot"]
         return min(cands, key=lambda p: np.median(times(P[p], key)))
 
+    _dev_cache = {}
+
+    def dev_sched(eq, N, spec, key):
+        """The schedule selected on the development instances (select_schedule.py) for this cell and tolerance,
+        or None if the selection file is absent."""
+        path = f"{RESULTS_DIR}/schedule_dev_{eq}_{N}.json"
+        if path not in _dev_cache:
+            try:
+                _dev_cache[path] = json.load(open(path))
+            except (OSError, ValueError):
+                _dev_cache[path] = None
+        dd = _dev_cache[path]
+        return dd["groups"][spec]["selected"].get(key) if dd and spec in dd["groups"] else None
+
     def kry_name(eq):
         return "bicgstab_mg" if eq == "ConvDiff" else "pcg_mg"
 
@@ -789,7 +803,8 @@ def main():
         best_h2_sched = []
         summ_specs = []
         summ = {"Solver": [], "Hints": [], "HintsTF": [], "Best": [], "Decay": [], "Oneshot": [], "SolverDeep": [], "HintsDeep": [], "HintsTFDeep": [], "BestDeep": [], "DecayDeep": [], "OneshotDeep": [], "OracleRatio": [],
-                "AgreeOracle": [], "AgreeBest": [], "AgreeOracleDeep": [], "OneCall": []}
+                "AgreeOracle": [], "AgreeBest": [], "AgreeOracleDeep": [], "OneCall": [],
+                "DevSched": [], "DevSchedDeep": [], "DevSchedSame": [], "DevSchedSameDeep": []}
         for eq in EQS:
             for spec in PAIRINGS:
                 dg = cell(eq, N_, spec)
@@ -805,6 +820,10 @@ def main():
                     summ["Hints" + suf_].append(ratio_rows(P[HREF], P["router"], key))
                     summ["HintsTF" + suf_].append(ratio_rows(P["hints25"], P["router"], key))
                     summ["Best" + suf_].append(ratio_rows(P[best_tau(P, key)], P["router"], key))
+                    dsel = dev_sched(eq, N_, spec, key)
+                    if dsel and dsel in P:      # the deployable baseline: the schedule selected on the development instances
+                        summ["DevSched" + suf_].append(ratio_rows(P[dsel], P["router"], key))
+                        summ["DevSchedSame" + suf_].append(float(dsel == best_tau(P, key)))
                     if "oneshot" in P:
                         summ["Oneshot" + suf_].append(ratio_rows(P["oneshot"], P["router"], key))
                     bd_ = best_decay(P, key)
@@ -828,6 +847,9 @@ def main():
         if not summ["Solver"]:
             continue
         for name, vals in summ.items():
+            if name.startswith("DevSchedSame"):
+                out.append(f"\\newcommand{{\\ca{name}{SUF}}}{{{(f'{int(sum(vals))}' if vals else PENDING)}}}")
+                continue
             if name.startswith("Agree") or name == "OneCall":
                 ok_ = bool(vals) and not (name.startswith("Agree") and SUF in agree_incomplete)
                 out.append(f"\\newcommand{{\\ca{name}{SUF}Min}}{{{(f'{min(vals):.0f}' if ok_ else PENDING)}}}")
@@ -876,6 +898,9 @@ def main():
         out.append(f"\\newcommand{{\\caBestDeepSchedList{SUF}}}{{{', '.join(f'{_lab(p)} ({n})' for p, n in sorted(cnt_.items(), key=lambda kv: -kv[1]))}}}")
         out.append(f"\\newcommand{{\\caNumCells{SUF}}}{{{len(summ['Solver'])}}}")
         out.append(f"\\newcommand{{\\caCellsRouterBeatsBest{SUF}}}{{{sum(v > 1.0 for v in summ['Best'])}}}")
+        out.append(f"\\newcommand{{\\caCellsRouterBeatsDevSched{SUF}}}{{{sum(v > 1.0 for v in summ['DevSched']) if summ['DevSched'] else PENDING}}}")
+        out.append(f"\\newcommand{{\\caCellsRouterBeatsDevSchedDeep{SUF}}}{{{sum(v > 1.0 for v in summ['DevSchedDeep']) if summ['DevSchedDeep'] else PENDING}}}")
+        out.append(f"\\newcommand{{\\caNumDevSched{SUF}}}{{{len(summ['DevSched']) if summ['DevSched'] else PENDING}}}")
         out.append(f"\\newcommand{{\\caCellsRouterBeatsHints{SUF}}}{{{sum(v > 1.0 for v in summ['Hints'])}}}")
         out.append(f"\\newcommand{{\\caCellsRouterBeatsBestDeep{SUF}}}{{{sum(v > 1.0 for v in summ['BestDeep'])}}}")
         out.append(f"\\newcommand{{\\caCellsRouterBeatsHintsDeep{SUF}}}{{{sum(v > 1.0 for v in summ['HintsDeep'])}}}")
