@@ -97,7 +97,8 @@ timed pass that executes only the chosen operations (residual + norm, update;
 the router re-decides live and its feature/decision costs are charged). Three
 timed replays per instance in a random order over policies and baselines,
 each after an untimed warm-up; a drift guard re-times a reference operation
-before every instance and waits (up to 2 min) while it is more than 15%
+before every instance and waits (up to 2 min, running the reference operation
+meanwhile, since macOS moves a sleeping process to the efficiency cores) while it is more than 15%
 slower than the session's reference (the 10th percentile of the reference
 measurements so far), re-times the instances that were still too slow at the
 end of the cell (waiting up to 5 min), and `bench.py --retime_only

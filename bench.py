@@ -116,7 +116,7 @@ def drift_reference():
 
 
 def drift_guard(tol, max_wait_s):
-    """Waits (in 5 s steps, at most max_wait_s) while the reference operation is more than `tol`
+    """Waits (re-checking every 5 s, at most max_wait_s) while the reference operation is more than `tol`
     slower than the session's reference (a transient load); a faster machine is not waited for
     (paired comparisons are within an instance). Returns (ratio, retries, ref_cmp, ref_abs) in ns;
     every measurement enters the reference history."""
@@ -129,7 +129,11 @@ def drift_guard(tol, max_wait_s):
             ref_hist.append(ref_abs)
             return ratio, retries, ref_cmp, ref_abs
         retries += 1
-        time.sleep(5)
+        # stay busy on the reference operation instead of sleeping: macOS moves a sleeping process to the
+        # efficiency cores, where the reference stays slow for the whole wait (a self-sustaining slowdown)
+        t_resume = time.perf_counter() + 5.0
+        while time.perf_counter() < t_resume:
+            ref_time(1)
 
 
 groups = [specs] if args.ensemble else [[s] for s in specs]
