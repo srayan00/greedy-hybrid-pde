@@ -7,7 +7,7 @@
 #   5. decision-granularity ablation (128^2 only)
 #   6. 256^2 and 512^2 cells with their ensembles and checks, overheads, discretisation study
 # Every script skips steps whose output already exists, so the chain resumes after an interruption. Launch detached:
-#   nohup ./run_all.sh > logs/run_all.out 2>&1 &
+#   setopt NO_BG_NICE; nohup ./run_all.sh > logs/run_all.out 2>&1 &     (zsh otherwise starts background jobs at nice 5)
 cd "$(dirname "$0")"
 note() { echo "$(date '+%F %T') ===== $1 =====" >> logs/final_progress.log; }
 ONLY_N=128 SKIP_AUX=1 ./run_final.sh \

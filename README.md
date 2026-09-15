@@ -180,6 +180,7 @@ python corrector.py --equation AnisoDiff --N 256 --coarsen_x 1 --coarsen_y 4 --n
 #    read from config/solvers_<eq> at the start of each stage; every script is fail-fast (a failing
 #    command writes logs/*.failed and stops the chain).
 mkdir -p logs && PY=$(which python) nohup ./run_all.sh > logs/run_all.out 2>&1 &
+#    (in zsh run `setopt NO_BG_NICE` first: zsh otherwise starts background jobs at nice 5)
 #    Development runs (numpy kernels, seed 72, earlier sampler) on which every configuration was chosen
 #    are archived in results_dev/; the first confirmatory run (before the protocol revision) in results_conf1/.
 
