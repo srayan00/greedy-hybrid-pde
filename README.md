@@ -102,7 +102,8 @@ meanwhile, since macOS moves a sleeping process to the efficiency cores) while i
 slower than the session's reference (the 10th percentile of the reference
 measurements so far, seeded after 10 s of running the reference operation),
 re-times at the end of the cell (waiting up to 5 min) the instances that were
-still too slow or more than 15% slower than the cell's final reference, and `bench.py --retime_only
+still too slow or more than 15% slower than the cell's final reference or than
+the median final reference of the other cells of that equation and grid, and `bench.py --retime_only
 [--retime_all]` re-times an existing cell (the 128^2 pairwise cells
 of Poisson and convection-diffusion, produced before the current driver, are
 re-timed this way once the other 128^2 cells are complete). We

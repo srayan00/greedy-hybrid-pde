@@ -105,7 +105,7 @@ def ref_time(n=5):
     return float(np.median(ts))
 
 
-from drift import final_reference_us, slow_instances
+from drift import final_reference_us, slow_instances, cross_session_anchor_us, record_final_reference
 ref_hist = []
 
 
@@ -447,7 +447,19 @@ for group in groups:
     # at the check (the guard gave up) or than the cell's final reference (a session that started in a slow state)
     # are timed again at the end of the cell (the guard then waits up to 2.5 drift_wait); the first-pass values are
     # kept in the record
-    flagged = [dr["instance"] for dr in gres["drift"]] if args.retime_all else slow_instances(gres["drift"], args.drift_tol)
+    # ... or than the cross-session anchor (the median final reference of the other saved cells of this equation
+    # and grid), which catches a session that was slow throughout
+    cell = f"{args.equation}_{args.N}_{'ens_' if args.ensemble else ''}{gkey}{args.tag}.json"
+    try:
+        anchor_us = cross_session_anchor_us(args.out_dir, args.equation, args.N, exclude=cell)
+    except Exception as exc:
+        print(f"  (cross-session reference unavailable: {exc})", flush=True)
+        anchor_us = None
+    gres["drift_anchor_us"] = anchor_us
+    flagged = [dr["instance"] for dr in gres["drift"]] if args.retime_all else slow_instances(gres["drift"], args.drift_tol, anchor_us)
+    if anchor_us is not None:
+        # the re-timing checks compare with the anchor wherever it is faster than this session's reference
+        ref_hist.extend([anchor_us * 1e3] * len(ref_hist))
     if flagged:
         print(f"  re-timing {len(flagged)} instance(s) timed under a machine slowdown: {flagged}", flush=True)
     for i in flagged:
@@ -476,3 +488,7 @@ for group in groups:
     with open(out, "w") as fh:
         json.dump(results if args.ensemble else {**results, "groups": {gkey: gres}}, fh)
     print(f"  saved {out}", flush=True)
+    try:
+        record_final_reference(args.out_dir, os.path.basename(out), args.equation, args.N, gres.get("drift_ref_final_us"))
+    except Exception as exc:
+        print(f"  (drift index not updated: {exc})", flush=True)

@@ -4,7 +4,8 @@
 #      without the Krylov validity flag, or drift records without reference readings; in the revision-2 run the Poisson
 #      and convection-diffusion cells) are re-timed completely with the final driver (--retime_all);
 #  (2) cells of the current format that contain instances timed while the reference operation was more than 15% slower
-#      than the session reference at the check or than the cell's final reference (drift.py) have those instances
+#      than the session reference at the check, than the cell's final reference or than the median final reference of
+#      the other cells of the same equation and grid (drift.py) have those instances
 #      re-timed (--retime_only).
 # Both use the stored routers and cost calibration (bench.py refuses if either differs), anchor the drift guard to the
 # stored reference readings, and keep the original provenance next to the re-timing provenance. A re-timed cell no
@@ -20,16 +21,18 @@ rm -f logs/retime.failed
 # exit status 0: re-time every instance; 3: re-time the slow instances; 1: nothing to do; anything else: unreadable
 needs_retime() {
   $PY - "$1" <<'EOF'
-import json, sys
+import json, os, sys
 sys.path.insert(0, ".")
 try:
-    from drift import slow_instances
-    g = next(iter(json.load(open(sys.argv[1]))["groups"].values()))
+    from drift import slow_instances, cross_session_anchor_us
+    d = json.load(open(sys.argv[1]))
+    g = next(iter(d["groups"].values()))
     P = g["policies"]
     old = (any(p.startswith("base:") and rows and "valid" not in rows[0] for p, rows in P.items())
            or any(not p.startswith("base:") and rows and "op_rle" not in rows[0] for p, rows in P.items())
            or (bool(g.get("drift")) and "ref_us" not in g["drift"][0]))
-    code = 0 if old else (3 if slow_instances(g.get("drift", []), 0.15) else 1)
+    anchor = cross_session_anchor_us("results", d["args"]["equation"], d["args"]["N"], exclude=os.path.basename(sys.argv[1]))
+    code = 0 if old else (3 if slow_instances(g.get("drift", []), 0.15, anchor) else 1)
 except Exception as exc:
     print(exc, file=sys.stderr)
     sys.exit(2)
