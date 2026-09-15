@@ -543,11 +543,11 @@ Our method can be regarded as gating of a different kind: ``experts'' (solvers) 
     \color{red}
     \centering
     \newfig[0.98\linewidth]{neurips_images/ca_router_usage.png}
-    \caption{\edit{Corrector usage on the $\caN\times\caN$ grid: fraction of test runs that execute a corrector call at each iteration, for the learned router, the cost-aware oracle and HINTS ($\tau{=}15$), for every solver pairing (columns) and all three equations (rows); the same figure for the $256^2$ and $512^2$ grids is in \Cref{sec:wallclock}.}}
+    \caption{\edit{Corrector usage on the $\caN\times\caN$ grid: fraction of test runs that execute a corrector call at each iteration, for the learned router, the cost-aware oracle and HINTS ($\tau{=}15$), for every solver pairing (columns) and all four equations (rows); the same figure for the $256^2$ and $512^2$ grids is in \Cref{sec:wallclock}.}}
     \label{fig:ca_usage_main}
 \end{figure}
 
-\edit{Every result per equation and grid, the ensemble study, the accounting of overheads and training cost, and the verification of the theoretical assumptions are collected in \Cref{sec:wallclock}; \Cref{sec:moreexperimentalresults} reports the Dirichlet experiment of the original submission.}
+\edit{\Cref{fig:ca_decisions_overview} shows the individual operation sequences of the learned router on every test instance, next to HINTS on the same instances. Every result per equation and grid, the ensemble study, the accounting of overheads and training cost, and the verification of the theoretical assumptions are collected in \Cref{sec:wallclock}; \Cref{sec:moreexperimentalresults} reports the Dirichlet experiment of the original submission.}
 
 \section{Discussion} \label{sec:discussion}
 

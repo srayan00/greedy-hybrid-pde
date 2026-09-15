@@ -35,6 +35,14 @@ This appendix collects the complete wall-clock study that \Cref{sec:experiments}
     \label{fig:ca_convergence}
 \end{figure}
 
+\begin{figure}[H]
+\color{red}
+    \centering
+    \IfFileExists{neurips_images/ca_router_decisions_overview.png}{\newfig[0.9\linewidth]{neurips_images/ca_router_decisions_overview.png}}{(figure pending)}
+    \caption{Decisions across test instances on the $128\times128$ grid: for every equation (rows), the operations of the learned router in the Jacobi pairing (left), of HINTS ($\tau{=}15$) in the same pairing on the same instances in the same order (middle), and of the learned router in the ensemble $\{\text{Jacobi}, \text{Jacobi (0.67)}, \text{GS}\}$ (right), until the relative error first falls below $10^{-8}$, as executed in the timed replays. Each row is one test instance; dots mark corrector calls and lines the solver sweeps between them (coloured by solver in the ensemble); the horizontal axis is the cumulative cost in units of one corrector call, linear below one call and logarithmic above. HINTS calls the corrector at the same iterations on every instance by construction; the learned router's calls, and its choice of solver in the ensemble, are read off per instance. The per-equation versions for every pairing are \Cref{fig:ca_decisions_poisson,fig:ca_decisions_conv,fig:ca_decisions_aniso,fig:ca_decisions_var}.}
+    \label{fig:ca_decisions_overview}
+\end{figure}
+
 \subsection{Poisson} \label{sec:wc_poisson}
 
 \Cref{tab:ca_time_poisson} collects the median time to $10^{-3}$, $h^2$ and $10^{-8}$ for every pairing, every policy and the classical baselines on all three grids; \Cref{tab:ca_speed_poisson} the paired speedups of the learned router with their $p$-values; \Cref{fig:ca_usage_poisson,tab:ca_usage_poisson} where the iterations go; \Cref{tab:ca_costs_poisson} the measured costs and macro-action sizes; \Cref{tab:ca_auc_poisson} the iteration-based metrics; and \Cref{tab:ca_seeds_poisson} the seed trials.
@@ -103,7 +111,7 @@ This appendix collects the complete wall-clock study that \Cref{sec:experiments}
 \color{red}
     \centering
     \newfig[0.98\linewidth]{neurips_images/ca_router_decisions_poisson.png}
-    \caption{Poisson, $128\times128$: routing decisions (dark: corrector call) of the learned router (top row) and the cost-aware oracle (bottom row) over the first $60$ iterations of every test instance, for every pairing.}
+    \caption{Poisson, $128\times128$: operations of the learned router on each of the $64$ test instances (rows, sorted by cost) until the relative error first falls below $10^{-8}$, for every pairing and for the ensemble $\{\text{Jacobi}, \text{Jacobi (0.67)}, \text{GS}\}$, as executed in the timed replays. Dots mark corrector calls and lines the solver sweeps between them (coloured by solver in the ensemble); the horizontal axis is the cumulative cost in units of one corrector call, linear below one call and logarithmic above.}
     \label{fig:ca_decisions_poisson}
 \end{figure}
 
@@ -171,7 +179,7 @@ The convection--diffusion results (\Cref{tab:ca_time_conv,tab:ca_speed_conv,fig:
 \color{red}
     \centering
     \newfig[0.98\linewidth]{neurips_images/ca_router_decisions_convdiff.png}
-    \caption{Convection--diffusion, $128\times128$: routing decisions (dark: corrector call) of the learned router (top row) and the cost-aware oracle (bottom row) over the first $60$ iterations of every test instance.}
+    \caption{Convection--diffusion, $128\times128$: operations of the learned router on each of the $64$ test instances (rows, sorted by cost) until the relative error first falls below $10^{-8}$, for every pairing and for the ensemble $\{\text{Jacobi}, \text{Jacobi (0.67)}, \text{GS}\}$, as executed in the timed replays. Dots mark corrector calls and lines the solver sweeps between them (coloured by solver in the ensemble); the horizontal axis is the cumulative cost in units of one corrector call, linear below one call and logarithmic above.}
     \label{fig:ca_decisions_conv}
 \end{figure}
 
@@ -239,7 +247,7 @@ The anisotropic equation is where the two components of the hybrid are most comp
 \color{red}
     \centering
     \newfig[0.98\linewidth]{neurips_images/ca_router_decisions_anisodiff.png}
-    \caption{Anisotropic diffusion, $128\times128$: routing decisions (dark: corrector call) of the learned router (top row) and the cost-aware oracle (bottom row) over the first $60$ iterations of every test instance.}
+    \caption{Anisotropic diffusion, $128\times128$: operations of the learned router on each of the $64$ test instances (rows, sorted by cost) until the relative error first falls below $10^{-8}$, for every pairing and for the ensemble $\{\text{Jacobi}, \text{Jacobi (0.67)}, \text{GS}\}$, as executed in the timed replays. Dots mark corrector calls and lines the solver sweeps between them (coloured by solver in the ensemble); the horizontal axis is the cumulative cost in units of one corrector call, linear below one call and logarithmic above.}
     \label{fig:ca_decisions_aniso}
 \end{figure}
 
@@ -269,6 +277,14 @@ The three equations above have constant coefficients on a periodic domain, so th
     \IfFileExists{neurips_images/ca_usage_varcoeff.png}{\newfig[0.98\linewidth]{neurips_images/ca_usage_varcoeff.png}}{(figure pending)}
     \caption{Variable-coefficient diffusion: corrector usage per iteration of the learned router, the cost-aware oracle and HINTS ($\tau{=}15$) for every pairing (columns) and grid (rows).}
     \label{fig:ca_usage_var}
+\end{figure}
+
+\begin{figure}[H]
+\color{red}
+    \centering
+    \IfFileExists{neurips_images/ca_router_decisions_varcoeff.png}{\newfig[0.98\linewidth]{neurips_images/ca_router_decisions_varcoeff.png}}{(figure pending)}
+    \caption{Variable-coefficient diffusion, $128\times128$: operations of the learned router on each of the $64$ test instances (rows, sorted by cost) until the relative error first falls below $10^{-8}$, for every pairing and for the ensemble $\{\text{Jacobi}, \text{Jacobi (0.67)}, \text{GS}\}$, as executed in the timed replays. Dots mark corrector calls and lines the solver sweeps between them (coloured by solver in the ensemble); the horizontal axis is the cumulative cost in units of one corrector call, linear below one call and logarithmic above.}
+    \label{fig:ca_decisions_var}
 \end{figure}
 
 \begin{table}[H]
