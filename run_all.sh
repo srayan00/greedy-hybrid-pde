@@ -4,7 +4,7 @@
 #   2. 128^2 variable-coefficient diffusion: corrector, pairwise cells, nested ensembles
 #   3. re-timing pass of the 128^2 cells written by an earlier driver revision
 #   3b. decision-granularity ablation for the pairings in which the router lost to the best schedule at 1e-8
-#   3c. 256^2 Poisson and ConvDiff cells with their ensembles (brought forward for the same question)
+#   3c. 256^2 and 512^2 Poisson and ConvDiff cells (brought forward for the same question)
 #   3d. selection of the best fixed schedule on the development instances (deployable baseline), untimed
 #   4. 128^2 usage traces, seed trials and assumption / screening / theorem checks (all four equations)
 #   5. decision-granularity ablation (128^2 only)
@@ -23,9 +23,13 @@ ONLY_N=128 SKIP_AUX=1 ./run_final.sh \
   && GRAN_ONLY=$LOSING ./run_granularity.sh \
   && note "granularity ablation (unit = corrector / 4) done for the eight pairings the router lost at 1e-8" \
   && ONLY_N=256 SKIP_AUX=1 ONLY_EQ=Poisson ./run_final.sh \
-  && note "256^2 Poisson cells done (brought forward: the larger grid is the other candidate setting against the best fixed schedule)" \
+  && note "256^2 Poisson cells done (brought forward: the larger grids are the other candidate setting against the best fixed schedule)" \
+  && ONLY_N=512 SKIP_AUX=1 ONLY_EQ=Poisson ./run_final.sh \
+  && note "512^2 Poisson cells done (brought forward)" \
   && ONLY_N=256 SKIP_AUX=1 ONLY_EQ=ConvDiff ./run_final.sh \
   && note "256^2 ConvDiff cells done (brought forward)" \
+  && ONLY_N=512 SKIP_AUX=1 ONLY_EQ=ConvDiff ./run_final.sh \
+  && note "512^2 ConvDiff cells done (brought forward)" \
   && ./run_devsched.sh \
   && ONLY_N=128 ./run_final.sh \
   && ONLY_N=128 ./run_varcoeff.sh \
