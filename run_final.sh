@@ -84,10 +84,13 @@ for EQ in Poisson ConvDiff; do
   S=$(solvers $EQ)
   done_cells $EQ $S 512 && continue
   [ -f checkpoints/costs_${EQ}_512.json ] || run $PY bench.py --equation $EQ --N 512 --solvers $S --measure_only --remeasure_costs > logs/final_costs_${EQ}_512.log 2>&1
-  [ -f checkpoints/router_${EQ}_512_sor_1.5.pth ] && [ checkpoints/router_${EQ}_512_sor_1.5.pth -nt libstencil.so ] || run $PY bench.py --equation $EQ --N 512 --solvers $S --train_only --retrain_router --router_inst 32 --router_max_epochs 400 --router_err_stop 1e-8 > logs/final_routers_${EQ}_512.log 2>&1
-  if [ "$EQ" = "ConvDiff" ]; then   # frozen per-cell exception of the development phase
-    run $PY bench.py --equation $EQ --N 512 --solvers jacobi --train_only --retrain_router --router_inst 64 --router_max_epochs 800 --router_err_stop 1e-8 > logs/final_routers_${EQ}_512_jacobi.log 2>&1
-  fi
+  # 512^2 routers: the training rollouts must cover the test horizon (max_ops 8000 sweeps), i.e. 8000 / m decisions
+  # (m = 6 Jacobi sweeps, 2 GS/SOR, 1 SymGS/multigrid per corrector call); a first training with 400-decision rollouts
+  # produced routers that kept calling the corrector beyond the horizon they had seen (archived in results_superseded/)
+  RJ=$(for s in jacobi jacobi_0.67; do { [ -f checkpoints/router_${EQ}_512_${s}.pth ] && [ checkpoints/router_${EQ}_512_${s}.pth -nt libstencil.so ]; } || printf "%s," $s; done); RJ=${RJ%,}
+  [ -z "$RJ" ] || run $PY bench.py --equation $EQ --N 512 --solvers $RJ --train_only --retrain_router --router_inst 32 --router_max_epochs 1400 --router_err_stop 1e-8 > logs/final_routers_${EQ}_512_jacobi.log 2>&1
+  RO=$(for s in $(echo $S | tr , ' '); do case $s in jacobi|jacobi_0.67) continue;; esac; { [ -f checkpoints/router_${EQ}_512_${s}.pth ] && [ checkpoints/router_${EQ}_512_${s}.pth -nt libstencil.so ]; } || printf "%s," $s; done); RO=${RO%,}
+  [ -z "$RO" ] || run $PY bench.py --equation $EQ --N 512 --solvers $RO --train_only --retrain_router --router_inst 32 --router_max_epochs 4000 --router_err_stop 1e-8 > logs/final_routers_${EQ}_512.log 2>&1
   TODO=$(for s in $(echo $S | tr , ' '); do [ -f results/${EQ}_512_${s}.json ] || printf "%s," $s; done); TODO=${TODO%,}
   run $PY bench.py --equation $EQ --N 512 --solvers $TODO --n_test 16 --max_ops 8000 --max_iter_baseline 3000 --baselines fft,mg,$([ "$EQ" = "Poisson" ] && echo cg,pcg_ssor,pcg_mg || echo bicgstab,bicgstab_mg) --policies $POL ${=SEED} > logs/final_bench_${EQ}_512.log 2>&1
   stage "512 $EQ done"
