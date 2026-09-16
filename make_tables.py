@@ -486,10 +486,25 @@ def main():
             return f"\\tau{{=}}{p[6:]},\\,t_0{{=}}0"
         return f"\\tau{{=}}{p[5:]}"
 
+    _best_cache = {}
+
     def best_tau(P, key):
-        """Best fixed schedule for this cell and tolerance: HINTS (any tau), phase-shifted HINTS, one-shot."""
-        cands = [p for p in P if p.startswith("hints") or p.startswith("phints") or p == "oneshot"]
-        return min(cands, key=lambda p: np.median(times(P[p], key)))
+        """The strongest fixed schedule of this cell and tolerance against the router: among HINTS (any tau),
+        phase-shifted HINTS and one-shot, the schedule with the smallest paired median ratio to the router (the
+        best-by-median-time schedule can be a weak paired competitor when medians are close); without a router
+        column, the schedule with the smallest median time."""
+        ck = (id(P), key)
+        if ck not in _best_cache:
+            cands = [p for p in P if p.startswith("hints") or p.startswith("phints") or p == "oneshot"]
+            if "router" in P:
+                def paired(p):
+                    r, _, _ = pair_ratios(P[p], P["router"], key)
+                    ok = ~np.isnan(r)
+                    return float(np.median(r[ok])) if ok.any() else np.inf
+                _best_cache[ck] = min(cands, key=paired)
+            else:
+                _best_cache[ck] = min(cands, key=lambda p: np.median(times(P[p], key)))
+        return _best_cache[ck]
 
     _dev_cache = {}
 

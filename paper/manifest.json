@@ -146,6 +146,16 @@
   "git_commit": "4a4dfbbef6c31f92d73699cca15244acdde8afde",
   "git_dirty": true
  },
+ "results/ConvDiff_256_jacobi.json": {
+  "sha256": "105c4901a5bb65e534b7c2788c7f806de83a016ebb951a4b1cd47229a8d1c38f",
+  "git_commit": "5bc5670c4207f929964ea744c87d5009351528f5",
+  "git_dirty": true
+ },
+ "results/ConvDiff_256_jacobi_0.67.json": {
+  "sha256": "85d92f3bb9b1faaff42901df17b84baba6eb8dd00f00e2d0784d3db6f5c92f63",
+  "git_commit": "5bc5670c4207f929964ea744c87d5009351528f5",
+  "git_dirty": true
+ },
  "results/Poisson_128_ens_jacobi+gs+ssor+jacobi_0.67+sor_1.5.json": {
   "sha256": "951f7ca403f49234ae7a054f1895f20bd3319c9c016552b75179ad4c78b1abc1",
   "git_commit": "cd57b50f74380a17d38a1c42559278a45c6b2a49",
