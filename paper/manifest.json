@@ -45,9 +45,19 @@
   "git_commit": "b70cee71ee3f25479b9e681b06cdac2069fcdda4",
   "git_dirty": true
  },
+ "results/AnisoDiff_128_jacobi_0.67_u4.json": {
+  "sha256": "558ad698cdfecc3377bb18495b07983f197c28051325d7591dfbe09e98cd1ba2",
+  "git_commit": "d9101e823a47a205393f18d6698a893c7e18cae9",
+  "git_dirty": true
+ },
  "results/AnisoDiff_128_linegs.json": {
   "sha256": "9c8280d7f9fab8446f5ba4a6a3fa075c548acd41b1dc453ee508217f2024242c",
   "git_commit": "b70cee71ee3f25479b9e681b06cdac2069fcdda4",
+  "git_dirty": true
+ },
+ "results/AnisoDiff_128_linegs_u4.json": {
+  "sha256": "7c5e7e7e85867e4c2a46015be3fe50fb18591aaefdb6ba49cc2f979deb255506",
+  "git_commit": "d9101e823a47a205393f18d6698a893c7e18cae9",
   "git_dirty": true
  },
  "results/AnisoDiff_128_sor_1.5.json": {
@@ -108,6 +118,11 @@
   "git_dirty": true,
   "retime_git_commit": "64116504712f7ef9e707c3bb7dd29dcb2f817767"
  },
+ "results/ConvDiff_128_jacobi_0.67_u4.json": {
+  "sha256": "a9d67377af1cfbba355f657302ac580472984abab9eb1b828dc787b80dc8d044",
+  "git_commit": "4a4dfbbef6c31f92d73699cca15244acdde8afde",
+  "git_dirty": true
+ },
  "results/ConvDiff_128_mg.json": {
   "sha256": "c92226d226a5800c804f02836745882c421f5113e4ba0cdb67b4d4bbe0f65e7a",
   "git_commit": "60d7e2e643fd3b82d95a0d50cab5f1a52e1253bf",
@@ -115,16 +130,21 @@
   "retime_git_commit": "0f365b4e0ffb8275f7c09b15442b00cb732593bb"
  },
  "results/ConvDiff_128_sor_1.5.json": {
-  "sha256": "2eb9d5c073f0e6cebb3afc4f053a61d38e2edf517992a85b6ad7e9cd56000a3f",
+  "sha256": "0eeada238707abe30fd81836b45353459e7f9cc1807505f3eae4a94130e3a2ce",
   "git_commit": "60d7e2e643fd3b82d95a0d50cab5f1a52e1253bf",
   "git_dirty": true,
-  "retime_git_commit": "0f365b4e0ffb8275f7c09b15442b00cb732593bb"
+  "retime_git_commit": "cf9f4d8bfbce3461e388bbcbf95d8f6842c6ebeb"
  },
  "results/ConvDiff_128_ssor.json": {
   "sha256": "50dd4159d0686187c33fbce5005e3d5055a4b61bbd764912c266788db5be5e67",
   "git_commit": "60d7e2e643fd3b82d95a0d50cab5f1a52e1253bf",
   "git_dirty": true,
   "retime_git_commit": "64116504712f7ef9e707c3bb7dd29dcb2f817767"
+ },
+ "results/ConvDiff_128_ssor_u4.json": {
+  "sha256": "11de3e84e1a2563abe8bdcb98746855edc389d3fd872d47f27af0067729effdb",
+  "git_commit": "4a4dfbbef6c31f92d73699cca15244acdde8afde",
+  "git_dirty": true
  },
  "results/Poisson_128_ens_jacobi+gs+ssor+jacobi_0.67+sor_1.5.json": {
   "sha256": "951f7ca403f49234ae7a054f1895f20bd3319c9c016552b75179ad4c78b1abc1",
@@ -162,6 +182,11 @@
   "git_dirty": true,
   "retime_git_commit": "64116504712f7ef9e707c3bb7dd29dcb2f817767"
  },
+ "results/Poisson_128_gs_u4.json": {
+  "sha256": "494bfdbeb9cb5f95714946f70f0093b53a9ca8c1bce7eb3d757a855efe76f89d",
+  "git_commit": "e8c62cc3e64ce6dafa5c3ed23de8695e0a1c211d",
+  "git_dirty": true
+ },
  "results/Poisson_128_jacobi.json": {
   "sha256": "442fc8ccdd9c89619db2fd0c84cf7e31e69d836644df5fbd5b030a818b840d1a",
   "git_commit": "60d7e2e643fd3b82d95a0d50cab5f1a52e1253bf",
@@ -173,6 +198,11 @@
   "git_commit": "60d7e2e643fd3b82d95a0d50cab5f1a52e1253bf",
   "git_dirty": true,
   "retime_git_commit": "64116504712f7ef9e707c3bb7dd29dcb2f817767"
+ },
+ "results/Poisson_128_jacobi_0.67_u4.json": {
+  "sha256": "b63ad4fb610c1a025738f6555e18652030233d97f793c8f6fc6f01e05cd4368a",
+  "git_commit": "e8c62cc3e64ce6dafa5c3ed23de8695e0a1c211d",
+  "git_dirty": true
  },
  "results/Poisson_128_mg.json": {
   "sha256": "4809232f74968f2936484aa1d89105f8b8db1aae6514acd74e5a40477aed120f",
@@ -191,6 +221,41 @@
   "git_commit": "60d7e2e643fd3b82d95a0d50cab5f1a52e1253bf",
   "git_dirty": true,
   "retime_git_commit": "64116504712f7ef9e707c3bb7dd29dcb2f817767"
+ },
+ "results/Poisson_128_ssor_u4.json": {
+  "sha256": "7d15c22b4be7b08436151af0b20b504fe11bee5c8feb9e1bb3f1ad9cb100e2f4",
+  "git_commit": "e8c62cc3e64ce6dafa5c3ed23de8695e0a1c211d",
+  "git_dirty": true
+ },
+ "results/Poisson_256_gs.json": {
+  "sha256": "6f5422565cc7ae907da5f37653669d11a86100326b37d811531a913c306217a1",
+  "git_commit": "98781f7aecd2ade3bfd3b97a7c4ecff36d8110af",
+  "git_dirty": true
+ },
+ "results/Poisson_256_jacobi.json": {
+  "sha256": "05170048a21e0dfe7a69dfe962db79e0aa174d6b4ee71b89be5d62b4227d9030",
+  "git_commit": "98781f7aecd2ade3bfd3b97a7c4ecff36d8110af",
+  "git_dirty": true
+ },
+ "results/Poisson_256_jacobi_0.67.json": {
+  "sha256": "fa8894bf3aad15f592c6e0d191ae550a99d3b265ad19fa4ee47962d485fdc1ca",
+  "git_commit": "98781f7aecd2ade3bfd3b97a7c4ecff36d8110af",
+  "git_dirty": true
+ },
+ "results/Poisson_256_mg.json": {
+  "sha256": "a0c19399c35bebf004df2335a0b23b1ec76506566c96458c09ca8b3389697133",
+  "git_commit": "98781f7aecd2ade3bfd3b97a7c4ecff36d8110af",
+  "git_dirty": true
+ },
+ "results/Poisson_256_sor_1.5.json": {
+  "sha256": "482f3a6b5ef1c32ca88d88188f58aa9cc6664fa1f6c6671f5241b9f0ee4b7ef9",
+  "git_commit": "98781f7aecd2ade3bfd3b97a7c4ecff36d8110af",
+  "git_dirty": true
+ },
+ "results/Poisson_256_ssor.json": {
+  "sha256": "2f635c42e6e98cb8cd857eeb2091af3d2dada5a98c8a12ff64d8da320990a4fd",
+  "git_commit": "98781f7aecd2ade3bfd3b97a7c4ecff36d8110af",
+  "git_dirty": true
  },
  "results/VarCoeff_128_ens_jacobi+jacobi_0.67+gs.json": {
   "sha256": "f9e2a71a9c5141b6b3c09e92202dc764df32857130d7a44b5a094dab7d281422",
@@ -217,6 +282,11 @@
   "git_commit": "64116504712f7ef9e707c3bb7dd29dcb2f817767",
   "git_dirty": true
  },
+ "results/VarCoeff_128_jacobi_0.67_u4.json": {
+  "sha256": "bf09fa6dfa37c3a3d1b9f63d0cbd674b344d8717081e4287d6444008eb2c2875",
+  "git_commit": "d9101e823a47a205393f18d6698a893c7e18cae9",
+  "git_dirty": true
+ },
  "results/VarCoeff_128_mg.json": {
   "sha256": "ec932fb855d8910e6bad45349b595614fdd68ddc6514e86ebd7c4943f01e2a32",
   "git_commit": "64116504712f7ef9e707c3bb7dd29dcb2f817767",
@@ -233,7 +303,7 @@
   "git_dirty": true
  },
  "results/seeds_Poisson_128.json": {
-  "sha256": "b5b43a7d9b3cb720664c06b9246b42caff442a3e16832d88289f2335a14db857"
+  "sha256": "a8199dd2a17fd9e236e3dbdef818bb51033fd0485404826e7b50321b65d5257f"
  },
  "results_dev/AnisoDiff_128_ens_jacobi+gs+ssor+jacobi_0.67+sor_1.5.json": {
   "sha256": "16323f85fa7df61538a54705a1611c1c0f4187fdce4ba0bbe1e6fc94eb72d888"

@@ -47,6 +47,9 @@ BASE_NAMES = {"mg": "Multigrid V(2,2) alone (point GS)", "mg_line": "Multigrid V
 BASE_ORDER = ["mg", "mg_line", "cg", "bicgstab", "pcg_ssor", "pcg_mg", "bicgstab_mg", "gmres", "fft", "lu"]
 NS = [128, 256, 512]
 GRID_SUF = {128: "", 256: "B", 512: "C"}
+# pairwise cells a grid must have before its grid-wide summary macros are emitted (all four equations at 128^2 and
+# 256^2, the two isotropic ones at 512^2); until then the macros print as pending rather than summarising a subset
+EXPECTED_CELLS = {128: 24, 256: 24, 512: 12}
 
 RESULTS_DIR = os.environ.get("RESULTS_DIR", "results")
 MAIN_N = int(os.environ.get("MAIN_N", "128"))
@@ -844,8 +847,8 @@ def main():
                 # instances on which the router makes exactly one corrector call to h^2
                 nc_ = np.array([r["tol"][key]["no_calls"] if r["tol"][key]["no_calls"] is not None else -1 for r in P["router"]])
                 summ["OneCall"].append(100 * float(np.mean(nc_ == 1)))
-        if not summ["Solver"]:
-            continue
+        if not summ["Solver"] or len(summ["Solver"]) < EXPECTED_CELLS.get(N_, 0):
+            continue          # incomplete grid: every summary macro of this grid is defined as pending below
         for name, vals in summ.items():
             if name.startswith("DevSchedSame"):
                 out.append(f"\\newcommand{{\\ca{name}{SUF}}}{{{(f'{int(sum(vals))}' if vals else PENDING)}}}")
@@ -1688,13 +1691,16 @@ def main():
     for SUF in ["", "B", "C"]:
         for name in ["caSpSolver", "caSpHints", "caSpHintsTF", "caSpBest", "caSpDecay", "caSpOneshot", "caSpSolverDeep", "caSpHintsDeep", "caSpHintsTFDeep", "caSpBestDeep", "caSpDecayDeep", "caSpOneshotDeep", "caSpOracleRatio",
                      "caAgreeOracle", "caAgreeBest", "caAgreeOracleDeep", "caOneCall",
-                     "caVsMgAll", "caVsMgDeep", "caVsKrylovAll", "caVsKrylovDeep", "caVsMgEnsAll", "caVsMgEnsDeep"]:
+                     "caVsMgAll", "caVsMgDeep", "caVsKrylovAll", "caVsKrylovDeep", "caVsMgEnsAll", "caVsMgEnsDeep",
+                     "caShortPeriod", "caLongPeriod", "caSpDevSched", "caSpDevSchedDeep"]:
             for mm in ["Min", "Max"]:
                 if name + SUF + mm not in defined:
                     out.append(f"\\newcommand{{\\{name}{SUF}{mm}}}{{{PENDING}}}")
         for name in ["caNumCells", "caCellsRouterBeatsBest", "caCellsRouterBeatsHints", "caCellsRouterBeatsBestDeep", "caCellsRouterBeatsHintsDeep", "caCellsRouterWithinBest",
                      "caCellsRouterBeatsDecay", "caCellsRouterBeatsDecayDeep", "caCellsRouterBeatsOneshotDeep", "caCellsRouterBeatsHintsTFDeep", "caBestDeepSchedList", "caBestHTwoSchedList", "caSpSolverMinPairing",
-                     "caMJacobi", "caMGs", "caMMg", "caMSymGs", "caCostJacobi", "caCostGs", "caCostMg", "caCostSymGs", "caCostNo", "caCostRes"]:
+                     "caMJacobi", "caMGs", "caMMg", "caMSymGs", "caCostJacobi", "caCostGs", "caCostMg", "caCostSymGs", "caCostNo", "caCostRes",
+                     "caShortPeriodCells", "caShortPeriodWins", "caShortPeriodMed", "caLongPeriodCells", "caLongPeriodWins", "caLongPeriodMed",
+                     "caDevSchedSame", "caDevSchedSameDeep", "caCellsRouterBeatsDevSched", "caCellsRouterBeatsDevSchedDeep", "caNumDevSched"]:
             if name + SUF not in defined:
                 out.append(f"\\newcommand{{\\{name}{SUF}}}{{{PENDING}}}")
 
