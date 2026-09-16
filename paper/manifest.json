@@ -186,6 +186,36 @@
   "git_commit": "5bc5670c4207f929964ea744c87d5009351528f5",
   "git_dirty": true
  },
+ "results/ConvDiff_512_gs.json": {
+  "sha256": "4db86d2a57aeefcfea65a4bf74bf06ee345b0062740eec27fd95525e56ae9c34",
+  "git_commit": "b861cd4decf28fe11963b7857dcbc9036e3dbb0e",
+  "git_dirty": true
+ },
+ "results/ConvDiff_512_jacobi.json": {
+  "sha256": "2dffddd2b91ce1b5fcfb7c9d7740a64ae87ae68081ac649f2eaae18b1b765278",
+  "git_commit": "b861cd4decf28fe11963b7857dcbc9036e3dbb0e",
+  "git_dirty": true
+ },
+ "results/ConvDiff_512_jacobi_0.67.json": {
+  "sha256": "7ae8f0aa93d3affb919df0f0712e8d31271b17e3b5213c5e660a0675b0003a08",
+  "git_commit": "b861cd4decf28fe11963b7857dcbc9036e3dbb0e",
+  "git_dirty": true
+ },
+ "results/ConvDiff_512_mg.json": {
+  "sha256": "e8e20b6bd4b6620fb41a131b0b292d75e3e4f2f033bf42581ac5f072d37e99ef",
+  "git_commit": "b861cd4decf28fe11963b7857dcbc9036e3dbb0e",
+  "git_dirty": true
+ },
+ "results/ConvDiff_512_sor_1.5.json": {
+  "sha256": "9ba3abc877ab442db7e4aa590fd298b62be825ad986cdfb0cac9b3a2d388e588",
+  "git_commit": "b861cd4decf28fe11963b7857dcbc9036e3dbb0e",
+  "git_dirty": true
+ },
+ "results/ConvDiff_512_ssor.json": {
+  "sha256": "816109495659192fa48e424ab0fceb63d2d190c337260119a8ffca2b5809c934",
+  "git_commit": "b861cd4decf28fe11963b7857dcbc9036e3dbb0e",
+  "git_dirty": true
+ },
  "results/Poisson_128_ens_jacobi+gs+ssor+jacobi_0.67+sor_1.5.json": {
   "sha256": "951f7ca403f49234ae7a054f1895f20bd3319c9c016552b75179ad4c78b1abc1",
   "git_commit": "cd57b50f74380a17d38a1c42559278a45c6b2a49",
