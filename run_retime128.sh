@@ -16,7 +16,7 @@ PY=${PY:-/Users/yash/miniconda3/envs/ansatz/bin/python}
 POL=classical,hints2,hints5,hints10,hints15,hints25,hints50,phints5,phints10,phints15,phints25,phints50,oneshot,decay0.9,decay0.95,decay0.98,greedy,oracle,router
 stage() { echo "$(date '+%F %T') $1" >> logs/final_progress.log; }
 fail() { echo "$(date '+%F %T') FAILED: $1" >> logs/final_progress.log; echo FAILED > logs/retime.failed; exit 1; }
-run() { "$@" || fail "(exit $?) $*"; }
+run() { "$@" || { rc=$?; fail "(exit $rc) $*"; }; }
 rm -f logs/retime.failed
 # exit status 0: re-time every instance; 3: re-time the slow instances; 1: nothing to do; anything else: unreadable
 needs_retime() {

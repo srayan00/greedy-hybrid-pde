@@ -10,7 +10,7 @@ export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 MKL_NUM
 PY=${PY:-/Users/yash/miniconda3/envs/ansatz/bin/python}
 POL=classical,hints15,hints25,phints5,phints10,phints15,oneshot,decay0.9,decay0.95,decay0.98,greedy,oracle,router
 stage() { echo "$(date '+%F %T') $1" >> logs/final_progress.log; }
-run() { "$@" || { echo "$(date '+%F %T') FAILED (exit $?): $*" >> logs/final_progress.log; echo FAILED > logs/granularity.failed; exit 1; }; }
+run() { "$@" || { rc=$?; echo "$(date '+%F %T') FAILED (exit $rc): $*" >> logs/final_progress.log; echo FAILED > logs/granularity.failed; exit 1; }; }
 for EQ in Poisson ConvDiff AnisoDiff VarCoeff; do
   S=$(cat config/solvers_$EQ); new=0
   if [ -n "${GRAN_ONLY:-}" ]; then

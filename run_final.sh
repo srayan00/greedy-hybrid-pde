@@ -17,7 +17,7 @@ PY=${PY:-/Users/yash/miniconda3/envs/ansatz/bin/python}
 POL=classical,hints2,hints5,hints10,hints15,hints25,hints50,phints5,phints10,phints15,phints25,phints50,oneshot,decay0.9,decay0.95,decay0.98,greedy,oracle,router
 SEED="--seed 73 --timed_reps 3"
 stage() { echo "$(date '+%F %T') $1" >> logs/final_progress.log; }
-run() { "$@" || { echo "$(date '+%F %T') FAILED (exit $?): $*" >> logs/final_progress.log; echo FAILED > logs/final.failed; exit 1; }; }
+run() { "$@" || { rc=$?; echo "$(date '+%F %T') FAILED (exit $rc): $*" >> logs/final_progress.log; echo FAILED > logs/final.failed; exit 1; }; }
 solvers() { cat config/solvers_$1; }
 rm -f logs/final.failed
 want() { [ -z "${ONLY_N:-}" ] || [ "$ONLY_N" = "$1" ]; }    # grid filter

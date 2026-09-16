@@ -5,7 +5,7 @@ set -u
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 MKL_NUM_THREADS=1
 PY=${PY:-/Users/yash/miniconda3/envs/ansatz/bin/python}
 stage() { echo "$(date '+%F %T') $1" >> logs/final_progress.log; }
-run() { "$@" || { echo "$(date '+%F %T') FAILED (exit $?): $*" >> logs/final_progress.log; echo FAILED > logs/devsched.failed; exit 1; }; }
+run() { "$@" || { rc=$?; echo "$(date '+%F %T') FAILED (exit $rc): $*" >> logs/final_progress.log; echo FAILED > logs/devsched.failed; exit 1; }; }
 fin() { tail -n 3 "$1" 2>/dev/null | grep -q "^saved"; }
 new=0
 for N in 128 256 512; do for EQ in Poisson ConvDiff AnisoDiff VarCoeff; do

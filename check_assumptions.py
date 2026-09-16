@@ -56,7 +56,7 @@ pde = FastStencilPDE(N, equation=args.equation)
 pdeT = pde if args.equation == "VarCoeff" else FastStencilPDE(N, equation=args.equation, b_vec=(-pde.b1, -pde.b2), aniso_eps=pde.aniso_eps)  # A^T (central convection; symmetric otherwise)
 corrector = DeepONetCorrector(f"{args.ckp_dir}/deeponet_{args.equation}_{N}_best.pth", threads=1)
 costs_all = json.load(open(f"{args.ckp_dir}/costs_{args.equation}_{N}.json"))
-solvers = args.solvers.split(",") if args.solvers else [k for k in costs_all if "+" not in k]
+solvers = args.solvers.split(",") if args.solvers else [k for k in costs_all if "+" not in k and not k.startswith("_")]   # "__all__" is the shared measurement, not a solver
 h2 = 1.0 / N ** 2
 zeros = np.zeros((1, N, N))
 
