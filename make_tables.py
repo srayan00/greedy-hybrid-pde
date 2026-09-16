@@ -1189,9 +1189,11 @@ def main():
     else:
         pending(out, "caensnest")
     for SUFn in ["", "B", "C"]:
-        for name in ["caNestNum", "caNestWins", "caNestLosses", "caNestSpMin", "caNestSpMax", "caNestMinRatio", "caNestMaxRatio", "caNestMinRatioH", "caNestMaxRatioH", "caNestOrMinRatio", "caNestOrMaxRatio", "caNestOrWins"]:
-            if f"\\newcommand{{\\{name}{SUFn}}}" not in "\n".join(out[-400:]) and not any(l.startswith(f"\\newcommand{{\\{name}{SUFn}}}") for l in out):
-                out.append(f"\\newcommand{{\\{name}{SUFn}}}{{{PENDING}}}")
+        for base_, tail_ in [("caNestNum", ""), ("caNestWins", ""), ("caNestLosses", ""), ("caNestSp", "Min"), ("caNestSp", "Max"), ("caNestMinRatio", ""), ("caNestMaxRatio", ""),
+                             ("caNestMinRatioH", ""), ("caNestMaxRatioH", ""), ("caNestOrMinRatio", ""), ("caNestOrMaxRatio", ""), ("caNestOrWins", "")]:
+            name = f"{base_}{SUFn}{tail_}"      # the grid suffix precedes Min/Max, as rng_macro writes it
+            if not any(l.startswith(f"\\newcommand{{\\{name}}}") for l in out):
+                out.append(f"\\newcommand{{\\{name}}}{{{PENDING}}}")
 
     # ---- oracle-level screening of all subsets (screen_ensembles.py)
     Scr = {}
