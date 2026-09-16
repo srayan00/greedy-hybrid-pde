@@ -1163,24 +1163,35 @@ def main():
                 cells_ = out[li].rstrip(" \\\\").split(" & ")
                 cells_[ci_] = f"\\textbf{{{s_}}}"
                 out[li] = " & ".join(cells_) + " \\\\"
+        # per grid (suffix "" = 128^2, "B" = 256^2): a win is a cell whose table entry is bold (ratio >= 1.10 and
+        # Holm-significant over the table); a grid's macros are emitted once every equation's ensemble cells exist
+        # (the two nested sets and, at 128^2, the four larger sets), so that a range never summarises a subset
+        NEST_EXPECTED = {128: 4 * 2 + 3 * 4, 256: 4 * 2}
+        for N_n in NS:
+            SUFn = GRID_SUF[N_n]
+            st_ = [s for s in nest_stats if s[1] == N_n]
+            if not st_ or len(st_) < NEST_EXPECTED.get(N_n, 0):
+                continue
+            wins = [s for s in st_ if s[3] >= 1.10 and bool(sig_n[s[7]])]
+            out.append(f"\\newcommand{{\\caNestNum{SUFn}}}{{{len(st_)}}}")
+            out.append(f"\\newcommand{{\\caNestWins{SUFn}}}{{{len(wins)}}}")
+            out.append(f"\\newcommand{{\\caNestLosses{SUFn}}}{{{sum(1 for s in st_ if s[3] < 0.95)}}}")
+            rng_macro(out, "caNestSp" + SUFn, [s[3] for s in (wins or st_)])
+            out.append(f"\\newcommand{{\\caNestMinRatio{SUFn}}}{{{fmt_sp(min(s[3] for s in st_))}}}")
+            out.append(f"\\newcommand{{\\caNestMaxRatio{SUFn}}}{{{fmt_sp(max(s[3] for s in st_))}}}")
+            out.append(f"\\newcommand{{\\caNestMinRatioH{SUFn}}}{{{fmt_sp(min(s[5] for s in st_))}}}")
+            out.append(f"\\newcommand{{\\caNestMaxRatioH{SUFn}}}{{{fmt_sp(max(s[5] for s in st_))}}}")
+            out.append(f"\\newcommand{{\\caNestOrMinRatio{SUFn}}}{{{fmt_sp(min(s[6] for s in st_))}}}")
+            out.append(f"\\newcommand{{\\caNestOrMaxRatio{SUFn}}}{{{fmt_sp(max(s[6] for s in st_))}}}")
+            out.append(f"\\newcommand{{\\caNestOrWins{SUFn}}}{{{sum(1 for s in st_ if s[6] >= 1.05)}}}")
         if nest_stats:
-            # a win is a cell whose table entry is bold: ratio >= 1.10 and Holm-significant over the table
-            wins = [s for s in nest_stats if s[3] >= 1.10 and bool(sig_n[s[7]])]
-            out.append(f"\\newcommand{{\\caNestNum}}{{{len(nest_stats)}}}")
-            out.append(f"\\newcommand{{\\caNestWins}}{{{len(wins)}}}")
-            out.append(f"\\newcommand{{\\caNestLosses}}{{{sum(1 for s in nest_stats if s[3] < 0.95)}}}")
-            rng_macro(out, "caNestSp", [s[3] for s in (wins or nest_stats)])
-            out.append(f"\\newcommand{{\\caNestMinRatio}}{{{fmt_sp(min(s[3] for s in nest_stats))}}}")
-            out.append(f"\\newcommand{{\\caNestMaxRatio}}{{{fmt_sp(max(s[3] for s in nest_stats))}}}")
-            out.append(f"\\newcommand{{\\caNestMinRatioH}}{{{fmt_sp(min(s[5] for s in nest_stats))}}}")
-            out.append(f"\\newcommand{{\\caNestMaxRatioH}}{{{fmt_sp(max(s[5] for s in nest_stats))}}}")
-            out.append(f"\\newcommand{{\\caNestOrMinRatio}}{{{fmt_sp(min(s[6] for s in nest_stats))}}}")
-            out.append(f"\\newcommand{{\\caNestOrMaxRatio}}{{{fmt_sp(max(s[6] for s in nest_stats))}}}")
-            out.append(f"\\newcommand{{\\caNestOrWins}}{{{sum(1 for s in nest_stats if s[6] >= 1.05)}}}")
+            pass
     else:
         pending(out, "caensnest")
-        for name, val in [("caNestNum", PENDING), ("caNestWins", PENDING), ("caNestLosses", PENDING), ("caNestSpMin", PENDING), ("caNestSpMax", PENDING), ("caNestMinRatio", PENDING), ("caNestMaxRatio", PENDING), ("caNestMinRatioH", PENDING), ("caNestMaxRatioH", PENDING), ("caNestOrMinRatio", PENDING), ("caNestOrMaxRatio", PENDING), ("caNestOrWins", PENDING)]:
-            out.append(f"\\newcommand{{\\{name}}}{{{val}}}")
+    for SUFn in ["", "B", "C"]:
+        for name in ["caNestNum", "caNestWins", "caNestLosses", "caNestSpMin", "caNestSpMax", "caNestMinRatio", "caNestMaxRatio", "caNestMinRatioH", "caNestMaxRatioH", "caNestOrMinRatio", "caNestOrMaxRatio", "caNestOrWins"]:
+            if f"\\newcommand{{\\{name}{SUFn}}}" not in "\n".join(out[-400:]) and not any(l.startswith(f"\\newcommand{{\\{name}{SUFn}}}") for l in out):
+                out.append(f"\\newcommand{{\\{name}{SUFn}}}{{{PENDING}}}")
 
     # ---- oracle-level screening of all subsets (screen_ensembles.py)
     Scr = {}

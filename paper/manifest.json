@@ -227,6 +227,16 @@
   "git_commit": "e8c62cc3e64ce6dafa5c3ed23de8695e0a1c211d",
   "git_dirty": true
  },
+ "results/Poisson_256_ens_jacobi+jacobi_0.67+gs.json": {
+  "sha256": "c5f0caf3eaf2c87e072b1e802609ec157dba05a47d28bcfd8ab8c331f58cd697",
+  "git_commit": "b9340b2065fcca891aff5f88b91d77c3ee811fd2",
+  "git_dirty": true
+ },
+ "results/Poisson_256_ens_jacobi+jacobi_0.67.json": {
+  "sha256": "e733421e67f51c63dbe42d87806fea8bf628ee822b5778207a69c1096fbece8d",
+  "git_commit": "98781f7aecd2ade3bfd3b97a7c4ecff36d8110af",
+  "git_dirty": true
+ },
  "results/Poisson_256_gs.json": {
   "sha256": "6f5422565cc7ae907da5f37653669d11a86100326b37d811531a913c306217a1",
   "git_commit": "98781f7aecd2ade3bfd3b97a7c4ecff36d8110af",
