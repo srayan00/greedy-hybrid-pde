@@ -267,6 +267,36 @@
   "git_commit": "98781f7aecd2ade3bfd3b97a7c4ecff36d8110af",
   "git_dirty": true
  },
+ "results/Poisson_512_gs.json": {
+  "sha256": "c71b3c14a5cd97461157e729914616f659e7ec1d1f2081b7c901170d338eee5b",
+  "git_commit": "369fc29c7546d4d81aaef97043a1318381721b6d",
+  "git_dirty": true
+ },
+ "results/Poisson_512_jacobi.json": {
+  "sha256": "7183cb28c533946a4d6f4bac54456db0539b83ccbf934f9285d7ca51db01e542",
+  "git_commit": "369fc29c7546d4d81aaef97043a1318381721b6d",
+  "git_dirty": true
+ },
+ "results/Poisson_512_jacobi_0.67.json": {
+  "sha256": "b8fb9699cbdf509ad69312e1cd68923c49189b6da9dfd12c8d1f28b22501f91a",
+  "git_commit": "369fc29c7546d4d81aaef97043a1318381721b6d",
+  "git_dirty": true
+ },
+ "results/Poisson_512_mg.json": {
+  "sha256": "aa32c72898088938d56b3183dab112187566333aaabc3f2f3e1d0335c12e2db1",
+  "git_commit": "369fc29c7546d4d81aaef97043a1318381721b6d",
+  "git_dirty": true
+ },
+ "results/Poisson_512_sor_1.5.json": {
+  "sha256": "d6efdc173b3ca18851c0185560dca6e528de4e71cef0c9b33377ec8ed9c16672",
+  "git_commit": "369fc29c7546d4d81aaef97043a1318381721b6d",
+  "git_dirty": true
+ },
+ "results/Poisson_512_ssor.json": {
+  "sha256": "13b6ed0c1644ddd09b9804e07dc9b0cc4fe9000878d376882f3a9ea1aab624f9",
+  "git_commit": "369fc29c7546d4d81aaef97043a1318381721b6d",
+  "git_dirty": true
+ },
  "results/VarCoeff_128_ens_jacobi+jacobi_0.67+gs.json": {
   "sha256": "f9e2a71a9c5141b6b3c09e92202dc764df32857130d7a44b5a094dab7d281422",
   "git_commit": "64116504712f7ef9e707c3bb7dd29dcb2f817767",
