@@ -3,7 +3,8 @@ baseline: the schedule a practitioner would pick without seeing the test instanc
 (HINTS with tau in {2, 5, 10, 15, 25, 50}, phase-shifted HINTS with tau in {5, 10, 15, 25, 50}, one-shot) is run
 untimed on the development instances of an equation and grid with the cached per-operation costs, and its work-unit
 time to every tolerance is recorded; the selected schedule per tolerance is the one with the smallest median (a
-censored run counts as infinite). Schedules need no router and no timing, so this is cheap and deterministic.
+censored run counts as infinite). Schedules need no router and no timing, so this is cheap and deterministic. The PDE is built exactly as in
+bench.py (same convection velocity), so that the corrector acts on the operator it was trained for.
 
   python select_schedule.py --equation Poisson --N 128 --solvers jacobi,gs
 writes results/schedule_dev_<eq>_<N>.json
@@ -32,7 +33,7 @@ p.add_argument("--seed", type=int, default=72, help="development seed (the confi
 p.add_argument("--max_ops", type=int, default=60000)
 p.add_argument("--err_stop", type=float, default=1e-9)
 p.add_argument("--tols", default="1e-2,1e-3,h2,1e-5,1e-6,1e-8")
-p.add_argument("--b_vel", type=float, default=1.0)
+p.add_argument("--b_vel", type=float, default=20.0, help="convection velocity of the study (bench.py default)")
 p.add_argument("--ckp_dir", default="./checkpoints")
 p.add_argument("--out_dir", default="./results")
 args = p.parse_args()
