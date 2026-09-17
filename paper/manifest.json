@@ -555,23 +555,59 @@
  "results/assumptions_AnisoDiff_128.json": {
   "sha256": "b5dfd226ee1d7656809ad6819a3fe2e751d862cc19eb404e9a985e48ab8882e9"
  },
+ "results/assumptions_AnisoDiff_256.json": {
+  "sha256": "66d016992ee28c37cd0279f113b4a2c6c263b74683e10d61e4a6f51ef67f632a"
+ },
  "results/assumptions_ConvDiff_128.json": {
   "sha256": "0eff52a76accad59e7a4c510bb33aa17d9ae8253e0dbf4ccdb9d45b31f1fab7d"
+ },
+ "results/assumptions_ConvDiff_256.json": {
+  "sha256": "a137713071e3a2cb4afc97b8cd130e5a7772fb6917fc53f98f046bde5d8eb26a"
+ },
+ "results/assumptions_ConvDiff_512.json": {
+  "sha256": "4676578fc9867a4a326e93526f77bbf26408827007c06fa9079fdac3e1c8e335"
  },
  "results/assumptions_Poisson_128.json": {
   "sha256": "bc1cce64da0e7d6a19190d908fff1b8aa5a55e5c3abfe0a7286473f843f00baf"
  },
+ "results/assumptions_Poisson_256.json": {
+  "sha256": "c9dff725e7fcfe85f72d046fcd14649625bec99730f04e71112f65f121541920"
+ },
+ "results/assumptions_Poisson_512.json": {
+  "sha256": "1873e6c698ccd70c235e124de2d7935b5f731066bb2d7cd8a9c711cb044ffa6b"
+ },
  "results/assumptions_VarCoeff_128.json": {
   "sha256": "577c22470515847e86a4a20a33c5548e7eab6432f61f37a8ed680ad63f0c169a"
+ },
+ "results/discretization_error.json": {
+  "sha256": "13f5c15a152786242776387a59d94ef39da6fc1fe2ace8a6d6422e0ae71e5e73"
+ },
+ "results/overheads.json": {
+  "sha256": "0d75041d2d4396cf00ac2b9a131879e34bae7b8db77256da3562879a3448c630"
  },
  "results/screen_AnisoDiff_128.json": {
   "sha256": "4000bf90cb204220805e76fa521eb9c1431e867d242e413318c02feed7ca689c"
  },
+ "results/screen_AnisoDiff_256.json": {
+  "sha256": "b132024cd99292c1ed729bb413eb0c55ebb31ac74fe126fd3f13b4f5d0e5a006"
+ },
  "results/screen_ConvDiff_128.json": {
   "sha256": "8261f9d66ab6cce98e68091ac1f6e010d22d4d82825b8f475e3bb7c17373dee7"
  },
+ "results/screen_ConvDiff_256.json": {
+  "sha256": "4ce9b9d1604e5f5b73400aa36018f95e9130ef29f63be7a03cdc2da65bbf9160"
+ },
+ "results/screen_ConvDiff_512.json": {
+  "sha256": "36df4acd5a511bce1db3cc52c78bfe21acce983df92372b5c873f5d4769a2b27"
+ },
  "results/screen_Poisson_128.json": {
   "sha256": "5db4c8f158e2ec385a4d01fd561671a12124ac0e9344cd57ff4875550440c722"
+ },
+ "results/screen_Poisson_256.json": {
+  "sha256": "5fb66c05579e7d3fbac971fe8bd3020873cac3478e9357804d794e003f60e351"
+ },
+ "results/screen_Poisson_512.json": {
+  "sha256": "28152c798ca6e45482f8d8030827c6bf8e05dbc3651da28bded28fcf065c4d7d"
  },
  "results/screen_VarCoeff_128.json": {
   "sha256": "88da34c82a280884a4a84bda3b2e9f9088f64eceeb560e62881c0a34f2ebc81e"
@@ -579,11 +615,20 @@
  "results/seeds_AnisoDiff_128.json": {
   "sha256": "ecbe290badace7c0b3015b1ab7d8a63964cfee64dc0b4c6ceabf2f1ea961a646"
  },
+ "results/seeds_AnisoDiff_256.json": {
+  "sha256": "e704b12c2ed86e9f79e93d843e85d1011edf9a6d797e909811b5b33e6269f120"
+ },
  "results/seeds_ConvDiff_128.json": {
   "sha256": "04b7dc3c40d178174ba5fa5ee0448d2073ba3e7b536265117e694643b2af123b"
  },
+ "results/seeds_ConvDiff_256.json": {
+  "sha256": "b772cb130edd2f240ad1fafa5782d8d53803f62be50738f80600f8edf9553631"
+ },
  "results/seeds_Poisson_128.json": {
   "sha256": "8ee2f4df40d3da02ad680df5dcb25656f2d83ad5442d8c683b364b144499123b"
+ },
+ "results/seeds_Poisson_256.json": {
+  "sha256": "0e0b58ce8782a59c6d1f44114f3d6d8bd39006f47956ca9b1339e785aeed0402"
  },
  "results/seeds_VarCoeff_128.json": {
   "sha256": "50cab7c33820b6a0e9dd77540a668f268d99040cb33f6c923115c73971f56b39"
