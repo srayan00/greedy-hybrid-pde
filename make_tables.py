@@ -1476,7 +1476,10 @@ def main():
                         elif "rho_symbol_nonyquist" in v:
                             rhoA[o] = v["rho_symbol_nonyquist"] ** pth["m"][j]
                         else:
-                            rhoA[o] = v.get("rhoA_macro") if pth["m"][j] == v["m"] else (v.get("rhoA") or v["rho2"]) ** pth["m"][j]
+                            # energy-norm contraction of the macro-action; the Euclidean one where the energy norm is not
+                            # defined for the operator or sweep (the checker then stores None)
+                            rhoA[o] = ((v.get("rhoA_macro") or v.get("rho2_macro")) if pth["m"][j] == v["m"]
+                                       else (v.get("rhoA") or v["rho2"]) ** pth["m"][j])
                     for r in rows:
                         s2 = sum(rhoA[pth["ops"][j]] ** 2 for j in r["steps"])
                         r["sum_rho2"] = s2
